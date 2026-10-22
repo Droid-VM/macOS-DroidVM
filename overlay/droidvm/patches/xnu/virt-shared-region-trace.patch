@@ -1,0 +1,11 @@
+--- a/osfmk/vm/vm_shared_region.c
++++ b/osfmk/vm/vm_shared_region.c
+@@ -137,7 +137,7 @@
+ int shared_region_version = 3;
+ 
+ /* trace level, output is sent to the system log file */
+-int shared_region_trace_level = SHARED_REGION_TRACE_ERROR_LVL;
++TUNABLE_WRITEABLE(int, shared_region_trace_level, "shared-region-trace", SHARED_REGION_TRACE_ERROR_LVL);
+ 
+ /* should local (non-chroot) shared regions persist when no task uses them ? */
+ int shared_region_persistence = 0;      /* no by default */
