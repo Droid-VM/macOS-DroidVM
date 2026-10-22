@@ -76,12 +76,12 @@ for path in Library Users Applications Volumes cores opt usr/local System/Librar
   sudo mkdir -p "$MNT/$(dirname "$path")"
   sudo ln -s "/private/var/.data/$path" "$MNT/$path"
 done
-# Bring-up shim: launchd's boot job "fsck" (RequireSuccess) runs /sbin/fsck -qL -R 1, and the iPadOS Sandbox policy of the
-# DroidVM kernel denies fsck_apfs the raw disk. A copy of /usr/bin/true is killed by AMFI launch constraints, so the shim is a
-# shell script (the interpreter /bin/sh is the platform binary that runs).
+# Bring-up shims (overlay/systemos-shims, the tree is copied over the volume): launchd's boot jobs fsck and mount-phase-1/2 do not
+# work against the iPadOS Sandbox policy and the read-only container; /sbin/mount stays reachable as mount.real.
+SHIMS=$(cd "$(dirname "$0")/.." && pwd)/overlay/systemos-shims
 sudo mkdir -p "$MNT/sbin"
-printf '#!/bin/sh\nexit 0\n' | sudo tee "$MNT/sbin/fsck" >/dev/null
-sudo chmod 755 "$MNT/sbin/fsck"
+sudo install -m 755 "$OSM/sbin/mount" "$MNT/sbin/mount.real"
+sudo cp -a "$SHIMS/." "$MNT/"
 sudo mkdir -p "$MNT/private/var"
 sudo ln -s var/.data/private/etc "$MNT/private/etc"
 sudo ln -s var/tmp "$MNT/private/tmp"

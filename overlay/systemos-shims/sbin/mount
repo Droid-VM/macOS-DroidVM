@@ -1,0 +1,6 @@
+#!/bin/sh
+# Bring-up shim: launchd's boot jobs mount-phase-1/2 run `mount -P N`, which makes apfs_boot_util load the (read-only) root
+# container read-write to mount its VM/Preboot/Data volumes; the DroidVM kernel mounts Data itself. Everything else goes to the
+# original tool, kept as /sbin/mount.real.
+[ "$1" = "-P" ] && exit 0
+exec /sbin/mount.real "$@"
