@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "name": "macos-14.6.1-23G93-gunyah",
+  "status": "metadata-only-not-boot-qualified",
+  "ipsw": {
+    "identifier": "Mac14,2",
+    "version": "14.6.1",
+    "buildid": "23G93",
+    "url": "https://updates.cdn-apple.com/2024SummerFCS/fullrestores/062-52859/932E0A8F-6644-4759-82DA-F8FA8DEA806A/UniversalMac_14.6.1_23G93_Restore.ipsw",
+    "filesize": 14790601661,
+    "sha256sum": "e387251e63387150ba76cf784bdb97d2016e5d43c6f809c90a115eb067a097b8",
+    "manifest_sha256": "8e2c67576d768805c47e4bf144ba311becbd47813f5e754ba6b6b229b5f49126"
+  },
+  "catalog": "https://api.ipsw.me/v4/device/Mac14,2?type=ipsw",
+  "catalog_sha256_is_verified": false,
+  "identity": {
+    "device_class": "j413ap",
+    "variant": "macOS Customer",
+    "restore_behavior": "Erase",
+    "chip_id": "0x8112",
+    "board_id": "0x28",
+    "components": {
+      "OS": {
+        "path": "090-91706-091.dmg",
+        "apple_digest_hex": "2b643df21a975d81cb429060c45c3efba21926c5dde450c9ba9518a38adf981856e38cfe00f9997ef3a40bfc7ff1fdc2",
+        "size": 8370458286,
+        "compressed_size": 8370458286,
+        "zip_method": 0
+      },
+      "Cryptex1,SystemOS": {
+        "path": "090-91768-091.dmg",
+        "apple_digest_hex": "31ca1393eb6ee8eadbea69dfe064394ef582f9db7b614c5889e25957c02ba6f775d7101761b4c2b2e9f2bde63ea235d3",
+        "size": 5194645504,
+        "compressed_size": 4463326910,
+        "zip_method": 8
+      },
+      "KernelCache": {
+        "path": "kernelcache.release.mac14g",
+        "apple_digest_hex": "ada4c9b32f7592e4f655c5188e17c6874060fb85bd70aa81bb7b680965c6c15dcac57c9650b4094c1d72cbfb236abc06",
+        "size": 27983706,
+        "compressed_size": 27950663,
+        "zip_method": 8
+      },
+      "DeviceTree": {
+        "path": "Firmware/all_flash/DeviceTree.j413ap.im4p",
+        "apple_digest_hex": "8924a40055e1df53abbfa54ca6e528dd8c7634fb9804476dc0373d15870776098df31e5bc01682a4b7462af1f932eaa7",
+        "size": 43754,
+        "compressed_size": 43732,
+        "zip_method": 8
+      },
+      "StaticTrustCache": {
+        "path": "Firmware/090-91706-091.dmg.trustcache",
+        "apple_digest_hex": "794e1de23510734f2c59e0568874872bcee02932f38ae88bbadc5d80e45b4d4742f0863f91eabd57115d45c197edff03",
+        "size": 344833,
+        "compressed_size": 310358,
+        "zip_method": 8
+      },
+      "Cryptex1,SystemTrustCache": {
+        "path": "Firmware/090-91768-091.dmg.trustcache",
+        "apple_digest_hex": "a8ecca25e5105d6269fd2f9acd89a73e7b4fb374387f9ef88d819a376b9e4d73dd4bfed5e6312a3653fefa4eebcb3531",
+        "size": 3407,
+        "compressed_size": 3128,
+        "zip_method": 8
+      },
+      "BaseSystem": {
+        "path": "022-17071-094.dmg",
+        "apple_digest_hex": "f63e5575218e2c4c31f678769a182a4456bdcebcc68d4bbd65eb8547dd8e57a599bf9b54e5f970ffdad4e04f434d4c2d",
+        "size": 2149423013,
+        "compressed_size": 767732612,
+        "zip_method": 8
+      }
+    }
+  },
+  "transport_candidate": "virtio-mmio",
+  "cpus": 1,
+  "protection": "pseudo-unprotected",
+  "memory_mib": null,
+  "kernel_components": "iPad7,1-21H461-experimental-mixed-ABI",
+  "source_lock": "configs/sources.lock.json",
+  "root_policy": "generate-locally-no-upstream-encrypted-inputs",
+  "identity_status": "candidate-for-userland-extraction-not-platform-qualification"
+}

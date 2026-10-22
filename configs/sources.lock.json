@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "basis": {
+    "repository": "BigfootACA/unixnu-droidvm-ci",
+    "commit": "a937e3980543735271cbdcf78a6cf107fc2bd58e",
+    "run_id": 39712456083,
+    "job_id": 119606723040
+  },
+  "sources": {
+    "UniXNU": {
+      "url": "https://github.com/Droid-VM/UniXNU.git",
+      "commit": "baeb8f0cf2143bd84e6076252c7f90345cc6fef6",
+      "submodules": {
+        "drivers/ArmCpu": "1951cc8444b340d7d8879e9418220cf29eb711d7",
+        "drivers/ArmDTPlatform": "0d544705c2e89725caabc0542bb96bc8febd8c70",
+        "drivers/ArmVirtPlatform": "532de8c017e394e69a0b48dc0ffc4ac0d0701177",
+        "drivers/DarwinBoot": "85332b317ee80898fc78939ea64e6ca52d3837a3",
+        "drivers/NativeAES": "a34964b8c2fec2e83c8e4f68fb7d6fb7e4b2227b",
+        "drivers/NativeAdreno": "805c7e4bfb7451eb6923f4a14dea8c657b9be7d2",
+        "drivers/NativeGeniSpi": "b5399b5646c4d7415deec6d887fd51715a97a024",
+        "drivers/NativeHidInput": "d16d21922fd422740e25ee5c481ffc51de9cfd41",
+        "drivers/NativeKeyStoreEvents": "e59bac4ad1ac8825919ae94da8440a64d8ab90b3",
+        "drivers/NativeMetal": "6dcd4cbb69eb5625988706de42aa8ad3009b8ee7",
+        "drivers/NativeMobileDisplay": "eb9c949164826c2e52f2771eac19e4b8bd8a3dae",
+        "drivers/NativeRamBlock": "7194961a668e59018323b626be4fd7ce0a91e78f",
+        "drivers/NativeUfs": "af785c1777161a62931425c2faaa536ce0bebd5b",
+        "drivers/NativeVirtioBlock": "98909eb9198a4360d7a43be831887cb8b74d814d",
+        "drivers/NativeVirtioConsole": "066f9bded311233ed56824e13a5628077619efda",
+        "kits/AdrenoFirmware": "40fdb8ea87606612ac6f1e80bbb49955d0ce4051",
+        "kits/AdrenoPM4": "445f8fe6d115738352b9d78dc70af6d61aa7f62f",
+        "kits/AirNir": "032a867b5dc3121164bbd706e4e81e3b9fcd2b8f",
+        "kits/ArmSmmu4K": "4d0d6598b1a36aeec3de01091893fa6660e49388",
+        "kits/NativePrelink": "3380d3006068cdaab69454b37668e6b532ed2584",
+        "kits/VerifiedRoot": "2854c61f6c4dfda870ac3d93e1f03d9181edb041"
+      }
+    },
+    "UniXNU-droidvm": {
+      "url": "https://github.com/Droid-VM/UniXNU-droidvm.git",
+      "commit": "bf7fc44cc3b1a92c842c84aa980993eaa74a2cd8",
+      "submodules": {}
+    }
+  },
+  "feeds": [
+    {
+      "name": "xnu",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/xnu.git",
+      "ref": "xnu-10063.141.1",
+      "commit": "d8b80295118ef25ac3a784134bcf95cd8e88109f",
+      "darwin": "23.6.0",
+      "version": "10063.141.1",
+      "driverkit_tag": "xnu-10063.121.3",
+      "trustcache_tag": "xnu-8796.101.5"
+    },
+    {
+      "name": "libplatform",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/libplatform.git",
+      "ref": "libplatform-316.100.10",
+      "commit": "a00a4cc36da2110578bcf3b8eeeeb93dcc7f4e11"
+    },
+    {
+      "name": "libdispatch",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/libdispatch.git",
+      "ref": "libdispatch-1477.100.9",
+      "commit": "30fe6a7d945340ce69cef121132f049e810089a5"
+    },
+    {
+      "name": "AvailabilityVersions",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/AvailabilityVersions.git",
+      "ref": "AvailabilityVersions-141.1",
+      "commit": "933f9360f1b70dfbda5548386a3d65e0358b4f7d"
+    },
+    {
+      "name": "edk2",
+      "kind": "refer",
+      "git": "https://github.com/microsoft/mu_basecore.git",
+      "ref": "release/202608",
+      "commit": "cfb93724a06ff86ff5ba971413368a7809ee42a5",
+      "submodules": [
+        "MdePkg/Library/BaseFdtLib/libfdt",
+        "MdePkg/Library/MipiSysTLib/mipisyst",
+        "BaseTools/Source/C/BrotliCompress/brotli",
+        "MdeModulePkg/Library/BrotliCustomDecompressLib/brotli",
+        "SecurityPkg/DeviceSecurity/SpdmLib/libspdm"
+      ]
+    },
+    {
+      "name": "libpthread",
+      "kind": "refer",
+      "git": "https://github.com/apple-oss-distributions/libpthread.git",
+      "ref": "libpthread-519.120.4",
+      "commit": "c0e60fb5ecfc54cf379c261d3f9572cc22ded891"
+    },
+    {
+      "name": "corecrypto-2023",
+      "kind": "refer",
+      "git": "https://github.com/ONLYA/corecrypto-2023.git",
+      "commit": "11fba65b12d8830630e248dfa8344caf8b065f26"
+    }
+  ]
+}
