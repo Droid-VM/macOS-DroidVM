@@ -28,8 +28,6 @@ CROSVM = APP + '/bin/crosvm-mmio'
 CACHE = '/data/local/tmp/macos-disk-cache'
 STORE = '/data/local/tmp/droidvm/macos-data-store.img'
 STORE_GIB = 16
-MEM_MB = 4096
-DRAM_SIZE = '0xff600000'      # 4096 MiB VM; the pool of this phone cannot back more
 OS_UUID = '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
@@ -71,8 +69,8 @@ def ensure_store(adb):
             f'printf "{label}" | dd of={STORE} bs=4096 conv=notrunc,sync count=1 2>/dev/null')
 
 
-def vm_command(os_img, systemos_img):
-    return [CROSVM, 'run', '--hypervisor', 'gunyah', '--mem', str(MEM_MB), '--cpus', '1',
+def vm_command(os_img, systemos_img, mem_mb):
+    return [CROSVM, 'run', '--hypervisor', 'gunyah', '--mem', str(mem_mb), '--cpus', '1',
             '--protected-vm-pseudo-unprotected', '--no-balloon', '--disable-sandbox',
             '--hugepages', '--prepare-lend-mthp-mode', 'single',
             '--simplefb', 'width=1280,height=800,format=a8r8g8b8',
@@ -124,12 +122,15 @@ def build_boot_disk(local, trust, data, adt, line):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--serial', help='adb serial (default: the only attached device)')
+    parser.add_argument('--mem-mb', type=int, default=3072, help='guest RAM; the host hugepage pool of this phone backs about 3.5 GiB')
     parser.add_argument('--seconds', type=int, default=240)
     parser.add_argument('--label', default='macos')
     parser.add_argument('--keep', action='store_true', help='leave the VM running')
     parser.add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
     parser.add_argument('--unique-chip-id', default='47554e5941480001')
     args = parser.parse_args()
+    mem_mb = args.mem_mb
+    dram_size = hex(mem_mb * 1024 * 1024 - 0xA00000)     # the firmware window below the shim's RAM base
     adb = ['adb'] + (['-s', args.serial] if args.serial else [])
     subprocess.run(adb + ['get-state'], check=True, timeout=15)
     stamp = datetime.now().astimezone().strftime('%Y%m%d-%H%M%S-%f')
@@ -142,7 +143,7 @@ def main():
     for path in (KERNEL, trust, data, INPUTS / 'UniXNU.efi', INPUTS / 'DarwinBoot.efi'):
         if not path.is_file():
             raise SystemExit(f'missing {path}')
-    phone_pool.prepare_host_pool(adb, MEM_MB, MEM_MB + 128, local / 'host-pool-before.json')
+    phone_pool.prepare_host_pool(adb, mem_mb, mem_mb + 128, local / 'host-pool-before.json')
     os_img = push_cached(adb, artifacts / 'os.raw')
     sys_img = push_cached(adb, artifacts / 'systemos.img')
     ensure_store(adb)
@@ -153,12 +154,12 @@ def main():
     placeholder = local / 'placeholder.img'
     subprocess.run(['truncate', '-s', '64M', str(placeholder)], check=True)
     subprocess.run(adb + ['push', str(placeholder), remote + '/boot.img'], check=True, timeout=300)
-    vm = vm_command(os_img, sys_img)
+    vm = vm_command(os_img, sys_img, mem_mb)
     sh(adb, f'cd {remote} && (env {run_env} {shlex.join(vm)} < /dev/null > crosvm-pass1.log 2>&1 &) ; sleep 12; pkill -x crosvm-mmio ; sleep 2; ls -la generated.dtb')
     subprocess.run(adb + ['pull', remote + '/generated.dtb', str(local / 'generated.dtb')], check=True, timeout=30)
     sh(adb, 'sleep 5')
     adt = local / 'kernel.macho.adt'
-    subprocess.run(['python3', str(ADT_TOOL), '--fdt', str(local / 'generated.dtb'), '--dram-size', DRAM_SIZE,
+    subprocess.run(['python3', str(ADT_TOOL), '--fdt', str(local / 'generated.dtb'), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x20000000', '--cpu-regs', '0',
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', args.unique_chip_id, '--chip-id', '8011',
@@ -166,7 +167,7 @@ def main():
                     '--output', str(adt)], check=True)
     disk = build_boot_disk(local, trust, data, adt, line)
     subprocess.run(adb + ['push', str(disk), remote + '/boot.img'], check=True, timeout=600)
-    phone_pool.prepare_host_pool(adb, MEM_MB, MEM_MB + 128, local / 'host-pool-run.json')
+    phone_pool.prepare_host_pool(adb, mem_mb, mem_mb + 128, local / 'host-pool-run.json')
     (local / 'command.txt').write_text(shlex.join(vm) + '\n')
     (local / 'inputs.json').write_text(json.dumps({
         'kernel_sha256': sha256(KERNEL), 'trust_sha256': sha256(trust), 'data_seed_sha256': sha256(data),
