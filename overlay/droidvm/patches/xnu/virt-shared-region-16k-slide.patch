@@ -1,0 +1,120 @@
+--- a/osfmk/vm/vm_shared_region_pager.c
++++ b/osfmk/vm/vm_shared_region_pager.c
+@@ -456,6 +456,67 @@
+ }
+ 
+ /*
++ * A slide info page (16 KiB for the arm64 shared cache) can be larger than the kernel's
++ * PAGE_SIZE (4 KiB here). The data request is then answered one VM page at a time: the
++ * enclosing slide page is gathered into a buffer, slid as a whole, and the requested VM
++ * page is copied out of it. This reads one more page of the backing object.
++ */
++static kern_return_t
++shared_region_pager_read_backing_page(
++	shared_region_pager_t pager,
++	vm_object_offset_t backing_offset,
++	void *buffer,
++	struct vm_object_fault_info *fault_info)
++{
++	vm_object_t     src_top_object = pager->srp_backing_object;
++	vm_object_t     src_page_object;
++	vm_page_t       src_page, top_page;
++	vm_prot_t       prot;
++	kern_return_t   kr;
++	kern_return_t   error_code;
++
++retry:
++	vm_object_lock(src_top_object);
++	vm_object_paging_begin(src_top_object);
++	error_code = 0;
++	prot = VM_PROT_READ;
++	src_page = VM_PAGE_NULL;
++	kr = vm_fault_page(src_top_object, backing_offset, VM_PROT_READ, FALSE, FALSE,
++	    &prot, &src_page, &top_page, NULL, &error_code, FALSE, fault_info);
++	switch (kr) {
++	case VM_FAULT_SUCCESS:
++		break;
++	case VM_FAULT_RETRY:
++		goto retry;
++	case VM_FAULT_MEMORY_SHORTAGE:
++		if (vm_page_wait(fault_info->interruptible)) {
++			goto retry;
++		}
++		return MACH_SEND_INTERRUPTED;
++	case VM_FAULT_INTERRUPTED:
++		return MACH_SEND_INTERRUPTED;
++	case VM_FAULT_SUCCESS_NO_VM_PAGE:
++		vm_object_paging_end(src_top_object);
++		vm_object_unlock(src_top_object);
++		return KERN_MEMORY_ERROR;
++	default:
++		return error_code ? error_code : KERN_MEMORY_ERROR;
++	}
++	src_page_object = VM_PAGE_OBJECT(src_page);
++	bcopy((const char *)phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page) << PAGE_SHIFT), buffer, PAGE_SIZE);
++	PAGE_WAKEUP_DONE(src_page);
++	vm_object_paging_end(src_page_object);
++	vm_object_unlock(src_page_object);
++	if (top_page != VM_PAGE_NULL) {
++		vm_object_lock(src_top_object);
++		VM_PAGE_FREE(top_page);
++		vm_object_paging_end(src_top_object);
++		vm_object_unlock(src_top_object);
++	}
++	return KERN_SUCCESS;
++}
++
++/*
+  * shared_region_pager_data_request()
+  *
+  * Handles page-in requests from VM.
+@@ -678,6 +739,49 @@
+ 		assert(src_page_object->paging_in_progress > 0);
+ 		vm_object_unlock(src_page_object);
+ 
++		if (slide_info_page_size > PAGE_SIZE) {
++			vm_object_offset_t page_backing = pager->srp_backing_offset + offset + cur_offset;
++			vm_object_offset_t in_range, window;
++			vm_offset_t k;
++			void *window_buffer;
++
++			if (page_backing < pager->srp_slide_info->si_start ||
++			    page_backing >= pager->srp_slide_info->si_end) {
++				bcopy((const char *)src_vaddr, (char *)dst_vaddr, PAGE_SIZE);
++				shared_region_pager_copied++;
++			} else {
++				in_range = page_backing - pager->srp_slide_info->si_start;
++				window = in_range & ~((vm_object_offset_t)slide_info_page_size - 1);
++				window_buffer = kalloc_data(slide_info_page_size, Z_WAITOK);
++				kr = KERN_SUCCESS;
++				for (k = 0; k < slide_info_page_size && kr == KERN_SUCCESS; k += PAGE_SIZE) {
++					vm_object_offset_t want = pager->srp_slide_info->si_start + window + k;
++					if (want == page_backing) {
++						bcopy((const char *)src_vaddr, (char *)window_buffer + k, PAGE_SIZE);
++					} else if (want >= pager->srp_slide_info->si_end) {
++						bzero((char *)window_buffer + k, PAGE_SIZE);
++					} else {
++						kr = shared_region_pager_read_backing_page(pager, want, (char *)window_buffer + k, &fault_info);
++					}
++				}
++				if (kr == KERN_SUCCESS) {
++					kr = vm_shared_region_slide_page(pager->srp_slide_info,
++					    (vm_offset_t)window_buffer,
++					    (mach_vm_offset_t)(window + slide_start_address),
++					    (uint32_t)(window / slide_info_page_size),
++					    0);
++				}
++				if (kr == KERN_SUCCESS) {
++					bcopy((const char *)window_buffer + (in_range - window), (char *)dst_vaddr, PAGE_SIZE);
++					shared_region_pager_slid++;
++				}
++				kfree_data(window_buffer, slide_info_page_size);
++				if (kr != KERN_SUCCESS) {
++					shared_region_pager_slid_error++;
++					retval = KERN_MEMORY_ERROR;
++				}
++			}
++		} else
+ 		/*
+ 		 * Process the original contents of the source page
+ 		 * into the destination page.

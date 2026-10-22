@@ -7,6 +7,7 @@ through the crosvm_guest memfd mapping whose file offset is PA - 0x80000000. Nee
 
   rig-dmesg.py SERIAL_LOG [--serial ADB_SERIAL]
   rig-dmesg.py --peek SYMBOL|va:HEX|0xPA [LENGTH] SERIAL_LOG
+  rig-dmesg.py --poke SYMBOL BYTE SERIAL_LOG
 """
 import argparse
 import re
@@ -57,6 +58,18 @@ class Phone:
                 return int(parts[0], 16)
         raise SystemExit(f'no symbol {name}')
 
+    def poke(self, target, value):
+        va = int(target[3:], 16) if target.startswith('va:') else self.symbol(target)
+        pa = va - self.kernel_va + self.kernel_pa
+        pid, maps = self.maps()
+        for guest, size, host in maps:
+            if guest <= pa < guest + size:
+                address = host + pa - guest
+                break
+        else:
+            raise SystemExit(f'guest PA {pa:#x} is not in a crosvm_guest mapping')
+        self.adb(f"printf '\\x{value:02x}' | dd of=/proc/{pid}/mem bs=1 seek={address} count=1 conv=notrunc 2>&1")
+
     def read(self, target, length):
         if target.startswith('0x'):
             pa = int(target, 16)
@@ -79,9 +92,13 @@ def main():
     parser.add_argument('serial_log')
     parser.add_argument('--serial')
     parser.add_argument('--peek')
+    parser.add_argument('--poke', nargs=2, metavar=('SYMBOL', 'BYTE'), help='write one byte to a kernel symbol of the running VM')
     parser.add_argument('length', nargs='?', type=lambda v: int(v, 0), default=64)
     args = parser.parse_args()
     phone = Phone(args.serial, args.serial_log)
+    if args.poke:
+        phone.poke(args.poke[0], int(args.poke[1], 0))
+        return
     if args.peek:
         pa, data = phone.read(args.peek, args.length)
         for index in range(0, len(data), 16):
