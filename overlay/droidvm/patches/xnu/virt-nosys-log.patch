@@ -1,0 +1,26 @@
+--- a/bsd/kern/subr_xxx.c
++++ b/bsd/kern/subr_xxx.c
+@@ -72,6 +72,8 @@
+ 
+ #include <sys/signalvar.h>              /* for psignal() */
+ #include <kern/debug.h>
++#include <kern/startup.h>
++#include <sys/user.h>
+ 
+ #if DEVELOPMENT || DEBUG
+ TUNABLE(bool, no_sigsys, "-no_sigsys", false);
+@@ -177,9 +179,14 @@
+  * Q: should we do that all the time ??
+  */
+ /* ARGSUSED */
++TUNABLE(bool, virt_nosys_log, "nosys-log", false);
++
+ int
+ nosys(__unused struct proc *p, __unused struct nosys_args *args, __unused int32_t *retval)
+ {
++	if (virt_nosys_log) {
++		printf("nosys: pid %d %s syscall %d\n", proc_pid(p), p->p_comm, (int)current_uthread()->syscall_code);
++	}
+ 	if (send_sigsys) {
+ 		psignal_uthread(current_thread(), SIGSYS);
+ 	}
