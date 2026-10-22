@@ -62,7 +62,7 @@ def main():
     spec_ipsw = profile['ipsw']
     if args.identity:
         inventory = json.loads(inputs.local_path('artifacts/23G93/metadata/identities.json').read_text())
-        found = [i for i in inventory['identities'] if i['device_class'] == args.identity and i['variant'] == 'macOS Customer Erase']
+        found = [i for i in inventory['identities'] if i['device_class'] == args.identity and i['variant'] == 'macOS Customer' and i['restore_behavior'] == 'Erase']
         if len(found) != 1:
             raise SystemExit(f'identity {args.identity!r} not found exactly once in the inventory')
         entry = found[0]['components'][args.component]
