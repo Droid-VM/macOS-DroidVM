@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -135,6 +136,15 @@ def full(jobs, legacy_display=False):
             if not (FULL_DEVICE / 'patches/xnu' / patch.name).exists():
                 shutil.copyfile(patch, FULL_DEVICE / 'patches/xnu' / patch.name)
         run(sys.executable, ROOT / 'scripts/apply-overlay-board.py', FULL_DEVICE, 'droidvm_defconfig')
+        # The kernel names the APFS UUID of the Data seed it accepts; make-macos-data-seed.sh is the one place that sets it.
+        seed_uuid = re.search(r'VOLUME_UUID=\$\{VOLUME_UUID:-([0-9A-F-]{36})\}',
+                              (ROOT / 'scripts/make-macos-data-seed.sh').read_text()).group(1)
+        config = FULL_DEVICE / 'configs/droidvm_defconfig'
+        text = config.read_text()
+        text, count = re.subn(r'CONFIG_XNU_OWNER_DATA_VOLUME_UUID="[0-9A-F-]{36}"',
+                              f'CONFIG_XNU_OWNER_DATA_VOLUME_UUID="{seed_uuid}"', text)
+        assert count == 1
+        config.write_text(text)
         if not legacy_display:
             # The legacy display audit insists on a QEMU observation of the original class that this project does not have
             # (see audit-reference.py); the first boot is serial-only, so the native display driver stays out.
