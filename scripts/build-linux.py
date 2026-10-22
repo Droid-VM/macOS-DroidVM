@@ -19,6 +19,7 @@ BUILD = OUT / 'reference'
 TREE = BUILD / 'droidvm/tree'
 TC = ROOT / 'toolchains/linux'
 COMPAT = ROOT / 'compat'
+UPSTREAM_OS_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
 
 
 def run(*command, **kwargs):
@@ -162,6 +163,18 @@ def full(jobs, legacy_display=False):
     run(sys.executable, ROOT / 'scripts/owner-policy-dirs.py', policy_inputs, BUILD / 'droidvm/tree', 'macos')
     run(sys.executable, ROOT / 'scripts/macos-root-probe.py', UNIXNU / 'scripts/build-verified-root-probe.py',
         FULL_DEVICE / 'scripts/build-verified-root-probe.py')
+    # The owner patches name the OS volume UUID of the upstream author's converted disk; this project keeps Apple's own volume
+    # UUID (macos-root-pins.json) and changes the kernel's constant instead of rewriting the APFS volume.
+    os_uuid = json.loads((ROOT / 'out/owner/macos-root-pins.json').read_text())['os']['volume_uuid'].upper()
+    # The patches and the already patched work tree must change together: the build re-applies a patch only when the tree
+    # does not already contain it.
+    for name in ('offline-owner-cache-carrier.patch', 'offline-owner-systemos-mount.patch'):
+        patch = FULL_DEVICE / 'patches/xnu' / name
+        patch.write_text(patch.read_text().replace(UPSTREAM_OS_UUID, os_uuid))
+    for name in ('bsd/vm/vm_unix.c', 'bsd/kern/kern_exec.c'):
+        source = TREE / '.cache/xnu-work' / name
+        source.write_text(source.read_text().replace(UPSTREAM_OS_UUID, os_uuid))
+        assert os_uuid in source.read_text() and UPSTREAM_OS_UUID not in source.read_text(), source
     unixnu('defconfig', 'droidvm_defconfig', env=env, device=FULL_DEVICE)
     unixnu('fetch', env=env, device=FULL_DEVICE)
     run(sys.executable, ROOT / 'scripts/mainline-bootstrap-placeholders.py', BUILD / 'droidvm/tree', env=env)
