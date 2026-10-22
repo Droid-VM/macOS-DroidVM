@@ -1,0 +1,72 @@
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -210,6 +210,46 @@
+ 		printf("crash: pid %d backtrace error %d after %u frames\n", pid, info.btui_error, count);
+ 	}
+ }
++
++/* boot-arg abort-log=1: the same dump for a thread that is about to write a core file (abort(), fatal signals). */
++static TUNABLE(bool, virt_abort_log, "abort-log", false);
++
++void
++virt_abort_log_user(int pid, const char *name)
++{
++	uintptr_t frames[VIRT_CRASH_FRAMES];
++	struct backtrace_user_info info = BTUINFO_INIT;
++	vm_shared_region_t shared_region;
++	uint64_t cache_base = 0;
++	task_t task = current_task();
++	struct arm_saved_state *state;
++	unsigned int count;
++
++	if (!virt_abort_log || task == kernel_task) {
++		return;
++	}
++	shared_region = vm_shared_region_get(task);
++	if (shared_region != NULL) {
++		cache_base = shared_region->sr_base_address + shared_region->sr_first_mapping;
++		vm_shared_region_deallocate(shared_region);
++	}
++	printf("abort: pid %d %s cache 0x%llx main 0x%llx\n", pid, name, (unsigned long long)cache_base,
++	    (unsigned long long)task->mach_header_vm_address);
++	state = find_user_regs(current_thread());
++	if (state != NULL) {
++		printf("abort: pid %d pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx\n", pid, (unsigned long long)get_saved_state_pc(state),
++		    (unsigned long long)get_saved_state_lr(state), (unsigned long long)get_saved_state_sp(state),
++		    (unsigned long long)get_saved_state_fp(state));
++	}
++	count = backtrace_user(frames, VIRT_CRASH_FRAMES, NULL, &info);
++	for (unsigned int i = 0; i < count; i += 4) {
++		printf("abort: pid %d #%u 0x%lx 0x%lx 0x%lx 0x%lx\n", pid, i, frames[i], i + 1 < count ? frames[i + 1] : 0,
++		    i + 2 < count ? frames[i + 2] : 0, i + 3 < count ? frames[i + 3] : 0);
++	}
++	if (info.btui_error != 0) {
++		printf("abort: pid %d backtrace error %d after %u frames\n", pid, info.btui_error, count);
++	}
++}
+ #endif /* __arm64__ && MACH_BSD */
+ 
+ /*
+--- a/bsd/kern/kern_core.c
++++ b/bsd/kern/kern_core.c
+@@ -75,6 +75,9 @@
+ 
+ #include <kdp/core_notes.h>
+ 
++extern void virt_abort_log_user(int pid, const char *name);
++extern char *proc_name_address(void *p);
++
+ #define COREDUMP_CUSTOM_LOCATION_ENTITLEMENT "com.apple.private.custom-coredump-location"
+ 
+ typedef struct {
+@@ -324,6 +327,10 @@
+ 	kauth_cred_t cred = vfs_context_ucred(ctx);
+ 	int error = 0;
+ 	struct vnode_attr *vap = NULL;
++
++#if defined(__arm64__)
++	virt_abort_log_user(proc_getpid(core_proc), proc_name_address(core_proc));
++#endif
+ 	size_t          thread_count, segment_count;
+ 	size_t          command_size, header_size, tstate_size;
+ 	size_t          hoffset;
