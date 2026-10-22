@@ -1,0 +1,73 @@
+--- a/bsd/kern/kern_core.c
++++ b/bsd/kern/kern_core.c
+@@ -75,6 +75,61 @@
+ 
+ #include <kdp/core_notes.h>
+ 
++/*
++ * Virtual machine boards: boot-arg abort-log=1 prints the user backtrace of the thread that dumps core (abort(), SIGSEGV, ...),
++ * with the slid shared cache base and the main image address, like crash-log=1 does for fatal exceptions.
++ */
++#if defined(__arm64__)
++#include <kern/backtrace.h>
++#include <kern/startup.h>
++#include <vm/vm_shared_region.h>
++#include <arm64/proc_reg.h>
++
++extern struct arm_saved_state *find_user_regs(thread_t);
++extern char *proc_name_address(void *p);
++static TUNABLE(bool, virt_abort_log, "abort-log", false);
++
++static void
++virt_abort_log_user(proc_t core_proc)
++{
++	uintptr_t frames[48];
++	struct backtrace_user_info info = BTUINFO_INIT;
++	task_t task = current_task();
++	vm_shared_region_t shared_region;
++	uint64_t cache_base = 0;
++	struct arm_saved_state *state;
++	unsigned int count;
++	int pid = proc_getpid(core_proc);
++
++	if (!virt_abort_log || task == kernel_task) {
++		return;
++	}
++	shared_region = vm_shared_region_get(task);
++	if (shared_region != NULL) {
++		cache_base = shared_region->sr_base_address + shared_region->sr_first_mapping;
++		vm_shared_region_deallocate(shared_region);
++	}
++	printf("abort: pid %d %s cache 0x%llx main 0x%llx\n", pid, proc_name_address(core_proc), (unsigned long long)cache_base,
++	    (unsigned long long)task->mach_header_vm_address);
++	state = find_user_regs(current_thread());
++	if (state != NULL) {
++		printf("abort: pid %d pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx\n", pid, (unsigned long long)get_saved_state_pc(state),
++		    (unsigned long long)get_saved_state_lr(state), (unsigned long long)get_saved_state_sp(state),
++		    (unsigned long long)get_saved_state_fp(state));
++	}
++	count = backtrace_user(frames, 48, NULL, &info);
++	for (unsigned int i = 0; i < count; i += 4) {
++		printf("abort: pid %d #%u 0x%lx 0x%lx 0x%lx 0x%lx\n", pid, i, frames[i], i + 1 < count ? frames[i + 1] : 0,
++		    i + 2 < count ? frames[i + 2] : 0, i + 3 < count ? frames[i + 3] : 0);
++	}
++	if (info.btui_error != 0) {
++		printf("abort: pid %d backtrace error %d after %u frames\n", pid, info.btui_error, count);
++	}
++}
++#else
++#define virt_abort_log_user(p) ((void)(p))
++#endif
++
+ #define COREDUMP_CUSTOM_LOCATION_ENTITLEMENT "com.apple.private.custom-coredump-location"
+ 
+ typedef struct {
+@@ -324,6 +379,8 @@
+ 	kauth_cred_t cred = vfs_context_ucred(ctx);
+ 	int error = 0;
+ 	struct vnode_attr *vap = NULL;
++
++	virt_abort_log_user(core_proc);
+ 	size_t          thread_count, segment_count;
+ 	size_t          command_size, header_size, tstate_size;
+ 	size_t          hoffset;
