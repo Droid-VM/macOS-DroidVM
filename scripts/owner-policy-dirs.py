@@ -21,14 +21,18 @@ ROOTS = {
     # iPadOS 21H461: the OS member expanded, the Cryptex1,SystemOS member as is.
     'ios': {'os': ('e5634d04a8ac35f024845f583394e0a35deb26a04cb0c00286a8674e25a9a4f2', 1483785),
             'systemos': ('b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f', 806400)},
-    # macOS 23G93: the OS member expanded with its System volume renamed to the 21H461 OS UUID (apfs-volumes.py), and the
-    # SystemOS disk of make-macos-systemos.sh.
-    'macos': {'os': ('521945de060983ca09bd9a3f1541fe61d9e8c2fa385bc8a41b396936f19f1827', 2660361),
-              'systemos': ('2c1504f782ff8a9e43c0fad352b265b396692c0197fc971e3502cadc56a3816c', 1835008)},
 }
 
 inputs, tree = map(Path, sys.argv[1:3])
-EXPECTED = ROOTS[sys.argv[3] if len(sys.argv) > 3 else 'ios']
+if len(sys.argv) > 3 and sys.argv[3] == 'macos':
+    # macOS 23G93: the locally built OS disk and SystemOS disk (macos-root-pins.py), not upstream's converted images.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('pins', Path(__file__).with_name('macos-root-pins.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    EXPECTED = {name: (pin['image_sha256'], pin['blocks_verified']) for name, pin in module.load().items()}
+else:
+    EXPECTED = ROOTS[sys.argv[3] if len(sys.argv) > 3 else 'ios']
 records = json.loads((inputs / 'inputs.json').read_text())
 key = (inputs / 'trusted-key.bin').read_bytes()
 key_sha256 = hashlib.sha256(key).hexdigest()
