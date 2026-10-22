@@ -1,0 +1,21 @@
+{
+  "apple": {
+    "url": "https://swcdn.apple.com/content/downloads/14/48/052-59890-A_I0F5YGAY0Y/p9n40hio7892gou31o1v031ng6fnm9sb3c/CLTools_Executables.pkg",
+    "file": "CLTools-052-59890.pkg",
+    "size": 565536039,
+    "sha256": "3812e6cce85d90f2a142440628a56ececd90d7fcb2ebfb35cc2faee3d81bd6ab",
+    "version": "15.3.0.0.1.1708646388",
+    "compiler_version": "Apple clang version 15.0.0 (clang-1500.3.9.4)",
+    "catalog_toc_sha1": "92e85a0f035a02000847ad273eca90f2e056789c",
+    "payload_offset": 130201,
+    "payload_length": 565404708
+  },
+  "darling": {
+    "url": "https://github.com/darlinghq/darling/releases/download/v0.1.20260608/debs_20260608.zip",
+    "file": "debs_20260608.zip",
+    "size": 118018438,
+    "sha256": "27469ef3932da2e91dd7fb34b70e3628a3e54b7af9fb5480051f44af35eca1fd",
+    "commit": "e947f0d5a3c6bba27e3631d9bf0da2a9840e6894",
+    "package_version": "0.1.20260609~noble"
+  }
+}

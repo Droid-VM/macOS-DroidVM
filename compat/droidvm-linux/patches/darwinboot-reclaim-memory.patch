@@ -1,0 +1,112 @@
+diff --git a/DarwinBootPkg/Driver/DarwinBoot.c b/DarwinBootPkg/Driver/DarwinBoot.c
+index 25ce2d2..901e7f0 100644
+--- a/DarwinBootPkg/Driver/DarwinBoot.c
++++ b/DarwinBootPkg/Driver/DarwinBoot.c
+@@ -183,7 +183,7 @@ ParseKernel (CONST UINT8 *Data, UINTN Size, KERNEL *Kernel)
+ 
+ STATIC
+ BOOLEAN
+-AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINTN *AddonOffset, UINT64 *WindowSize, BOOLEAN *KeepPacked)
++AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN ParentPath, UINTN *RamdiskOffset, UINTN *TrustCacheOffset, UINTN *AddonOffset, UINT64 *WindowSize, UINT64 *MemoryLimit, BOOLEAN *KeepPacked)
+ {
+   UINT32 Properties;
+   UINT32 Children;
+@@ -194,6 +194,7 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+   UINTN  TrustCandidate;
+   UINTN  AddonCandidate;
+   UINTN  MemoryCandidate;
++  UINTN  LimitCandidate;
+   CONST UINT8 *Name;
+   UINTN  NameLength;
+ 
+@@ -203,6 +204,7 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+   TrustCandidate = MAX_UINTN;
+   AddonCandidate = MAX_UINTN;
+   MemoryCandidate = MAX_UINTN;
++  LimitCandidate = MAX_UINTN;
+   if ((Depth > 64) || (Size - *Offset < 8)) { return FALSE; }
+   Properties = U32 (Data + *Offset);
+   Children = U32 (Data + *Offset + 4);
+@@ -240,6 +242,10 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+       if ((MemoryCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
+       MemoryCandidate = *Offset;
+     }
++    if (AsciiStrCmp ((CONST CHAR8 *)(Data + *Offset - 36), "darwinboot-memory-limit") == 0) {
++      if ((LimitCandidate != MAX_UINTN) || (Length != 8)) { return FALSE; }
++      LimitCandidate = *Offset;
++    }
+     *Offset += Length;
+     if (ALIGN_VALUE (*Offset, 4) > Size) { return FALSE; }
+     *Offset = ALIGN_VALUE (*Offset, 4);
+@@ -265,9 +271,13 @@ AdtNode (CONST UINT8 *Data, UINTN Size, UINTN *Offset, UINTN Depth, UINTN Parent
+     *WindowSize = U64 (Data + MemoryCandidate);
+     if (!DarwinWindowSizeValid (*WindowSize)) { return FALSE; }
+   }
++  if (LimitCandidate != MAX_UINTN) {
++    if ((Path != 1) || (*MemoryLimit != 0)) { return FALSE; }
++    *MemoryLimit = U64 (Data + LimitCandidate);
++  }
+   if (Children > (Size - *Offset) / 8) { return FALSE; }
+   for (Index = 0; Index < Children; Index++) {
+-    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, AddonOffset, WindowSize, KeepPacked)) { return FALSE; }
++    if (!AdtNode (Data, Size, Offset, Depth + 1, Path, RamdiskOffset, TrustCacheOffset, AddonOffset, WindowSize, MemoryLimit, KeepPacked)) { return FALSE; }
+   }
+   return TRUE;
+ }
+@@ -481,6 +491,8 @@ Boot (
+   UINT64                          TreeAddress;
+   UINT64                          Used;
+   UINT64                          WindowSize;
++  UINT64                          MemoryLimit;
++  UINT64                          KernelMemory;
+   UINT64                          RamdiskAddress;
+   UINTN                           RamdiskOffset;
+   UINTN                           RamdiskBytes;
+@@ -553,8 +565,9 @@ Boot (
+   TrustCacheOffset = MAX_UINTN;
+   AddonOffset = MAX_UINTN;
+   WindowSize = 0;
++  MemoryLimit = 0;
+   KeepPacked = FALSE;
+-  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &AddonOffset, &WindowSize, &KeepPacked) || (Offset != TreeSize)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++  if (!AdtNode (Tree, TreeSize, &Offset, 0, 3, &RamdiskOffset, &TrustCacheOffset, &AddonOffset, &WindowSize, &MemoryLimit, &KeepPacked) || (Offset != TreeSize)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
+   if (KeepPacked && (!RamdiskPacked || (RamdiskOffset == MAX_UINTN))) { Status = EFI_COMPROMISED_DATA; goto Fail; }
+   if (WindowSize == 0) { WindowSize = WINDOW_SIZE; }
+   if (Kernel.Base > MAX_UINT64 - WindowSize) { Status = EFI_LOAD_ERROR; goto Fail; }
+@@ -601,6 +614,16 @@ Boot (
+   if (EFI_ERROR (Status)) { goto Fail; }
+   Status = AllocateWindow (&Kernel, WindowSize, &Address);
+   if (EFI_ERROR (Status)) { goto Fail; }
++  //
++  // /chosen/darwinboot-memory-limit: the kernel owns RAM up to that address, not only the loaded window. What lies past the
++  // window is free or firmware boot-services memory, which ExitBootServices releases; XNU never calls UEFI runtime services.
++  // The window sits at the bottom of RAM, so the kernel's memory stays one run from its physical base.
++  //
++  KernelMemory = WindowSize;
++  if (MemoryLimit != 0) {
++    if ((MemoryLimit <= Address + WindowSize) || ((MemoryLimit & (SIZE_16KB - 1)) != 0)) { Status = EFI_COMPROMISED_DATA; goto Fail; }
++    KernelMemory = MemoryLimit - Address;
++  }
+   ArgsAddress = ALIGN_VALUE (Address + Kernel.End - Kernel.Base, SIZE_16KB);
+   TreeAddress = ArgsAddress + EFI_PAGE_SIZE;
+   RamdiskAddress = ALIGN_VALUE (TreeAddress + TreeSize, EFI_PAGE_SIZE);
+@@ -623,8 +646,8 @@ Boot (
+   Args->Version = 2;
+   Args->VirtualBase = Kernel.Base;
+   Args->PhysicalBase = Address;
+-  Args->MemorySize = WindowSize;
+-  Args->MemorySizeActual = WindowSize;
++  Args->MemorySize = KernelMemory;
++  Args->MemorySizeActual = KernelMemory;
+   Args->TopOfKernelData = Address + Used;
+   CopyMem (Args->Video, Video, sizeof (Video));
+   Args->DeviceTree = Kernel.Base + TreeAddress - Address;
+@@ -690,7 +713,7 @@ Boot (
+     }
+     Status = gBS->ExitBootServices (mImage, Key);
+     if (!EFI_ERROR (Status)) {
+-      DarwinEnter (ArgsAddress, Address + Kernel.Entry - Kernel.Base, Address, WindowSize, Video[0], Video[2] * Video[4]);
++      DarwinEnter (ArgsAddress, Address + Kernel.Entry - Kernel.Base, Address, KernelMemory, Video[0], Video[2] * Video[4]);   // cache-clean all the kernel's memory, not only the window
+       CpuDeadLoop ();
+     }
+     if (Status != EFI_INVALID_PARAMETER) { CpuDeadLoop (); }

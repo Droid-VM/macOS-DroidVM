@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "apple_root": {
+    "url": "https://www.apple.com/appleca/AppleIncRootCertificate.cer",
+    "sha256": "b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024"
+  },
+  "versions": {
+    "16.2": {
+      "url": "https://archive.org/download/xcode-16.2/Xcode_16.2.xip",
+      "file": "Xcode_16.2.xip",
+      "size": 2969019672,
+      "sha256": "0e367d06eb7c334ea143bada5e4422f56688aabff571bedf0d2ad9434b7290de",
+      "content_sha1": "099d52556bbb49733e610528d7faae0b2ab7ecaa",
+      "files": {
+        "Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig": "7411746a6b0c2fb6fb2a685fc0aa9140ea78859f01ee21dacfffb146dc6a5610",
+        "Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib": "4cd1173400ada7fe93c66673237dc1c563d89bbbc55c225f0fc50e27cd9d385f"
+      }
+    },
+    "16.4": {
+      "url": "https://archive.org/download/xcode-16.4/Xcode_16.4.xip",
+      "file": "Xcode_16.4.xip",
+      "size": 3036085732,
+      "sha256": "2dbf65ba28fb85b34e72c14c529a42d5c3189ab0f11fb29fdebd5f4ee6c87900",
+      "content_sha1": "3b6b21364482b518be35f9ddce72a975d275dcbe",
+      "files": {
+        "Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig": "ae3554f474b279a219adf59ab6780601aeb6873854cdf43d65fbd3b01e952e0d",
+        "Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib": "a97a8ca45ab058cb75bfb55334bfa4ad57d4a3b98acab2a032892c1873ac1c55"
+      }
+    }
+  },
+  "runtime": {
+    "bin/iig": {
+      "version": "16.4",
+      "file": "Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig"
+    },
+    "lib/libclang.dylib": {
+      "version": "16.2",
+      "file": "Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib"
+    }
+  },
+  "generator_version": "DriverKit-427.100.5",
+  "note": "Xcode 16.4 IIG with Xcode 16.2 libclang C API; the bundled 16.4 libclang needs a libc++ symbol absent in Darling. No binary patching or substitute compiler semantics."
+}

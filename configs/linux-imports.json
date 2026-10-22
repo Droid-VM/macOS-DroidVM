@@ -1,0 +1,118 @@
+{
+  "source_repository": "../ios (read-only import)",
+  "source_head": "91c5cacb211fd98adcd2a074abd0c4fa608dcfb4",
+  "files": [
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/scripts/build-linux.py",
+      "destination": "compat/xnu-linux/scripts/build-linux.py",
+      "sha256": "a7fd45884dc9ee3003dd7e06a20cbdc4b371fe0afb75d5935fb80c55918ef8c6"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/scripts/build-firehose-linux.py",
+      "destination": "compat/xnu-linux/scripts/build-firehose-linux.py",
+      "sha256": "3ceca9058e62296b0641e5f5707c173c9a6f4676b899aac75f497af8766493ae"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/scripts/iig_cache.py",
+      "destination": "compat/xnu-linux/scripts/iig_cache.py",
+      "sha256": "7bcc58be7d2adc1c06bb14652abab77a56c88ffceebc0bc7a8c885c5fd60ec5c"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/scripts/probe_xnu_compiler.py",
+      "destination": "compat/xnu-linux/scripts/probe_xnu_compiler.py",
+      "sha256": "873d5dc500af7c8fd13b10028d0f8371f922d7b165f5d8ec188d1003667d1eca"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/appleclang-sources.json",
+      "destination": "compat/xnu-linux/linux/appleclang-sources.json",
+      "sha256": "85bf7b0ba5080bf05ff664fc254e3f981bef74a34250d7bd8efa15afa02e1f4d"
+    },
+    {
+      "source": "UniXNU-gunyah/linux/darwin-tool.py",
+      "destination": "compat/xnu-linux/linux/darwin-tool.py",
+      "sha256": "9eb6a47dba5aff73e3c2f71f5ec5952a8fb72886943f302fe467446e5680c5ab"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/copyfile.h",
+      "destination": "compat/xnu-linux/linux/copyfile.h",
+      "sha256": "25e5b81bc8d390a5b2615a5abe5eeea9e9c23b86e6e1fcbefa26f797dd3bb608"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/sources.json",
+      "destination": "compat/xnu-linux/linux/sources.json",
+      "sha256": "c2eb19c248f0b40acad94bf61b678dddfb8344bb0f8b565de5b741b5d0cce3ae"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/iig-cache.json",
+      "destination": "compat/xnu-linux/linux/iig-cache.json",
+      "sha256": "3376c99b785c7b694a8f3ad603c28b58ac0eaa3e1e4bc21dea9bc413e178a69d"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/iig-sources.json",
+      "destination": "compat/xnu-linux/linux/iig-sources.json",
+      "sha256": "35a3662ba471e79dc291246ff07d9e0067a6ca46de2d8fc59127558367645265"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/patches/linux-c-support-headers.patch",
+      "destination": "compat/xnu-linux/linux/patches/linux-c-support-headers.patch",
+      "sha256": "3b718b35d0243b9cae414e6e6bf50772e880807996a0df59db5dac8ac2e33ef2"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/patches/linux-host-commands.patch",
+      "destination": "compat/xnu-linux/linux/patches/linux-host-commands.patch",
+      "sha256": "1911830eaa12fe5db12be7eefab6f4d81a221f33bf6f38a701bdc475ef9b3a41"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/patches/linux-makesyscalls-awk.patch",
+      "destination": "compat/xnu-linux/linux/patches/linux-makesyscalls-awk.patch",
+      "sha256": "9f62ab3141b3c2d715f635a61b88df97043b62e17eed742261e23d54d770ef6d"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/patches/linux-doconf-shell.patch",
+      "destination": "compat/xnu-linux/linux/patches/linux-doconf-shell.patch",
+      "sha256": "ea34ed4507aef0c0f6d0d08961e8c8feb3249fd232320795034b4d8bc627a573"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/patches/linux-host-tools.patch",
+      "destination": "compat/xnu-linux/linux/patches/linux-host-tools.patch",
+      "sha256": "e5471f580dfc45e1ca9fc42c178d24889d14a33b5e4dec1f6baf60913bfb8f79"
+    },
+    {
+      "source": "archive/xnu-10063/UniXNU-gunyah/linux/project-patches/linux-pthread-compiler.patch",
+      "destination": "compat/xnu-linux/linux/project-patches/linux-pthread-compiler.patch",
+      "sha256": "b8035d747d0bf8dda965ceb9abe3e6e86f431ecd6b22be9825a4ec44fcea8922"
+    },
+    {
+      "source": "droidvm-linux/pyhook/sitecustomize.py",
+      "destination": "compat/droidvm-linux/pyhook/sitecustomize.py",
+      "sha256": "c9f39478e555f57c3abe4f096178941498456fba96100eca8c0176c5e69db8b8"
+    },
+    {
+      "source": "droidvm-linux/shims/compression_tool",
+      "destination": "compat/droidvm-linux/shims/compression_tool",
+      "imported_sha256": "732358f0228850f285108f521be6231203e1358ca4e4901eebb8700e53a1d8e9",
+      "local_sha256": "9377da9e97c279af634792d3057ef010dd22d67ffb0fe26b0154c90270942bfb",
+      "local_change": "Use macos-local LZFSE library; no /tmp fallback"
+    },
+    {
+      "source": "droidvm-linux/shims/xcodebuild",
+      "destination": "compat/droidvm-linux/shims/xcodebuild",
+      "sha256": "a16c17d4d6cd446fed05d777d2024af4a12b4813abb9c24e8ef2dbfa0c28f578"
+    },
+    {
+      "source": "droidvm-linux/seed_headers.py",
+      "destination": "compat/droidvm-linux/seed_headers.py",
+      "sha256": "dfc55983bff716fee4ea46697f0a9deecb89b6c6dcb5a4649d54ba20240e04a1"
+    },
+    {
+      "source": "droidvm-linux/patches/darwinboot-reclaim-memory.patch",
+      "destination": "compat/droidvm-linux/patches/darwinboot-reclaim-memory.patch",
+      "sha256": "962f0f9cb34f5c4678cc29b1a96f8afb632b5f99babaf4005839e5c12147fa21"
+    },
+    {
+      "source": "out/ci-repo/patches/bootstrap-skip-checks.py",
+      "destination": "compat/droidvm-linux/bootstrap-skip-checks.py",
+      "sha256": "d405c7b50930f5c8512cbff29c9821f40138ee659fb1ef46e060ff33b5c7e078"
+    }
+  ]
+}

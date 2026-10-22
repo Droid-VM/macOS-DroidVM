@@ -1,0 +1,15 @@
+--- a/iokit/Makefile
++++ b/iokit/Makefile
+@@ -10,6 +10,12 @@
+ 
+ EXPINC_SUBDIRS = IOKit DriverKit Exclaves
+ 
++ifeq ($(GUNYAH_LINUX_C_SUPPORT),1)
++# Partial C dependency SDK only; never used as complete XNU headers.
++INSTINC_SUBDIRS := $(filter-out DriverKit,$(INSTINC_SUBDIRS))
++EXPINC_SUBDIRS := $(filter-out DriverKit,$(EXPINC_SUBDIRS))
++endif
++
+ COMP_SUBDIRS = conf
+ 
+ include $(MakeInc_rule)

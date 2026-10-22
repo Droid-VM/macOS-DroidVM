@@ -1,0 +1,4 @@
+#!/bin/sh
+# Presence stand-in: the kernel step only checks that xcodebuild exists; the Linux build never calls it.
+echo "xcodebuild is not available on Linux (called with: $*)" >&2
+exit 1

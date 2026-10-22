@@ -1,0 +1,21 @@
+--- a/scripts/build-libpthread-kernel.py
++++ b/scripts/build-libpthread-kernel.py
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ """Build the matching Darwin 23 pthread kernel component and its real registration."""
+ import json
++import os
+ from pathlib import Path
+ import struct
+ import subprocess
+@@ -30,7 +31,9 @@
+ def compile_one(source, destination, namespace=None):
+     if source.name == 'source_pthread_bootstrap.c':
+         command = []
+-        arguments = record['arguments']
++        arguments = list(record['arguments'])
++        if os.environ.get('GUNYAH_LINUX') == '1':
++            arguments[0] = os.environ['GUNYAH_LINUX_CC']
+         index = 0
+         while index < len(arguments):
+             value = arguments[index]

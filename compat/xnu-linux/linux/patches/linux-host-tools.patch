@@ -1,0 +1,164 @@
+--- a/Makefile
++++ b/Makefile
+@@ -1,3 +1,7 @@
++ifeq ($(GUNYAH_LINUX),1)
++include $(GUNYAH_LINUX_MAKEFILE)
++endif
++
+ #
+ # Copyright (C) 1999-2020 Apple Inc. All rights reserved.
+ #
+--- a/makedefs/MakeInc.cmd
++++ b/makedefs/MakeInc.cmd
+@@ -1,3 +1,7 @@
++ifeq ($(GUNYAH_LINUX),1)
++include $(GUNYAH_LINUX_MAKEFILE)
++endif
++
+ # -*- mode: makefile;-*-
+ #
+ # Copyright (C) 1999-2020 Apple Inc. All rights reserved.
+--- a/SETUP/config/Makefile
++++ b/SETUP/config/Makefile
+@@ -18,9 +18,11 @@
+ 
+ config: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -40,3 +42,8 @@
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+--- a/SETUP/decomment/Makefile
++++ b/SETUP/decomment/Makefile
+@@ -16,9 +16,11 @@
+ 
+ decomment: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+--- a/SETUP/installfile/Makefile
++++ b/SETUP/installfile/Makefile
+@@ -16,9 +16,11 @@
+ 
+ installfile: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+--- a/SETUP/kextsymboltool/Makefile
++++ b/SETUP/kextsymboltool/Makefile
+@@ -16,9 +16,11 @@
+ 
+ kextsymboltool: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+--- a/SETUP/replacecontents/Makefile
++++ b/SETUP/replacecontents/Makefile
+@@ -16,9 +16,11 @@
+ 
+ replacecontents: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif
+--- a/SETUP/setsegname/Makefile
++++ b/SETUP/setsegname/Makefile
+@@ -16,9 +16,11 @@
+ 
+ setsegname: $(OBJS)
+ 	@$(LOG_HOST_LD) "$@"
+-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
++	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LINUX_HOST_LIBS)
++ifneq ($(HOST_PLATFORM),Linux)
+ 	@$(LOG_HOST_CODESIGN) "$@"
+ 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
++endif
+ 
+ %.o: %.c
+ 	@$(LOG_HOST_CC) "$@"
+@@ -28,3 +30,8 @@
+ 
+ include $(MakeInc_rule)
+ include $(MakeInc_dir)
++
++ifeq ($(HOST_PLATFORM),Linux)
++CFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(CFLAGS)) $(LINUX_HOST_CFLAGS)
++LDFLAGS := $(filter-out -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION),$(LDFLAGS))
++endif

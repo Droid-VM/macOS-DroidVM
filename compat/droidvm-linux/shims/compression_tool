@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Linux stand-in for macOS compression_tool: only `-decode -a lzfse -i IN -o OUT` (liblzfse built from github.com/lzfse/lzfse)."""
+import ctypes
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+opts = {args[i]: args[i + 1] for i in range(len(args) - 1) if args[i] in ('-a', '-i', '-o')}
+if '-decode' not in args or opts.get('-a') != 'lzfse':
+    sys.exit('compression_tool shim: only -decode -a lzfse is supported')
+lib = ctypes.CDLL(os.environ.get('LZFSE_LIB', str(Path(__file__).resolve().parents[3] / 'out/linux/liblzfse.so')))
+lib.lzfse_decode_buffer.restype = ctypes.c_size_t
+lib.lzfse_decode_buffer.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p]
+data = open(opts['-i'], 'rb').read()
+size = max(len(data) * 8, 1 << 24)
+while True:
+    out = ctypes.create_string_buffer(size)
+    n = lib.lzfse_decode_buffer(out, size, data, len(data), None)
+    if 0 < n < size:
+        break
+    size *= 2
+    if size > 1 << 31:
+        sys.exit('compression_tool shim: output too large')
+open(opts['-o'], 'wb').write(out.raw[:n])

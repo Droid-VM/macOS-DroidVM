@@ -1,0 +1,348 @@
+{
+  "format": 1,
+  "origin": "https://fergofrog.com/code/codebrowser/",
+  "reference_xnu_commit": "2c2f96dc2b9a4408a43d3150ae9c105355ca3daa",
+  "reference_xnu_version": "10063.121.3",
+  "target_xnu_version": "10063.141.1",
+  "generator": "DriverKit-286",
+  "original_generator_arguments_authenticated": false,
+  "runtime_abi_verified": false,
+  "known_kernel_abi_incompatibilities": [
+    "DriverKit-286 dispatch calls IORPCMessageFromMach, which XNU 10063.141.1 no longer exposes to kernel code",
+    "Generated outgoing IORPC initializers omit kernelContent, required by the current OSMetaClassBase::Invoke"
+  ],
+  "scope": "Fixed source snapshot for the Gunyah kernel build, not an IIG replacement",
+  "sdk_settings_sha256": "23737dbf2a6e5e2c896f28df387c4920eff0ddd7aef63ac50f3f6d9f394287c8",
+  "inputs": {
+    "iokit/DriverKit/IOBufferMemoryDescriptor.iig": "688feb80ce5f2438a7f2789ecf10544aa9c107d2d17fd21ee759ee90191e5983",
+    "iokit/DriverKit/IODMACommand.iig": "0f0e3e01d07ef058e4e97226b0657d1acb36ce74ec9e31b34c2b6dbee05fdaf1",
+    "iokit/DriverKit/IODataQueueDispatchSource.iig": "0d1479c4843867a12ac84494624f8ef5dcd06ffa4482165b55425cb6e31ba701",
+    "iokit/DriverKit/IODispatchQueue.iig": "e67cd75426ac4ccbf1fd3e14f432bda8ca89655759451e520ecf950bf25e99e3",
+    "iokit/DriverKit/IODispatchSource.iig": "b8e7c08fc4817e4e124bcf85cfd0fe6c53486037850582cdd385462a9fda31f0",
+    "iokit/DriverKit/IOEventLink.iig": "972a0b8a6675155cbd03fca24f39a1a0a0a15a4bc8499e9c184329dbe518507d",
+    "iokit/DriverKit/IOExtensiblePaniclog.iig": "2919bf3c944fdf352cc92086a2152bc2db6656ef916182143d578cb9b10a2738",
+    "iokit/DriverKit/IOInterruptDispatchSource.iig": "fa110ff11ff90c6d0639d11101631510283440976bf76d84cc76fcfed238f9a8",
+    "iokit/DriverKit/IOMemoryDescriptor.iig": "4ed4ed39fcfa89f9ff70b7a7a7889f457cd9cf98054d2a0cf54e0c8446bd3fdd",
+    "iokit/DriverKit/IOMemoryMap.iig": "335655b5e7d7b160cc9be9494279911a89ce73f9d35257381815caddad98a6fc",
+    "iokit/DriverKit/IOService.iig": "d8756d78a1be18561e999949e9508a4f5ed700b99359d4efe3cd88fe1470f621",
+    "iokit/DriverKit/IOServiceNotificationDispatchSource.iig": "d4d443fb1b75a26c2e2d6da92d875d5317dff5759d94e18dac065a2a84eae643",
+    "iokit/DriverKit/IOServiceStateNotificationDispatchSource.iig": "6bff4922ed765ea3fb11ec742d86e1ee220b715254a37551729628684cb78163",
+    "iokit/DriverKit/IOUserClient.iig": "313e814c5203bcb7c7390e87ae00845d45765039204ff628be9c98a3f6ee5a7f",
+    "iokit/DriverKit/IOUserServer.iig": "94e6842addf0097f46a9deb8810b5642d90a0afb0d790e00a208f26c16b8df04",
+    "iokit/DriverKit/IOWorkGroup.iig": "afe77e23460b87de542227172f528774f82911bbdd5eb10da8443d50ad849e77",
+    "iokit/DriverKit/OSAction.iig": "d1f61a6e9db58d34a3a77880e6262d92e514968d4b1f60be736fe830b90f4f2e",
+    "iokit/DriverKit/OSObject.iig": "bcd00a8dfda6bbb511156ca23cb9a6b1685a828c6b91bb589144bba91215aca1",
+    "iokit/DriverKit/Makefile": "dfad9206fe7dd323a0b9db47e33c03627bae236f295a8aaf5750e4f08dbd6dad",
+    "iokit/IOKit/IORPC.h": "3463c83ffccead1f69c474d0d0ffcb5389cdcff923236d35600e31bcdbd229ce"
+  },
+  "outputs": {
+    "IOBufferMemoryDescriptor.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOBufferMemoryDescriptor.h.html",
+      "html_sha256": "832534f4800c7d1c72d7320e0de30ff0d7219d114e79def187acc29a4b78326c",
+      "source_sha256": "e4a0e6dc63630ed7d8acb56cfa00eb16a578e459d26167791e3174cc115c1cbc",
+      "lines": 264
+    },
+    "IOBufferMemoryDescriptor.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOBufferMemoryDescriptor.iig.cpp.html",
+      "html_sha256": "3ba6cff37abb6915975bc78e7800c74bab8a2b430229ac36178bca38c74fb554",
+      "source_sha256": "eb92e2d5fe3d442b772257e953faf68dbe05f41aa88a31ae1e3789c21eb73710",
+      "lines": 451
+    },
+    "IODMACommand.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODMACommand.h.html",
+      "html_sha256": "3708959e44c332e2e20459ec197bb9d5513f17f7086997134ee7a5776a824266",
+      "source_sha256": "0dd08d5c2f13988ec75d704c9f51f2763679d7548699373396a68a8bdee9f89d",
+      "lines": 431
+    },
+    "IODMACommand.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODMACommand.iig.cpp.html",
+      "html_sha256": "9dfdfbff02149353ac6f074e360e1e3b0d74712afbd6dcaf7e227a7de787fff4",
+      "source_sha256": "6b44acdeb27c6778bdb54b04944922e525d3223de7eca923b2b5897a0caf720c",
+      "lines": 936
+    },
+    "IODataQueueDispatchSource.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODataQueueDispatchSource.h.html",
+      "html_sha256": "535054126dc2aee75322517b7cc6c3639198a690179775660b9cf64208a1be62",
+      "source_sha256": "248ab9b381dc7d99d98050fbdc4661fd24109fa40d68f2479a65f0ec484fba9c",
+      "lines": 580
+    },
+    "IODataQueueDispatchSource.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODataQueueDispatchSource.iig.cpp.html",
+      "html_sha256": "5c8177c42f0ce8dadacdc7a115eb6d0bc2196a7ab47e78260ab5a5dfc40d887e",
+      "source_sha256": "11f5f745b0cd3a7de1136ed6c8b0a09e5ae85f739d9f26f0f8d0f48e875be5f5",
+      "lines": 1241
+    },
+    "IODispatchQueue.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODispatchQueue.h.html",
+      "html_sha256": "aadc83a342b6258ac82354523623d60f2bef788f1ef7e54660acabc5cd607cb5",
+      "source_sha256": "661eca047755c88eff8be0b980aa42f2cb466e66a23257fc86d1840431092069",
+      "lines": 481
+    },
+    "IODispatchQueue.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODispatchQueue.iig.cpp.html",
+      "html_sha256": "aebf3b3e0cd46fd2523b7b00a2da69764aea9082e7e89b0960336d606d183e23",
+      "source_sha256": "8cbc88c270f645cda140cf01a5ff6925567a3b5f416e03f58c5e579b31a70ed6",
+      "lines": 460
+    },
+    "IODispatchSource.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODispatchSource.h.html",
+      "html_sha256": "1ae065a3043ee6004b20675c60791bfbe6ce6cdb943c85bb6b925a216872c70c",
+      "source_sha256": "1585fbbb0609a33e5496a3855300ccb4e5a9003790a383635fd20042b1b00dec",
+      "lines": 255
+    },
+    "IODispatchSource.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IODispatchSource.iig.cpp.html",
+      "html_sha256": "53a420f4d39fe16d0d871834e3f200771bc30d65723dffa47fc20f03ad9136c8",
+      "source_sha256": "f27ba5cde22f46401ec5f2c0217fd0247b646c9acc7461affab156d685b5b6d5",
+      "lines": 716
+    },
+    "IOEventLink.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOEventLink.h.html",
+      "html_sha256": "581041ad8b745794768551a045e249cbf569e905a4f80eb2365aeaed6bd8f89b",
+      "source_sha256": "767dc5711dce016170171e07e2a021389f7d8b6de22ceaccba7ac42ab4ac4f2b",
+      "lines": 435
+    },
+    "IOEventLink.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOEventLink.iig.cpp.html",
+      "html_sha256": "08af29d927bc4ffe1224e07323b8cc2a7dd6161d6d3730daafbf2c0883f4f791",
+      "source_sha256": "63fe1736ee358caf72cb8c88881237375a26d2665083769f479817dd4fdbf5f2",
+      "lines": 600
+    },
+    "IOExtensiblePaniclog.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOExtensiblePaniclog.h.html",
+      "html_sha256": "06101ec9c1d47dcad7329e8a66c890331490f6c8a28647ce6f82e01ce826e53f",
+      "source_sha256": "d1f11f0ea24626d096f10b577056b74ccd4d05d7be59b041db26651d40d8b712",
+      "lines": 432
+    },
+    "IOExtensiblePaniclog.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOExtensiblePaniclog.iig.cpp.html",
+      "html_sha256": "dc1bc8fb2c818e3a59aedca2b9beec020fd2e145c1c385249a235837d48a1f83",
+      "source_sha256": "0abcb892fdf10ff199ea04ec237a5b8e25cf86457796c98297909885aa03e730",
+      "lines": 1143
+    },
+    "IOInterruptDispatchSource.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOInterruptDispatchSource.h.html",
+      "html_sha256": "21b34d77604ca87ede2fe765f8ab40ebbd25bedf67877e00940032d14fbcc225",
+      "source_sha256": "6f436eb1adf8fca2e100c149574c45e8e35a0f2323f0afb5b2283543c5e6dd9a",
+      "lines": 410
+    },
+    "IOInterruptDispatchSource.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOInterruptDispatchSource.iig.cpp.html",
+      "html_sha256": "fd4cc0bbb5ada815ce3a448a07f59ecd03eff90671c38c3e70d410aefd8efbf1",
+      "source_sha256": "860ac4f0c1077436b307db21542022e6551639b7eb96272282ad6c3e0e5db13c",
+      "lines": 887
+    },
+    "IOMemoryDescriptor.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOMemoryDescriptor.h.html",
+      "html_sha256": "e381c31ac47d1b46056400540482a1878de51974c969e41da313ee1dfcad8b0b",
+      "source_sha256": "fa681d3803193e417c0c8a625a6e9ba610df91e272341cf95b540b23630d7da2",
+      "lines": 420
+    },
+    "IOMemoryDescriptor.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOMemoryDescriptor.iig.cpp.html",
+      "html_sha256": "620f60e31da98143d5f33e17d5006777e68542d827f75be90b67ccfcc3f06938",
+      "source_sha256": "824d63e63f5de27296fb971673b1b9e3c7e658dcf744195b4c0968ed1964ce17",
+      "lines": 790
+    },
+    "IOMemoryMap.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOMemoryMap.h.html",
+      "html_sha256": "27c489bb569aaf1fcbada87eff2312908f8c018c735b162b047ede96451e238a",
+      "source_sha256": "337e522df9df7a5614c5864fbbb8be8b13414db580134dea6ed06ee10f1b961e",
+      "lines": 242
+    },
+    "IOMemoryMap.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOMemoryMap.iig.cpp.html",
+      "html_sha256": "08e3674215d0d8a35645815b3c598ad2b74aafd41c2d50026d9a3f5b894a0f46",
+      "source_sha256": "50b96757274d272e6941021c066bfa14b06c198569a82546de215f00722ea118",
+      "lines": 304
+    },
+    "IOService.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOService.h.html",
+      "html_sha256": "cc4a683a7ce505f7bc34f53336909b15cd5b70f1a89004bd49894fa3a8f67b64",
+      "source_sha256": "20c43cc2d6a32698148fdbb8730e884216f3e44dc6f6d0dcd5464120e880f6f3",
+      "lines": 1433
+    },
+    "IOService.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOService.iig.cpp.html",
+      "html_sha256": "335b3984b8b99d642d63141f4ef41ee6fe1a4572587a3714c8578482b6f690cc",
+      "source_sha256": "287d223b521687b181b2cf48b9906b4153c51bc2b411d3e6fce2e20937e0fee1",
+      "lines": 5303
+    },
+    "IOServiceNotificationDispatchSource.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOServiceNotificationDispatchSource.h.html",
+      "html_sha256": "b62e2dd094f9740a15bd19fcd70dd48c6fb3119092ba15baf68aa2125666fc61",
+      "source_sha256": "276d60446719ab88a002d4738ef04d0baa4c52d123f68ebd0f5ec444a7889be0",
+      "lines": 361
+    },
+    "IOServiceNotificationDispatchSource.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOServiceNotificationDispatchSource.iig.cpp.html",
+      "html_sha256": "72cbd97e2116c389f7cc10af179f55c94eb0e4848206870610db58984e2829a2",
+      "source_sha256": "b2b0d9aaa0a8fb117ad37bf5429c8108722e9c8c91c7f5a6ccfaa9e9835db5a1",
+      "lines": 744
+    },
+    "IOServiceStateNotificationDispatchSource.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOServiceStateNotificationDispatchSource.h.html",
+      "html_sha256": "aa4acea2b21961acba79d2d6c3a26de53bc9bf2ecca3812c174e11ef3e1e8519",
+      "source_sha256": "8bdc797f0346e3dc3f1439d5da9b4623eaf1a60294ca9f99d00d68c90aaa7e2a",
+      "lines": 323
+    },
+    "IOServiceStateNotificationDispatchSource.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOServiceStateNotificationDispatchSource.iig.cpp.html",
+      "html_sha256": "84371142c729b69056b4e1cf0b4248e2529a8f5e5131df589fc5dd5d084c7ec0",
+      "source_sha256": "4a7c7304e29b16820ec906f3d67d752084b5abc5b71b3ea057e305878c472058",
+      "lines": 727
+    },
+    "IOUserClient.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOUserClient.h.html",
+      "html_sha256": "734a4d92986b28f7a63a15d31771dc6a8532c69682df9d8b5feb2ebc67064f6a",
+      "source_sha256": "758656f89b9d7f85a7553a9a0800d075f3ce58550e91c58ad28d7599f181dbd3",
+      "lines": 675
+    },
+    "IOUserClient.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOUserClient.iig.cpp.html",
+      "html_sha256": "268961544ada7fb14b3756d5125d207eecc2fb72fb87dada8077683893ee11c6",
+      "source_sha256": "533f355ada3c8f102e507959c7edb6e163383633b61d5f5481065266f68511a0",
+      "lines": 1170
+    },
+    "IOUserServer.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOUserServer.h.html",
+      "html_sha256": "96c31f1367a704df7737e9ba9eca98d1d56e26617d661e1f28eb6e4683ee3172",
+      "source_sha256": "e6c0013fd9e6e7dc149805e878170986a6d196f329f04bec9c6c9876c619e1b9",
+      "lines": 254
+    },
+    "IOUserServer.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOUserServer.iig.cpp.html",
+      "html_sha256": "13a3a224580e4a4d5a37c1621e16da2a30c34e81bcc6d6c7b7dd6881451eac1f",
+      "source_sha256": "c05eb495dcf8d68d95d9a8220f9390647cc22f8cb5c2073fff6ef5ac7b145a97",
+      "lines": 627
+    },
+    "IOWorkGroup.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOWorkGroup.h.html",
+      "html_sha256": "cab5ba3fc93bfef6a643b7fabc461fcaac2f65ba33e745ce8bb4bde34ef3cdb4",
+      "source_sha256": "8ac24b144b124c09db308296e1aaa70afd602205c002b7cfeaec374d2b1309df",
+      "lines": 339
+    },
+    "IOWorkGroup.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/IOWorkGroup.iig.cpp.html",
+      "html_sha256": "6c96c3fb758ad7d015dda72314fe1d7855e22c81c352dc45a7b16ec4b5cf016e",
+      "source_sha256": "f2dee5834c7f6615512a398c9bad80c2d700da11714e1a500732bf77a10f92f7",
+      "lines": 601
+    },
+    "OSAction.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/OSAction.h.html",
+      "html_sha256": "ef96808b381a99dbad196b07bd01f0be8bc63319e6d662ff16ea848fb428a780",
+      "source_sha256": "35dcb83b5344923c1e60a34c33ce913153533150fe6b72a0ea42926fff84aae6",
+      "lines": 388
+    },
+    "OSAction.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/OSAction.iig.cpp.html",
+      "html_sha256": "2e28747441432c5b177122bbc61d98449ddef7417293f8a6576ec0c967f1265a",
+      "source_sha256": "0d8ef15a0d49faf08686731b5f6f451316f8c54f7ccbd8b174dc7f5b843f23ca",
+      "lines": 591
+    },
+    "OSObject.h": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/OSObject.h.html",
+      "html_sha256": "c9aad25b9a83dc9a1e4f17300060ed7eaf32974115d4fd8cd1a88384da37ac8a",
+      "source_sha256": "a5a4c7034f83885a6a4091d026728d63bc50f23034ddeb7919ed0c79661730c5",
+      "lines": 482
+    },
+    "OSObject.iig.cpp": {
+      "url": "https://fergofrog.com/code/codebrowser/xnu-build/RELEASE_ARM64_VMAPPLE/iokit/RELEASE/DriverKit/OSObject.iig.cpp.html",
+      "html_sha256": "9c3110fb7e4f9947461c1c146ea69c4273aeb72c04756551d5ba67c4ced0fb97",
+      "source_sha256": "f8ba45cc411285637497fac73dbe8bb88b6936d5966e5406ef9e8fbda6c08ec1",
+      "lines": 459
+    }
+  },
+  "reference_definitions": {
+    "IOBufferMemoryDescriptor.iig": {
+      "file": "IOBufferMemoryDescriptor.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOBufferMemoryDescriptor.iig",
+      "sha256": "688feb80ce5f2438a7f2789ecf10544aa9c107d2d17fd21ee759ee90191e5983"
+    },
+    "IODMACommand.iig": {
+      "file": "IODMACommand.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IODMACommand.iig",
+      "sha256": "0f0e3e01d07ef058e4e97226b0657d1acb36ce74ec9e31b34c2b6dbee05fdaf1"
+    },
+    "IODataQueueDispatchSource.iig": {
+      "file": "IODataQueueDispatchSource.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IODataQueueDispatchSource.iig",
+      "sha256": "0d1479c4843867a12ac84494624f8ef5dcd06ffa4482165b55425cb6e31ba701"
+    },
+    "IODispatchQueue.iig": {
+      "file": "IODispatchQueue.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IODispatchQueue.iig",
+      "sha256": "e67cd75426ac4ccbf1fd3e14f432bda8ca89655759451e520ecf950bf25e99e3"
+    },
+    "IODispatchSource.iig": {
+      "file": "IODispatchSource.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IODispatchSource.iig",
+      "sha256": "b8e7c08fc4817e4e124bcf85cfd0fe6c53486037850582cdd385462a9fda31f0"
+    },
+    "IOEventLink.iig": {
+      "file": "IOEventLink.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOEventLink.iig",
+      "sha256": "972a0b8a6675155cbd03fca24f39a1a0a0a15a4bc8499e9c184329dbe518507d"
+    },
+    "IOExtensiblePaniclog.iig": {
+      "file": "IOExtensiblePaniclog.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOExtensiblePaniclog.iig",
+      "sha256": "2919bf3c944fdf352cc92086a2152bc2db6656ef916182143d578cb9b10a2738"
+    },
+    "IOInterruptDispatchSource.iig": {
+      "file": "IOInterruptDispatchSource.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOInterruptDispatchSource.iig",
+      "sha256": "fa110ff11ff90c6d0639d11101631510283440976bf76d84cc76fcfed238f9a8"
+    },
+    "IOMemoryDescriptor.iig": {
+      "file": "IOMemoryDescriptor.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOMemoryDescriptor.iig",
+      "sha256": "4ed4ed39fcfa89f9ff70b7a7a7889f457cd9cf98054d2a0cf54e0c8446bd3fdd"
+    },
+    "IOMemoryMap.iig": {
+      "file": "IOMemoryMap.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOMemoryMap.iig",
+      "sha256": "335655b5e7d7b160cc9be9494279911a89ce73f9d35257381815caddad98a6fc"
+    },
+    "IOService.iig": {
+      "file": "IOService.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOService.iig",
+      "sha256": "d8756d78a1be18561e999949e9508a4f5ed700b99359d4efe3cd88fe1470f621"
+    },
+    "IOServiceNotificationDispatchSource.iig": {
+      "file": "IOServiceNotificationDispatchSource.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOServiceNotificationDispatchSource.iig",
+      "sha256": "d4d443fb1b75a26c2e2d6da92d875d5317dff5759d94e18dac065a2a84eae643"
+    },
+    "IOServiceStateNotificationDispatchSource.iig": {
+      "file": "IOServiceStateNotificationDispatchSource.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOServiceStateNotificationDispatchSource.iig",
+      "sha256": "6bff4922ed765ea3fb11ec742d86e1ee220b715254a37551729628684cb78163"
+    },
+    "IOUserClient.iig": {
+      "file": "IOUserClient.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOUserClient.iig",
+      "sha256": "313e814c5203bcb7c7390e87ae00845d45765039204ff628be9c98a3f6ee5a7f"
+    },
+    "IOUserServer.iig": {
+      "file": "IOUserServer.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOUserServer.iig",
+      "sha256": "94e6842addf0097f46a9deb8810b5642d90a0afb0d790e00a208f26c16b8df04"
+    },
+    "IOWorkGroup.iig": {
+      "file": "IOWorkGroup.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/IOWorkGroup.iig",
+      "sha256": "afe77e23460b87de542227172f528774f82911bbdd5eb10da8443d50ad849e77"
+    },
+    "OSAction.iig": {
+      "file": "OSAction.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/OSAction.iig",
+      "sha256": "d1f61a6e9db58d34a3a77880e6262d92e514968d4b1f60be736fe830b90f4f2e"
+    },
+    "OSObject.iig": {
+      "file": "OSObject.iig",
+      "url": "https://raw.githubusercontent.com/apple-oss-distributions/xnu/2c2f96dc2b9a4408a43d3150ae9c105355ca3daa/iokit/DriverKit/OSObject.iig",
+      "sha256": "bcd00a8dfda6bbb511156ca23cb9a6b1685a828c6b91bb589144bba91215aca1"
+    }
+  }
+}

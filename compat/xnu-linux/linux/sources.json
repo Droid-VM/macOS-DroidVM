@@ -1,0 +1,16 @@
+{
+  "bootstrap_cmds-linux": {
+    "url": "https://github.com/markmentovai/bootstrap_cmds.git",
+    "commit": "f337e600741638896fb6056ce87c6479f74b89a3"
+  },
+  "cctools-port-linux": {
+    "url": "https://github.com/tpoechtrager/cctools-port.git",
+    "commit": "e101a6940dcb5988808a16626bc43851f00dc05f"
+  },
+  "iOS-SDKs-linux": {
+    "url": "https://github.com/xybp888/iOS-SDKs.git",
+    "commit": "ad607cb07fe4ad1c9b91cf970bd228c2a9253207",
+    "sparse_path": "iPhoneOS17.5.sdk",
+    "provenance": "Third-party SDK mirror; not authenticated against an Apple Xcode archive"
+  }
+}
