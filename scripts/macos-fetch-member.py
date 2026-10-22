@@ -56,10 +56,20 @@ def main():
     parser.add_argument('component')
     parser.add_argument('--profile', default='configs/macos-23G93.json')
     parser.add_argument('--output-dir', default='artifacts/23G93')
+    parser.add_argument('--identity', help='device class of another BuildManifest identity (e.g. vma2macosap); read from the inventory of macos-inputs.py')
     args = parser.parse_args()
     profile = json.loads(inputs.local_path(args.profile).read_text())
     spec_ipsw = profile['ipsw']
-    component = profile['identity']['components'][args.component]
+    if args.identity:
+        inventory = json.loads(inputs.local_path('artifacts/23G93/metadata/identities.json').read_text())
+        found = [i for i in inventory['identities'] if i['device_class'] == args.identity and i['variant'] == 'macOS Customer Erase']
+        if len(found) != 1:
+            raise SystemExit(f'identity {args.identity!r} not found exactly once in the inventory')
+        entry = found[0]['components'][args.component]
+        component = {'path': entry['path'], 'size': entry['size'], 'compressed_size': entry['compressed_size'],
+                     'zip_method': entry['zip_method'], 'apple_digest_hex': entry['apple_digest_hex']}
+    else:
+        component = profile['identity']['components'][args.component]
     digest_hex = component['apple_digest_hex']
     algorithm = {64: 'sha256', 96: 'sha384', 128: 'sha512', 40: 'sha1'}[len(digest_hex)]
     out_dir = inputs.local_path(args.output_dir)
