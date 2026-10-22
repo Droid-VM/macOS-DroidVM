@@ -22,7 +22,7 @@
  	    }                                                           \
 --- a/security/mac_base.c
 +++ b/security/mac_base.c
-@@ -1827,3 +1827,11 @@
+@@ -1827,3 +1827,17 @@
  }
  
  #endif /* !MAC */
@@ -32,5 +32,11 @@
 +bool
 +mac_policy_is_sandbox(struct mac_policy_conf *mpc)
 +{
++	static int logged;
++	if (logged < 20) {
++		logged++;
++		printf("mac-sandbox-permissive: policy denied: name '%s' full '%s'\n", mpc->mpc_name ? mpc->mpc_name : "?",
++		    mpc->mpc_fullname ? mpc->mpc_fullname : "?");
++	}
 +	return mpc->mpc_name != NULL && strcmp(mpc->mpc_name, "Sandbox") == 0;
 +}
