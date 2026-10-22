@@ -1,9 +1,10 @@
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -212,6 +212,48 @@
- }
- #endif /* __arm64__ && MACH_BSD */
+@@ -998,3 +998,45 @@
  
+ 	return ret;
+ }
++
 +#if defined(__arm64__) && defined(MACH_BSD)
 +/* boot-arg abort-log=1: the same dump for a thread that is about to write a core file (abort(), fatal signals). */
 +static TUNABLE(bool, virt_abort_log, "abort-log", false);
@@ -45,10 +46,6 @@
 +	}
 +}
 +#endif /* __arm64__ && MACH_BSD */
-+
- /*
-  * Routine: exception_init
-  * Purpose:
 --- a/bsd/kern/kern_core.c
 +++ b/bsd/kern/kern_core.c
 @@ -75,6 +75,9 @@
