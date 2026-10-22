@@ -179,6 +179,14 @@ def full(jobs, legacy_display=False):
         source = TREE / '.cache/xnu-work' / name
         source.write_text(source.read_text().replace(UPSTREAM_OS_UUID, os_uuid))
         assert os_uuid in source.read_text() and UPSTREAM_OS_UUID not in source.read_text(), source
+    # CONFIG_AUDIT (virt-config-audit.patch): the XNU config tool lists config_audit.h in meta_features.h but never writes the
+    # header for this option on a rebuilt object tree, so it is supplied here (bsd and osfmk read the macro).
+    objects = TREE / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
+    if objects.is_dir():
+        for component in ('bsd', 'osfmk'):
+            header = objects / component / 'DEVELOPMENT/config_audit.h'
+            if (header.parent).is_dir() and not header.exists():
+                header.write_text('#define CONFIG_AUDIT 1\n')
     unixnu('defconfig', 'droidvm_defconfig', env=env, device=FULL_DEVICE)
     unixnu('fetch', env=env, device=FULL_DEVICE)
     run(sys.executable, ROOT / 'scripts/mainline-bootstrap-placeholders.py', BUILD / 'droidvm/tree', env=env)
