@@ -1,0 +1,22 @@
+--- a/bsd/security/audit/audit_syscalls.c
++++ b/bsd/security/audit/audit_syscalls.c
+@@ -1284,7 +1284,8 @@
+ {
+ #pragma unused(p, uap, retval)
+ 
+-	return ENOSYS;
++	/* no audit sessions here: macOS launchd asserts that setting its session succeeds */
++	return 0;
+ }
+ 
+ int
+@@ -1300,7 +1301,8 @@
+ {
+ #pragma unused(p, uap, retval)
+ 
+-	return ENOSYS;
++	/* no audit sessions here: macOS launchd asserts that setting its session succeeds */
++	return 0;
+ }
+ 
+ int
