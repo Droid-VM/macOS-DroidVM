@@ -17,6 +17,7 @@ class RemoteFile(io.RawIOBase):
         self.url, self.size, self.position = url, size, 0
         self.cache = {}
         self.downloaded = 0
+        self.etag = None
 
     def readable(self):
         return True
@@ -45,11 +46,19 @@ class RemoteFile(io.RawIOBase):
                 start = index * 256 * 1024
                 end = min(start + 256 * 1024, self.size) - 1
                 expected = f'bytes {start}-{end}/{self.size}'
-                request = urllib.request.Request(self.url, headers={
-                    'Range': f'bytes={start}-{end}', 'Accept-Encoding': 'identity'})
+                headers = {'Range': f'bytes={start}-{end}', 'Accept-Encoding': 'identity'}
+                if self.etag is not None:
+                    headers['If-Match'] = self.etag
+                request = urllib.request.Request(self.url, headers=headers)
                 with urllib.request.urlopen(request, timeout=30) as response:
                     if response.status != 206 or response.headers.get('Content-Range') != expected:
                         raise ValueError('server did not return the exact requested range')
+                    etag = response.headers.get('ETag')
+                    if not etag or etag.startswith('W/'):
+                        raise ValueError('range reads require a strong ETag')
+                    if self.etag is not None and etag != self.etag:
+                        raise ValueError('remote identity changed')
+                    self.etag = etag
                     data = response.read(end - start + 2)
                 if len(data) != end - start + 1:
                     raise ValueError('incorrect range length')
