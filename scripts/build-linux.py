@@ -15,7 +15,10 @@ OUT = ROOT / 'out/linux'
 UNIXNU = OUT / 'UniXNU'
 DEVICE = OUT / 'device-reference'
 FULL_DEVICE = OUT / 'device-full'
-BUILD = OUT / 'reference'
+# MACOS_XNU_VARIANT=osx builds a second kernel tree (reference-osx) whose XNU is compiled for the macOS target
+# (XNU_TARGET_OS_OSX: APPLE_KEXT_VTABLE_PADDING=1, the vtable layout of macOS kexts); the default tree is untouched.
+VARIANT = os.environ.get('MACOS_XNU_VARIANT', '')
+BUILD = OUT / ('reference-osx' if VARIANT == 'osx' else 'reference')
 TREE = BUILD / 'droidvm/tree'
 TC = ROOT / 'toolchains/linux'
 COMPAT = ROOT / 'compat'
@@ -114,11 +117,25 @@ def build(jobs):
     unixnu('build', 'kernel', '-j', str(jobs), env=env)
 
 
+BASELINE_FLAGS_OLD = 'DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS"'
+BASELINE_FLAGS_NEW = 'DEPLOYMENT_TARGET_FLAGS="${XNU_DEPLOYMENT_TARGET_FLAGS:--miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS}"'
+
+
 def full(jobs, legacy_display=False):
     """Second pass of the mainline workflow: the full device with native storage/display, owner policies and the reference candidate."""
     env = environment()
     overrides = json.loads((OUT / 'linux-env.json').read_text())
     env.update({k: v for k, v in overrides.items() if k not in ('PATH', 'PYTHONPATH')})
+    baseline = UNIXNU / 'scripts/build-xnu-4k-baseline.sh'
+    text = baseline.read_text()
+    if BASELINE_FLAGS_OLD in text:
+        baseline.write_text(text.replace(BASELINE_FLAGS_OLD, BASELINE_FLAGS_NEW))
+    if VARIANT == 'osx':
+        env['XNU_DEPLOYMENT_TARGET_FLAGS'] = '-miphoneos-version-min=17.0 -DXNU_TARGET_OS_OSX'
+        if not BUILD.exists():
+            shutil.copytree(OUT / 'reference', BUILD, symlinks=True)
+            # objects compiled for the iOS target must not be reused
+            shutil.rmtree(BUILD / 'droidvm/tree/build/xnu/ios-obj', ignore_errors=True)
     candidate = BUILD / 'droidvm/kernel'
     reference = TREE / 'build/reference-candidate'
     if not reference.exists():
