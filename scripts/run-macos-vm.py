@@ -25,8 +25,9 @@ import phone_pool  # noqa: E402
 
 APP = '/data/data/cn.classfun.droidvm/usr'
 CROSVM = APP + '/bin/crosvm-mmio'
-CACHE = '/data/local/tmp/macos-disk-cache'
-STORE = '/data/local/tmp/droidvm/macos-data-store.img'
+FOLDER = '/data/media/0/DroidVM/MacOS'              # /storage/emulated/0/DroidVM/MacOS: the images the app's VM and the test runs share
+OWNER = 'u0_a258:media_rw'                          # the owner of the DroidVM folder; the daemon opens leased disks as the app
+STORE = FOLDER + '/data-store.img'
 STORE_GIB = 16
 OS_UUID = '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
@@ -49,15 +50,16 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def push_cached(adb, source):
-    """Push a large read-only image once; the device name carries the first 16 hex digits of its sha256."""
+def push_cached(adb, source, name):
+    """Push a large read-only image once; FOLDER/NAME.sha carries the first 16 hex digits of the pushed sha256."""
     size = source.stat().st_size
-    remote = f'{CACHE}/{source.name}-{size}-{sha256(source)[:16]}.img'
-    if sh(adb, f'stat -c %s {remote} 2>/dev/null', check=False).strip() != str(size):
-        sh(adb, f'mkdir -p {CACHE}')
+    remote, digest = f'{FOLDER}/{name}', sha256(source)[:16]
+    if (sh(adb, f'stat -c %s {remote} 2>/dev/null', check=False).strip() != str(size)
+            or sh(adb, f'cat {remote}.sha 2>/dev/null', check=False).strip() != digest):
+        sh(adb, f'mkdir -p {FOLDER}')
         print(f'pushing {source} -> {remote}', flush=True)
         subprocess.run(adb + ['push', str(source), remote + '.part'], check=True, timeout=14400)
-        sh(adb, f'mv {remote}.part {remote}')
+        sh(adb, f'mv {remote}.part {remote} && echo {digest} > {remote}.sha && chown {OWNER} {remote} {remote}.sha && chmod 660 {remote} {remote}.sha')
     return remote
 
 
@@ -66,7 +68,7 @@ def ensure_store(adb):
         return
     label = 'DroidVMDataStore\\001\\000\\000\\000'
     sh(adb, f'mkdir -p {Path(STORE).parent} && truncate -s {STORE_GIB}G {STORE} && '
-            f'printf "{label}" | dd of={STORE} bs=4096 conv=notrunc,sync count=1 2>/dev/null')
+            f'printf "{label}" | dd of={STORE} bs=4096 conv=notrunc,sync count=1 2>/dev/null; chown {OWNER} {STORE}; chmod 660 {STORE}')
 
 
 def vm_command(os_img, systemos_img, mem_mb):
@@ -92,6 +94,15 @@ def kernel_args(extra):
     if len(line) > 1000:
         raise SystemExit(f'kernel command line is {len(line)} bytes; the limit is 1000')
     return line
+
+
+def make_adt(fdt, dram_size, unique_chip_id, output):
+    subprocess.run(['python3', str(ADT_TOOL), '--fdt', str(fdt), '--dram-size', dram_size,
+                    '--dram-base', '0x80600000', '--owned-memory-size', '0x20000000', '--cpu-regs', '0',
+                    '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
+                    '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
+                    '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
+                    '--output', str(output)], check=True)
 
 
 def build_boot_disk(local, trust, data, adt, line):
@@ -144,8 +155,8 @@ def main():
         if not path.is_file():
             raise SystemExit(f'missing {path}')
     phone_pool.prepare_host_pool(adb, mem_mb, mem_mb + 128, local / 'host-pool-before.json')
-    os_img = push_cached(adb, artifacts / 'os.raw')
-    sys_img = push_cached(adb, artifacts / 'systemos.img')
+    os_img = push_cached(adb, artifacts / 'os.raw', 'os.img')
+    sys_img = push_cached(adb, artifacts / 'systemos.img', 'systemos.img')
     ensure_store(adb)
     sh(adb, f'mkdir -p {remote}')
     run_env = f'LD_LIBRARY_PATH={APP}/lib'
@@ -159,12 +170,7 @@ def main():
     subprocess.run(adb + ['pull', remote + '/generated.dtb', str(local / 'generated.dtb')], check=True, timeout=30)
     sh(adb, 'sleep 5')
     adt = local / 'kernel.macho.adt'
-    subprocess.run(['python3', str(ADT_TOOL), '--fdt', str(local / 'generated.dtb'), '--dram-size', dram_size,
-                    '--dram-base', '0x80600000', '--owned-memory-size', '0x20000000', '--cpu-regs', '0',
-                    '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
-                    '--ipad-identity', '--unique-chip-id', args.unique_chip_id, '--chip-id', '8011',
-                    '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
-                    '--output', str(adt)], check=True)
+    make_adt(local / 'generated.dtb', dram_size, args.unique_chip_id, adt)
     disk = build_boot_disk(local, trust, data, adt, line)
     subprocess.run(adb + ['push', str(disk), remote + '/boot.img'], check=True, timeout=600)
     phone_pool.prepare_host_pool(adb, mem_mb, mem_mb + 128, local / 'host-pool-run.json')
