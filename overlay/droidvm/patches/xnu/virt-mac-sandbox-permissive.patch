@@ -1,0 +1,36 @@
+--- a/security/mac_internal.h
++++ b/security/mac_internal.h
+@@ -258,12 +258,19 @@
+  * request.  Note that it returns its value via 'error' in the scope
+  * of the caller.
+  */
++/* Bring-up: the Sandbox policy of the iPadOS kext set has no profiles for macOS binaries (boot-arg mac-sandbox-permissive). */
++extern bool virt_mac_sandbox_permissive;
++extern bool mac_policy_is_sandbox(struct mac_policy_conf *mpc);
++
+ #define MAC_CHECK(check, args...) do {                              \
+     error = 0;                                                      \
+     MAC_POLICY_ITERATE({                                            \
+ 	    if (mpc->mpc_ops->mpo_ ## check != NULL) {              \
+ 	            DTRACE_MACF3(mac__call__ ## check, void *, mpc, int, error, int, MAC_ITERATE_CHECK); \
+ 	            int __step_err = mpc->mpc_ops->mpo_ ## check (args); \
++	            if (__improbable(virt_mac_sandbox_permissive) && __step_err != 0 && mac_policy_is_sandbox(mpc)) { \
++	                    __step_err = 0;                             \
++	            }                                                   \
+ 	            DTRACE_MACF2(mac__rslt__ ## check, void *, mpc, int, __step_err); \
+ 	            error = mac_error_select(__step_err, error);         \
+ 	    }                                                           \
+--- a/security/mac_base.c
++++ b/security/mac_base.c
+@@ -1827,3 +1827,11 @@
+ }
+ 
+ #endif /* !MAC */
++
++TUNABLE_WRITEABLE(bool, virt_mac_sandbox_permissive, "mac-sandbox-permissive", false);
++
++bool
++mac_policy_is_sandbox(struct mac_policy_conf *mpc)
++{
++	return mpc->mpc_name != NULL && strcmp(mpc->mpc_name, "Sandbox") == 0;
++}
