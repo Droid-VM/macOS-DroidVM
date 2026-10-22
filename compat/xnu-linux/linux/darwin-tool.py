@@ -83,6 +83,9 @@ def main():
         if args and args[0] == "dwarfdump":
             # llvm-dwarfdump prints the same DW_AT_* records the storage ABI audit parses.
             execute([str(Path(config["clang"]).parent / "llvm-dwarfdump"), *args[1:]])
+        if args and args[0] == "c++filt":
+            # Itanium demangling is host-independent; the binding builders only pipe symbol names through it.
+            execute([str(Path(config["clang"]).parent / "llvm-cxxfilt"), *args[1:]])
         if not args or args[0] not in config["tools"]:
             raise ValueError(f"Unsupported xcrun invocation: {args}")
         execute([config["tools"][args[0]], *args[1:]])

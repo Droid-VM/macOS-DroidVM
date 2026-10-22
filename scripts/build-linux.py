@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'out/linux'
 UNIXNU = OUT / 'UniXNU'
 DEVICE = OUT / 'device-reference'
+FULL_DEVICE = OUT / 'device-full'
 BUILD = OUT / 'reference'
 TREE = BUILD / 'droidvm/tree'
 TC = ROOT / 'toolchains/linux'
@@ -37,8 +38,8 @@ def environment():
     return env
 
 
-def unixnu(*args, env):
-    run(sys.executable, UNIXNU / 'unixnu', *args, '-D', DEVICE, '--out', BUILD, cwd=UNIXNU, env=env)
+def unixnu(*args, env, device=None):
+    run(sys.executable, UNIXNU / 'unixnu', *args, '-D', device or DEVICE, '--out', BUILD, cwd=UNIXNU, env=env)
 
 
 def apply(target, patch):
@@ -111,9 +112,56 @@ def build(jobs):
     unixnu('build', 'kernel', '-j', str(jobs), env=env)
 
 
+def full(jobs, legacy_display=False):
+    """Second pass of the mainline workflow: the full device with native storage/display, owner policies and the reference candidate."""
+    env = environment()
+    overrides = json.loads((OUT / 'linux-env.json').read_text())
+    env.update({k: v for k, v in overrides.items() if k not in ('PATH', 'PYTHONPATH')})
+    candidate = BUILD / 'droidvm/kernel'
+    reference = TREE / 'build/reference-candidate'
+    if not reference.exists():
+        reference.mkdir(parents=True)
+        for name in ('kernel.macho', 'kernel.json'):
+            shutil.copyfile(candidate / name, reference / name)
+    if not FULL_DEVICE.exists():
+        shutil.copytree(ROOT / 'sources/UniXNU-droidvm', FULL_DEVICE, symlinks=True)
+        overlay = ROOT / 'overlay/droidvm'
+        (FULL_DEVICE / 'patches/xnu').mkdir(parents=True, exist_ok=True)
+        for patch in (overlay / 'patches/xnu').glob('*.patch'):
+            shutil.copyfile(patch, FULL_DEVICE / 'patches/xnu' / patch.name)
+        shutil.copytree(overlay / 'drivers', FULL_DEVICE / 'drivers', dirs_exist_ok=True)
+        shutil.copytree(overlay / 'scripts', FULL_DEVICE / 'scripts', dirs_exist_ok=True)
+        for patch in (UNIXNU / 'patches/xnu').glob('*.patch'):
+            if not (FULL_DEVICE / 'patches/xnu' / patch.name).exists():
+                shutil.copyfile(patch, FULL_DEVICE / 'patches/xnu' / patch.name)
+        run(sys.executable, ROOT / 'scripts/apply-overlay-board.py', FULL_DEVICE, 'droidvm_defconfig')
+        if not legacy_display:
+            # The legacy display audit insists on a QEMU observation of the original class that this project does not have
+            # (see audit-reference.py); the first boot is serial-only, so the native display driver stays out.
+            board = FULL_DEVICE / 'board.toml'
+            text = board.read_text()
+            assert text.count('  "build-native-legacy-display.py",\n') == 1
+            board.write_text(text.replace('  "build-native-legacy-display.py",\n', ''))
+            config = FULL_DEVICE / 'configs/droidvm_defconfig'
+            text = config.read_text()
+            assert text.count('CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y') == 1
+            config.write_text(text.replace('CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y', 'CONFIG_XNU_NATIVE_LEGACY_DISPLAY=n'))
+    policy_inputs = ROOT / 'out/owner/inputs'
+    if not policy_inputs.exists():
+        run(sys.executable, ROOT / 'scripts/macos-policy-inputs.py')
+    run(sys.executable, ROOT / 'scripts/owner-policy-dirs.py', policy_inputs, BUILD / 'droidvm/tree', 'macos')
+    run(sys.executable, ROOT / 'scripts/macos-root-probe.py', UNIXNU / 'scripts/build-verified-root-probe.py',
+        FULL_DEVICE / 'scripts/build-verified-root-probe.py')
+    unixnu('defconfig', 'droidvm_defconfig', env=env, device=FULL_DEVICE)
+    unixnu('fetch', env=env, device=FULL_DEVICE)
+    run(sys.executable, ROOT / 'scripts/mainline-bootstrap-placeholders.py', BUILD / 'droidvm/tree', env=env)
+    unixnu('build', 'kernel', '-j', str(jobs), env=env, device=FULL_DEVICE)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['prepare', 'build'])
+    parser.add_argument('command', choices=['prepare', 'build', 'full'])
     parser.add_argument('-j', '--jobs', type=int, default=8)
+    parser.add_argument('--legacy-display', action='store_true', help='full: keep the native legacy display driver (needs its runtime audit input)')
     args = parser.parse_args()
-    prepare() if args.command == 'prepare' else build(args.jobs)
+    {'prepare': prepare, 'build': lambda: build(args.jobs), 'full': lambda: full(args.jobs, args.legacy_display)}[args.command]()

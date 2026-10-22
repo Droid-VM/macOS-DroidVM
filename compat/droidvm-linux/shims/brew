@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Only `brew --prefix llvm` is asked for (UniXNU builders locate llvm-objcopy/llvm-as through it): the Linux LLVM.
+if [ "$1" = --prefix ] && [ "$2" = llvm ]; then
+  echo "${LLVM_PREFIX:-/usr/lib/llvm-21}"
+  exit 0
+fi
+echo "brew shim: unsupported invocation: $*" >&2
+exit 1
