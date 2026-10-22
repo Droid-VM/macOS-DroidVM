@@ -43,6 +43,16 @@
       "url": "https://github.com/lzfse/lzfse.git",
       "commit": "e634ca58b4821d9f3d560cdc6df5dec02ffc93fd",
       "submodules": {}
+    },
+    "linux-apfs-rw": {
+      "url": "https://github.com/linux-apfs/linux-apfs-rw.git",
+      "commit": "03187127cd2e62cf78321cdb942eb3a7b17981f9",
+      "submodules": {}
+    },
+    "apfsprogs": {
+      "url": "https://github.com/linux-apfs/apfsprogs.git",
+      "commit": "1bd1c1c2140d13d1b6d2e03379316572bee70aa3",
+      "submodules": {}
     }
   },
   "feeds": [
