@@ -34,7 +34,7 @@ PINS = ROOT / 'out/owner/macos-root-pins.json'
 OS_UUID = json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists() else '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'   # the OS volume the kernel's policy pins
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
-KERNEL = ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'
+KERNEL = Path(os.environ.get('MACOS_KERNEL', ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'))
 INPUTS = ROOT / 'artifacts/boot-inputs'
 GPU_ARGS = ('droidvm-gpu', 'sheng-gpu-addon')     # no GPU device in this VM: those arguments would wait for a node
 PAYLOAD_MIB = 384                                  # the macOS kernel carries 143 MB of block hashes
@@ -100,7 +100,15 @@ def kernel_args(extra):
 
 def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0'):
     """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight)."""
-    subprocess.run(['python3', str(ADT_TOOL), '--fdt', str(fdt), '--dram-size', dram_size,
+    tool = ADT_TOOL
+    if os.environ.get('MACOS_KERNEL'):
+        # xnu-12377 asks the bootloader for 256 bytes of entropy (xnu-10063: 64); the tool of sources/ stays untouched.
+        tool = ROOT / 'out/adt/make-droidvm-adt.py'
+        tool.parent.mkdir(parents=True, exist_ok=True)
+        text = ADT_TOOL.read_text()
+        assert text.count('os.urandom(64)') == 1
+        tool.write_text(text.replace('os.urandom(64)', 'os.urandom(256)'))
+    subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
                     *(['--cpu-regs', cpu_regs] if cpu_regs else []),
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',

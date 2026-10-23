@@ -45,14 +45,17 @@ def main():
         execute([*darling_command(config, config["apple_iig"]["binary"]), *args])
     if name in ("target-clang", "target-clang++"):
         command = [config["clangxx" if name.endswith("++") else "clang"]]
+        # Options of a newer Apple clang that the compiler in use does not know (e.g. xnu-12377's -mno-implicit-sme).
+        args = [x for x in args if x not in config.get("drop_args", ())]
         compile_only = any(x in ("-c", "-E", "-S", "-fsyntax-only", "--version", "-v") for x in args)
-        if config.get("appleclang") and compile_only:
+        if config.get("appleclang") and compile_only and not config.get("native_compile"):
             compiler = "/Volumes/SystemRoot/opt/apple/Library/Developer/CommandLineTools/usr/bin/"
             compiler += "clang++" if name.endswith("++") else "clang"
             # Keep host absolute paths valid in Darling, including response files,
             # dependency files and -MJ records. Never interpolate compiler args
             # into shell code. Native LLVM still drives the Linux Mach-O linker.
             command = darling_command(config, compiler)
+        command += config.get("extra_args", ())
         if not any(x in ("-target", "--target") or x.startswith("--target=") for x in args):
             command += ["-target", os.environ.get("GUNYAH_APPLE_TARGET", "arm64-apple-ios16.0")]
         if not compile_only:

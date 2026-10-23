@@ -49,7 +49,7 @@ MEM_MB = 3072
 OUT = ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
-REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000']   # see TODO.md: without them launchd cannot get far
+REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000', 'mac-sandbox-skip-exec=1']   # see TODO.md: without them launchd cannot get far
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
 adb, sh = ios.adb, ios.sh

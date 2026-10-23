@@ -10,6 +10,7 @@ through the crosvm_guest memfd mapping whose file offset is PA - 0x80000000. Nee
   rig-dmesg.py --poke SYMBOL BYTE SERIAL_LOG
 """
 import argparse
+import os
 import re
 import shlex
 import struct
@@ -18,18 +19,20 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KERNEL = ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'
+KERNEL = Path(os.environ.get('MACOS_KERNEL', ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'))
 MEMFD_GUEST_BASE = 0x80000000
 
 
 class Phone:
     def __init__(self, serial, serial_log):
         self.serial = serial
-        match = re.search(r'DARWINBOOT: ARM64 va=0x([0-9A-Fa-f]+) pa=0x([0-9A-Fa-f]+)', Path(serial_log).read_text(errors='replace'))
+        match = None
+        for match in re.finditer(r'DARWINBOOT: ARM64 va=0x([0-9A-Fa-f]+) pa=0x([0-9A-Fa-f]+)', Path(serial_log).read_text(errors='replace')):   # the last boot of an appended log
+            pass
         if not match:
             raise SystemExit('no DarwinBoot hand-off line in the serial log')
         self.kernel_va, self.kernel_pa = int(match.group(1), 16), int(match.group(2), 16)
-        nm = ROOT / 'out/rig/kernel.nm'
+        nm = ROOT / 'out/rig' / (KERNEL.stem + '.nm')
         if not nm.exists() or nm.stat().st_mtime < KERNEL.stat().st_mtime:
             nm.parent.mkdir(parents=True, exist_ok=True)
             nm.write_text(subprocess.check_output(['llvm-nm', '-n', '--defined-only', str(KERNEL)], text=True))
