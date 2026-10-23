@@ -87,7 +87,7 @@ def inspect(profile_path, output):
         raise ValueError(f'refusing to overwrite {output}')
     with RemoteFile(spec['url'], spec['filesize']) as stream, zipfile.ZipFile(stream) as archive:
         member = archive.getinfo('BuildManifest.plist')
-        if member.file_size > 16 * 1024 * 1024:
+        if member.file_size > 256 * 1024 * 1024:
             raise ValueError('unexpectedly large BuildManifest')
         raw = archive.read(member)  # zipfile validates CRC before accepting the member.
         expected_hash = spec.get('manifest_sha256')
@@ -102,7 +102,11 @@ def inspect(profile_path, output):
         for identity in manifest['BuildIdentities']:
             components = {}
             for name in ('OS', 'Cryptex1,SystemOS', 'KernelCache', 'DeviceTree',
-                         'StaticTrustCache', 'Cryptex1,SystemTrustCache', 'BaseSystem'):
+                         'StaticTrustCache', 'Cryptex1,SystemTrustCache', 'BaseSystem',
+                         # macOS 26 and later: more volumes and cryptexes, mostly AEA-encrypted DMGs
+                         'SystemVolume', 'BaseSystemVolume', 'Cryptex1,SystemVolume', 'Cryptex1,AppOS', 'Cryptex1,AppVolume',
+                         'Cryptex1,AppTrustCache', 'Cryptex1,RosettaOS', 'Cryptex1,RosettaVolume', 'Cryptex1,RosettaTrustCache',
+                         'Ap,BaseSystemTrustCache', 'Ap,SystemVolumeCanonicalMetadata'):
                 component = identity.get('Manifest', {}).get(name)
                 if component is None:
                     continue
