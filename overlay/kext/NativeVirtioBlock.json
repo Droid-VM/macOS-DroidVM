@@ -1,0 +1,35 @@
+{
+  "name": "NativeVirtioBlock",
+  "bundle": "com.unixnu.driver.NativeVirtioBlock",
+  "version": "1.0.0",
+  "objects": "out/x12377/native-kexts/NativeVirtioBlock/objects.json",
+  "start": "_native_kext_start",
+  "stop": "_native_kext_stop",
+  "libraries": {
+    "com.apple.iokit.IOStorageFamily": "1.0.0",
+    "com.apple.kpi.bsd": "18.0.0",
+    "com.apple.kpi.iokit": "18.0.0",
+    "com.apple.kpi.libkern": "18.0.0",
+    "com.apple.kpi.mach": "18.0.0",
+    "com.apple.kpi.private": "18.0.0",
+    "com.apple.kpi.unsupported": "18.0.0"
+  },
+  "personalities": {
+    "NativeVirtioBlock": {
+      "CFBundleIdentifier": "com.unixnu.driver.NativeVirtioBlock",
+      "IOClass": "NativeVirtioBlock",
+      "IOProviderClass": "IOPlatformDevice",
+      "IOProbeScore": 1000,
+      "IOMatchCategory": "NativeVirtioBlock"
+    }
+  },
+  "vtable": {
+    "class": "NativeVirtioBlock",
+    "base": "IOBlockStorageDevice",
+    "base_kext": "com.apple.iokit.IOStorageFamily",
+    "slots": 326,
+    "ignore_slots": [
+      16
+    ]
+  }
+}

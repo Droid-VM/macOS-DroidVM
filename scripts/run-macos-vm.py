@@ -107,7 +107,14 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0'):
         tool.parent.mkdir(parents=True, exist_ok=True)
         text = ADT_TOOL.read_text()
         assert text.count('os.urandom(64)') == 1
-        tool.write_text(text.replace('os.urandom(64)', 'os.urandom(256)'))
+        text = text.replace('os.urandom(64)', 'os.urandom(256)')
+        # macOS reads the SIP configuration iBoot passes in /chosen/asmb (csr_bootstrap, CONFIG_CSR_FROM_DT): lp-sip0 the bits, lp-sip1 =
+        # CSR_ALLOW_UNAUTHENTICATED_ROOT, which mounts the sealed system volume live instead of through its signed snapshot (a boot manifest we lack).
+        marker = "node('manifest-properties')]),"
+        assert text.count(marker) == 1
+        sip = int(os.environ.get('MACOS_LP_SIP0', '0x0'), 0)
+        text = text.replace(marker, f"node('manifest-properties'), node('asmb', [('lp-sip0', struct.pack('<Q', {sip:#x})), ('lp-sip1', struct.pack('<I', 1))])]),")
+        tool.write_text(text)
     subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
                     *(['--cpu-regs', cpu_regs] if cpu_regs else []),

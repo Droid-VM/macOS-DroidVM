@@ -13,13 +13,16 @@ See docs/xnu-12377-port.md ("fileset KC 方案").
 """
 import argparse
 import hmac
+import json
 import plistlib
+import uuid
 import struct
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fileset_kc  # noqa: E402
+import kc_native  # noqa: E402
 import kc_reloc  # noqa: E402
 
 PAGE = 0x4000
@@ -135,7 +138,9 @@ def build(args):
     section = prelink['sections'][0]
     plist = plistlib.loads(bytes(image[section['fileoff']:section['fileoff'] + section['size']]).split(b'\0')[0])
     plist_entries_original = [dict(e) for e in plist['_PrelinkInfoDictionary']]
-    keep = dependency_closure(plist['_PrelinkInfoDictionary'], args.keep) & set(kc.entries)
+    natives = [json.loads(Path(p).read_text()) for p in args.native]
+    roots = list(args.keep) + [lib for spec in natives for lib in spec['libraries']]
+    keep = dependency_closure(plist['_PrelinkInfoDictionary'], roots) & set(kc.entries)
     print(f'keeping {len(keep)} kexts: {sorted(keep)}')
 
     # 1. Clear every segment of the old kernel and of the dropped kexts (everything but their shared LINKEDIT).
@@ -220,7 +225,79 @@ def build(args):
     for site, value, target, auth, diversity, addr_div, key in kc.chained_sites():
         if owner(site):
             kext_sites.append((site + shift, remap.map(target) if remap.in_old_kernel(target) else target + shift, auth, diversity, addr_div, key))
+    kept_old_sites = {s[0]: s[1] for s in kext_sites}
     print(f'kexts: {len(kext_sites)} chained pointers')
+
+    # Kexts of our own (drivers that derive from classes of the collection's kexts): link, place, describe.
+    native_entries, native_commands = [], []
+    if natives:
+        exported = {}
+        for name in sorted(keep):
+            for symbol, kind, sect, desc, value in kc.symbols(kc.macho(name)):
+                if kind & 0x0f == 0x0f and not kind & 0xe0:
+                    exported.setdefault(symbol, []).append(value + shift)
+
+        def resolve(symbol):
+            found = new_symbols.get(symbol, [])
+            if len(found) == 1:
+                return found[0]
+            found = exported.get(symbol, [])
+            return found[0] if len(found) == 1 else None
+
+        used = [(new_off(s['va']), new_off(s['va']) + s['size']) for s in placed]
+        for name in keep:
+            for segment in kc.macho(name)['segments']:
+                if segment['size'] and segment['name'] != '__LINKEDIT':
+                    used.append((old_off(segment['va']), old_off(segment['va']) + segment['size']))
+        kernel_exec = new_off(kernel.segment('__TEXT_EXEC')['va'])
+        regions = {'__TEXT': (0x4000, seg_end_of(kc, '__PRELINK_TEXT', old_off)), '__TEXT_EXEC': (seg_start_of(kc, '__TEXT_EXEC', old_off), kernel_exec),
+                   '__DATA_CONST': (new_off(kernel.segment('__LASTDATA_CONST')['va']) + kernel.segment('__LASTDATA_CONST')['size'], seg_end_of(kc, '__DATA_CONST', old_off)),
+                   '__DATA': (new_off(kernel.segment('__PRELINK_DATA')['va']), seg_end_of(kc, '__DATA', old_off))}
+
+        def allocate(segment, size, align):
+            low, high = regions[segment]
+            cursor = low
+            for start, end in sorted(used):
+                if end <= cursor:
+                    continue
+                if start >= cursor + size:
+                    break
+                cursor = (max(cursor, end) + align - 1) // align * align
+            if cursor + size > high:
+                raise SystemExit(f'no room for a {size:#x}-byte native kext {segment}')
+            used.append((cursor, cursor + size))
+            return NEW_BASE + cursor
+
+        for spec in natives:
+            objects = json.loads(Path(spec['objects']).read_text())
+            try:
+                linked = kc_native.link(objects, resolve, allocate, 0x800, 0xd0, spec['start'], spec['stop'])
+            except kc_native.LinkError as problem:
+                raise SystemExit(f'{spec["bundle"]}: {problem}')
+            segs = linked['segments']
+            for seg in segs.values():
+                at = new_off(seg['va'])
+                image[at:at + len(seg['data'])] = seg['data']
+            text_va, data_va = segs['__TEXT']['va'], segs['__DATA']['va']
+            info = struct.pack('<QiI', 0, 1, 0xffffffff) + spec['bundle'].encode().ljust(64, b'\0') + spec.get('version', '1.0.0').encode().ljust(64, b'\0')
+            info += struct.pack('<iQQQQ', -1, 0, text_va, segs['__TEXT']['data'].__len__(), 0) + bytes(16)
+            image[new_off(data_va):new_off(data_va) + len(info)] = info
+            for offset, symbol in ((180, spec['start']), (188, spec['stop'])):
+                linked['sites'].append((data_va + offset, linked['symbols'][symbol], True, 0xe4fe, False, 0))
+            if spec.get('vtable'):
+                check_vtable(kc, linked, kept_old_sites, spec['vtable'], shift, old_off)
+            kext_sites.extend(linked['sites'])
+            native_commands.append((text_va, segs, spec))
+            native_entries.append({
+                'CFBundleIdentifier': spec['bundle'], 'CFBundleName': spec['name'], 'CFBundleVersion': spec.get('version', '1.0.0'),
+                'CFBundleShortVersionString': spec.get('version', '1.0.0'), 'CFBundlePackageType': 'KEXT', 'CFBundleExecutable': spec['name'],
+                'CFBundleInfoDictionaryVersion': '6.0', 'OSBundleCompatibleVersion': '1.0.0', 'OSBundleRequired': 'Root',
+                'OSBundleLibraries': spec['libraries'], 'IOKitPersonalities': spec['personalities'],
+                'OSBundleUUID': uuid.uuid5(uuid.NAMESPACE_URL, spec['bundle']).bytes,
+                '_PrelinkBundlePath': f'/System/Library/Extensions/{spec["name"]}.kext', '_PrelinkExecutableRelativePath': f'Contents/MacOS/{spec["name"]}',
+                '_PrelinkExecutableLoadAddr': to_signed(text_va), '_PrelinkExecutableSourceAddr': to_signed(text_va),
+                '_PrelinkExecutableSize': len(segs['__TEXT']['data']), '_PrelinkKmodInfo': to_signed(data_va)})
+            print(f'{spec["bundle"]}: linked, header at {text_va:#x}, {len(linked["sites"])} pointers')
 
     # 4. Chains: every pointer of the collection is a format-8 chained rebase, encoded per page.
     sites = {}
@@ -253,6 +330,7 @@ def build(args):
             entries.append(entry)        # the kernel's pseudo-extensions (com.apple.kpi.*), which kexts list as libraries
         elif '_PrelinkExecutableLoadAddr' not in entry and set(entry.get('OSBundleLibraries', {})) <= (keep | resources):
             entries.append(entry)        # personality-only bundles whose libraries survive
+    entries.extend(native_entries)
     plist['_PrelinkInfoDictionary'] = entries
     blob = plistlib.dumps(plist, fmt=plistlib.FMT_XML) + b'\0'
     info_size = up(len(blob))
@@ -336,6 +414,11 @@ def build(args):
     image[kernel_text_flat + len(header):kernel_text_flat + kernel.segment('__TEXT')['sections'][0]['fileoff']] = bytes(
         kernel.segment('__TEXT')['sections'][0]['fileoff'] - len(header))
     kmod_info = {e['CFBundleIdentifier']: e['_PrelinkKmodInfo'] for e in plist_entries_original if '_PrelinkKmodInfo' in e}
+    for text_va, segs, spec in native_commands:
+        header = kext_header(segs, uuid.uuid5(uuid.NAMESPACE_URL, spec['bundle']).bytes, shared_start, linkedit_end)
+        if len(header) > 0x800:
+            raise SystemExit('native kext header outgrew its reserve')
+        image[new_off(text_va):new_off(text_va) + len(header)] = header
     for name in keep:
         shift_entry(kc, image, name, old_off, shift, shared_start, linkedit_end)
         # kmod_info_t is packed: address sits at +156 and is the one raw (unchained) absolute address a kext carries; OSKext adds the slide to it
@@ -369,6 +452,8 @@ def build(args):
         elif cmd == LC_CHAINED_FIXUPS:
             raw = struct.pack('<IIII', LC_CHAINED_FIXUPS, 16, new_fixups, len(fixups))
         commands.append(raw)
+    for text_va, segs, spec in native_commands:
+        commands.append(fileset_entry(spec['bundle'], text_va, new_off(text_va)))
     blob_cmds = b''.join(commands)
     head = struct.pack('<8I', 0xfeedfacf, 0x100000c, kc.subtype, 12, len(commands), len(blob_cmds), struct.unpack_from('<I', kc.data, 24)[0], 0)
     if 32 + len(blob_cmds) > 0x4000:
@@ -376,6 +461,72 @@ def build(args):
     image[0:0x4000] = head + blob_cmds + bytes(0x4000 - 32 - len(blob_cmds))
     Path(args.output).write_bytes(image)
     print(f'wrote {args.output}: {len(image):#x} bytes, base {NEW_BASE:#x}, {len(sites)} chained pointers')
+
+
+def check_vtable(kc, linked, kept_sites, spec, shift, old_off):
+    """A driver class derived from a class of a kext must have the slots of that class where the kext expects them: every slot the driver
+    does not override must hold exactly what the base class has there. Prints the mismatching slots."""
+    base_symbol = '__ZTV' + str(len(spec['base'])) + spec['base']
+    own_symbol = '__ZTV' + str(len(spec['class'])) + spec['class']
+    base_va = None
+    for name, kind, sect, desc, value in kc.symbols(kc.macho(spec['base_kext'])):
+        if name == base_symbol:
+            base_va = value + shift
+    if base_va is None or own_symbol not in linked['symbols']:
+        raise SystemExit(f'vtable check: cannot find {base_symbol} / {own_symbol}')
+    own_va = linked['symbols'][own_symbol]
+    own_sites = {s[0]: s[1] for s in linked['sites']}
+    text = linked['segments']['__TEXT_EXEC']
+    in_driver = lambda va: text['va'] <= va < text['va'] + len(text['data'])   # noqa: E731  its own functions, also the local ones
+    bad = 0
+    for slot in range(spec['slots']):
+        if slot in spec.get('ignore_slots', ()):
+            continue
+        theirs = kept_sites.get(base_va + 16 + slot * 8)
+        ours = own_sites.get(own_va + 16 + slot * 8)
+        if ours is None or ours == theirs:
+            if ours is None:
+                print(f'  vtable slot {slot}: not filled in the driver\'s vtable')
+                bad += 1
+            continue
+        if not in_driver(ours):
+            print(f'  vtable slot {slot}: driver {ours:#x} is neither the base class\'s {theirs and hex(theirs)} nor one of its own functions')
+            bad += 1
+    print(f'vtable check {spec["class"]} vs {spec["base"]}: {bad} problem slots')
+
+
+def seg_start_of(kc, name, old_off):
+    return old_off(next(s for s in kc.segments if s['name'] == name)['va'])
+
+
+def seg_end_of(kc, name, old_off):
+    segment = next(s for s in kc.segments if s['name'] == name)
+    return old_off(segment['va']) + segment['size']
+
+
+def to_signed(value):
+    return value - (1 << 64) if value >> 63 else value
+
+
+def kext_header(segs, uuid_bytes, shared_start, linkedit_end):
+    """Mach-O header of a kext we linked: MH_KEXT_BUNDLE with its four segments, the collection's shared LINKEDIT and no symbols."""
+    prot = {'__TEXT': 1, '__TEXT_EXEC': 5, '__DATA': 3, '__DATA_CONST': 3}
+    commands = []
+    for name in ('__TEXT', '__TEXT_EXEC', '__DATA', '__DATA_CONST'):
+        seg = segs[name]
+        sections = b''
+        for sect, va, size, flags in seg['sections']:
+            zerofill = flags & 0xff in (1, 0xc, 0x12)
+            sections += struct.pack('<16s16s2Q8I', sect.encode(), name.encode(), va, size, 0 if zerofill else va - NEW_BASE, 4, 0, 0, flags, 0, 0, 0)
+        size = len(seg['data'])
+        commands.append(struct.pack('<II16s4Q4I', LC_SEGMENT_64, 72 + len(sections), name.encode(), seg['va'], size, seg['va'] - NEW_BASE, size,
+                                    prot[name], prot[name], len(seg['sections']), 0) + sections)
+    commands.append(struct.pack('<II16s4Q4I', LC_SEGMENT_64, 72, b'__LINKEDIT', NEW_BASE + shared_start, linkedit_end - shared_start, shared_start,
+                                linkedit_end - shared_start, 1, 1, 0, 0))
+    commands.append(struct.pack('<IIIIII', LC_SYMTAB, 24, shared_start, 0, shared_start, 0))
+    commands.append(struct.pack('<II16s', 0x1b, 24, uuid_bytes))
+    body = b''.join(commands)
+    return struct.pack('<8I', 0xfeedfacf, 0x100000c, 0xc0000002, 11, len(commands), len(body), 0x80000085, 0) + body
 
 
 def seal_fips(kc, image, name, old_off):
@@ -508,6 +659,7 @@ def main():
     parser.add_argument('kernel')
     parser.add_argument('output')
     parser.add_argument('--keep', nargs='*', default=[])
+    parser.add_argument('--native', nargs='*', default=[], help='JSON descriptions of drivers to link in as kexts of their own (see docs)')
     build(parser.parse_args())
 
 
