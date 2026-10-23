@@ -1,0 +1,53 @@
+--- a/bsd/kern/kern_mib.c
++++ b/bsd/kern/kern_mib.c
+@@ -1357,3 +1357,50 @@
+ 
+ }
+ STARTUP(SYSCTL, STARTUP_RANK_MIDDLE, sysctl_mib_startup);
++
++/*
++ * hw.mempath: the jetsam properties path launchd 27 sets (xnu-12377 bsd/kern/kern_mib.c); launchd aborts when the write fails.
++ * Only the initproc may write it. The upstream read entitlement check is left out.
++ */
++#include <kern/kalloc.h>
++
++static char *virt_mempath = NULL;
++static size_t virt_mempath_size = 0;
++
++static int
++virt_sysctl_mempath(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
++{
++	int error = EINVAL;
++	if (req->newptr != 0) {
++		if (proc_getpid(req->p) != 1) {
++			return EPERM;
++		}
++		if (req->newlen > PATH_MAX) {
++			return EOVERFLOW;
++		}
++		size_t new_size = req->newlen + 1;
++		char *new_path = kalloc_data(new_size, Z_WAITOK);
++		if (!new_path) {
++			return ENOMEM;
++		}
++		new_path[new_size - 1] = '\0';
++		error = SYSCTL_IN(req, new_path, new_size - 1);
++		if (error != 0) {
++			kfree_data(new_path, new_size);
++			return error;
++		}
++		if (virt_mempath != NULL) {
++			kfree_data(virt_mempath, virt_mempath_size);
++		}
++		virt_mempath = new_path;
++		virt_mempath_size = new_size;
++	} else {
++		error = EIO;
++		if (virt_mempath && virt_mempath_size) {
++			error = SYSCTL_OUT(req, virt_mempath, virt_mempath_size);
++		}
++	}
++	return error;
++}
++
++SYSCTL_PROC(_hw, OID_AUTO, mempath, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0, virt_sysctl_mempath, "A", "");

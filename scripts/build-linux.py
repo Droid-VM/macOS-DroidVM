@@ -194,13 +194,27 @@ def full(jobs, legacy_display=False):
     os_uuid = json.loads((ROOT / 'out/owner/macos-root-pins.json').read_text())['os']['volume_uuid'].upper()
     # The patches and the already patched work tree must change together: the build re-applies a patch only when the tree
     # does not already contain it.
+    # An earlier build may already have replaced the constant with another root's UUID (marker file; the 14.6.1 root's pin
+    # before the marker existed): those spellings are replaced too.
+    marker = BUILD / 'os-uuid-applied.txt'
+    old_pins = ROOT / 'out/owner/macos-root-pins.23G93.json'
+    previous = marker.read_text().strip() if marker.exists() else (
+        json.loads(old_pins.read_text())['os']['volume_uuid'].upper() if old_pins.exists() else UPSTREAM_OS_UUID)
+    spellings = [name for name in dict.fromkeys((UPSTREAM_OS_UUID, previous)) if name != os_uuid]
     for name in ('offline-owner-cache-carrier.patch', 'offline-owner-systemos-mount.patch'):
         patch = FULL_DEVICE / 'patches/xnu' / name
-        patch.write_text(patch.read_text().replace(UPSTREAM_OS_UUID, os_uuid))
+        text = patch.read_text()
+        for spelling in spellings:
+            text = text.replace(spelling, os_uuid)
+        patch.write_text(text)
     for name in ('bsd/vm/vm_unix.c', 'bsd/kern/kern_exec.c'):
         source = TREE / '.cache/xnu-work' / name
-        source.write_text(source.read_text().replace(UPSTREAM_OS_UUID, os_uuid))
-        assert os_uuid in source.read_text() and UPSTREAM_OS_UUID not in source.read_text(), source
+        text = source.read_text()
+        for spelling in spellings:
+            text = text.replace(spelling, os_uuid)
+        source.write_text(text)
+        assert os_uuid in text and UPSTREAM_OS_UUID not in text, source
+    marker.write_text(os_uuid + '\n')
     # CONFIG_AUDIT (virt-config-audit.patch): the XNU config tool lists config_audit.h in meta_features.h but never writes the
     # header for this option on a rebuilt object tree, so it is supplied here (bsd and osfmk read the macro).
     objects = TREE / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'

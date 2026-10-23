@@ -19,6 +19,7 @@ import tomllib
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
+TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.0.1: MACOS_TAG=27.0.1)
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.dont_write_bytecode = True
 import phone_pool  # noqa: E402
@@ -29,7 +30,8 @@ FOLDER = '/data/media/0/DroidVM/MacOS'              # /storage/emulated/0/DroidV
 OWNER = 'u0_a258:media_rw'                          # the owner of the DroidVM folder; the daemon opens leased disks as the app
 STORE = FOLDER + '/data-store.img'
 STORE_GIB = 16
-OS_UUID = '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'
+PINS = ROOT / 'out/owner/macos-root-pins.json'
+OS_UUID = json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists() else '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'   # the OS volume the kernel's policy pins
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
 KERNEL = ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'
@@ -96,9 +98,11 @@ def kernel_args(extra):
     return line
 
 
-def make_adt(fdt, dram_size, unique_chip_id, output):
+def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0'):
+    """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight)."""
     subprocess.run(['python3', str(ADT_TOOL), '--fdt', str(fdt), '--dram-size', dram_size,
-                    '--dram-base', '0x80600000', '--owned-memory-size', '0x20000000', '--cpu-regs', '0',
+                    '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
+                    *(['--cpu-regs', cpu_regs] if cpu_regs else []),
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
                     '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
@@ -148,7 +152,7 @@ def main():
     local = ROOT / 'research/runs' / f'{stamp}-{args.label}'
     local.mkdir(parents=True)
     remote = f'/data/local/tmp/macos-{stamp}-{args.label}'
-    artifacts = ROOT / 'artifacts/23G93'
+    artifacts = ROOT / f'artifacts/{TAG}'
     trust = artifacts / 'boot/kernel.macho.trustcache'
     data = artifacts / 'data-seed/scratch-data.img'
     for path in (KERNEL, trust, data, INPUTS / 'UniXNU.efi', INPUTS / 'DarwinBoot.efi'):

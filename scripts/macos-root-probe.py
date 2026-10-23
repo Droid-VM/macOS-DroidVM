@@ -26,6 +26,8 @@ REPLACEMENTS = [
     (" else 806400\n", f" else {PINS['systemos']['blocks_verified']}\n", 1),
     ("extra_meta['blocks_verified'] != 806400", f"extra_meta['blocks_verified'] != {PINS['systemos']['blocks_verified']}", 1),
     ("image_bytes=3303014400", f"image_bytes={PINS['systemos']['image_bytes']}", 1),
+    ("lengths != [4096, 4096, 4096, 1536]",
+     f"lengths != [4096, 4096, 4096, {PINS['os']['image_bytes'] - (PINS['os']['blocks_verified'] - 1) * 4096}]", 1),
     # The macOS hash tables (143 MB against 73 MB) in __DATA_CONST push the late archives' code out of B/BL range
     # (+/-128 MB) of the prelinked kexts: keep them in __DATA, after the kernel text.
     (".section __DATA_CONST,__const\n", ".section __DATA,__data\n", 1),

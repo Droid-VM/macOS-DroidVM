@@ -1,0 +1,12 @@
+--- a/osfmk/mach/arm/vm_param.h
++++ b/osfmk/mach/arm/vm_param.h
+@@ -136,7 +136,8 @@
+ #if defined(XNU_PLATFORM_MacOSX) || defined(XNU_PLATFORM_DriverKit)
+ #define MACH_VM_MAX_ADDRESS_RAW 0x00007FFFFE000000ULL
+ #else
+-#define MACH_VM_MAX_ADDRESS_RAW 0x0000000FC0000000ULL
++/* macOS 27's libmalloc reserves fixed ranges up to 0x7d80000000+: use the whole 39-bit (T0SZ 25) user space, 32 MiB short of its end. */
++#define MACH_VM_MAX_ADDRESS_RAW 0x0000007FFE000000ULL
+ #endif
+ 
+ #define MACH_VM_MIN_ADDRESS     ((mach_vm_offset_t) MACH_VM_MIN_ADDRESS_RAW)

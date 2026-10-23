@@ -17,7 +17,7 @@
  void
  unix_syscall(
  	struct arm_saved_state * state,
-@@ -185,6 +188,17 @@
+@@ -185,6 +188,26 @@
  skip_syscall:
  #endif /* CONFIG_MACF */
  
@@ -29,6 +29,15 @@
 +		if (!(virt_syscall_err_seen[bit / 8] & (1u << (bit % 8)))) {
 +			virt_syscall_err_seen[bit / 8] |= (uint8_t)(1u << (bit % 8));
 +			printf("syscall-err: pid %d %s syscall %d errno %d\n", proc_pid(proc), proc->p_comm, code, error);
++			if (code == 57 /* symlink */ || code == 5 /* open */) {
++				char virt_a[96] = "?", virt_b[96] = "";
++				size_t virt_len;
++				(void)copyinstr((user_addr_t)uthread->uu_arg[0], virt_a, sizeof(virt_a), &virt_len);
++				if (code == 57) {
++					(void)copyinstr((user_addr_t)uthread->uu_arg[1], virt_b, sizeof(virt_b), &virt_len);
++				}
++				printf("syscall-err:   arg0 '%s' arg1 '%s'\n", virt_a, virt_b);
++			}
 +		}
 +	}
 +

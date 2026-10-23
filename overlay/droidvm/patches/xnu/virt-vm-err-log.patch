@@ -1,0 +1,30 @@
+--- a/osfmk/vm/vm_user.c
++++ b/osfmk/vm/vm_user.c
+@@ -1126,10 +1126,23 @@
+ 
+ 	vm_map_kernel_flags_set_vmflags(&vmk_flags, flags);
+ 	/* range_id is set by mach_vm_map_kernel */
+-	return mach_vm_map_kernel(target_map, address, initial_size, mask,
+-	           vmk_flags, port, offset, copy,
+-	           cur_protection, max_protection,
+-	           inheritance);
++	mach_vm_offset_t virt_requested = *address;
++	kern_return_t virt_kr = mach_vm_map_kernel(target_map, address, initial_size, mask,
++	    vmk_flags, port, offset, copy,
++	    cur_protection, max_protection,
++	    inheritance);
++	/* Bring-up diagnostic (boot-arg vm-err-log=1): a failed mach_vm_map, e.g. libmalloc's xzone range reservation. */
++	uint32_t virt_vm_err_log = 0;
++	extern boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_len);
++	extern int proc_selfpid(void);
++	extern char *proc_name_address(void *p);
++	if (virt_kr != KERN_SUCCESS && PE_parse_boot_argn("vm-err-log", &virt_vm_err_log, sizeof(virt_vm_err_log)) && virt_vm_err_log) {
++		printf("vm-err: pid %d %s mach_vm_map addr 0x%llx size 0x%llx mask 0x%llx flags 0x%x prot %d/%d port %d map 0x%llx-0x%llx kr %d\n",
++		    proc_selfpid(), get_bsdtask_info(current_task()) ? proc_name_address(get_bsdtask_info(current_task())) : "?", (unsigned long long)virt_requested, (unsigned long long)initial_size,
++		    (unsigned long long)mask, flags, cur_protection, max_protection, port != IPC_PORT_NULL,
++		    (unsigned long long)vm_map_min(target_map), (unsigned long long)vm_map_max(target_map), virt_kr);
++	}
++	return virt_kr;
+ }
+ 
+ kern_return_t

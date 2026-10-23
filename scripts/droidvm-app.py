@@ -5,6 +5,7 @@
   droidvm-app.py prepare [--kernel-arg NAME=VALUE ...]   push the images, register the VM, let the app's daemon boot it once
                                                          with a placeholder boot disk to dump the FDT, then build and push the
                                                          real boot disk (ADT from that FDT) and stop the VM
+  droidvm-app.py push                                    only push the OS/SystemOS images (and create the Data store)
   droidvm-app.py boot [--kernel-arg ...]                 rebuild only the boot disk from the FDT dumped last time
                                                          (new kernel, new kernel arguments)
   droidvm-app.py register                                (re)write the vms.json entry through the daemon's config transaction
@@ -15,6 +16,7 @@ parameterised, never written to). The boot disk rides in "extra_options" as --bl
 SystemOS and Data disks are --virtio-mmio-block like in run-macos-vm.py.
 """
 import argparse
+import os
 import importlib.util
 import json
 from pathlib import Path
@@ -24,6 +26,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.0.1: MACOS_TAG=27.0.1)
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / 'scripts'))
 
@@ -46,7 +49,7 @@ MEM_MB = 3072
 OUT = ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
-REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1']   # see TODO.md: without them launchd cannot get far
+REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000']   # see TODO.md: without them launchd cannot get far
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
 adb, sh = ios.adb, ios.sh
@@ -75,7 +78,7 @@ ios.vm_config = template
 
 
 def push_images(args):
-    artifacts = ROOT / 'artifacts/23G93'
+    artifacts = ROOT / f'artifacts/{TAG}'
     run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'os.raw', 'os.img')
     run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'systemos.img', 'systemos.img')
     run.ensure_store(['adb', '-s', ios.SERIAL])
@@ -94,7 +97,7 @@ def boot_disk(args):
     adb('pull', DTB, str(fdt), timeout=60)
     adt = OUT / 'kernel.macho.adt'
     run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000), '47554e5941480001', adt, cpu_regs=None)   # every vCPU the app gives the VM
-    artifacts = ROOT / 'artifacts/23G93'
+    artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + args.kernel_arg)
     local = OUT / 'boot'
     if local.exists():
@@ -128,11 +131,13 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
-    for name in ('register', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
         ios.control(args)
+    elif args.cmd == 'push':
+        push_images(args)
     elif args.cmd == 'boot':
         boot_disk(args)
     elif args.cmd == 'prepare':

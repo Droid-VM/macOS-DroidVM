@@ -30,16 +30,37 @@
 +}
 --- a/bsd/vfs/vfs_syscalls.c
 +++ b/bsd/vfs/vfs_syscalls.c
-@@ -3463,6 +3463,8 @@
+@@ -3463,6 +3463,29 @@
  }
  #endif /* QUOTA */
  
 +extern mount_t virt_union_top(mount_t mp);
 +
++/*
++ * CoreServices' FSNodeServer_PreWarmVolumeCache registers statfs64("/System/Volumes/Preboot/") as a second volume and aborts when its
++ * device id equals the boot volume's. Here Preboot is an empty directory of the root volume, not a mount: statfs64 reports it missing
++ * (boot-arg union-hide-lower=1), which that code skips.
++ */
++static bool
++virt_preboot_hidden(vnode_t vp)
++{
++	uint32_t enabled = 0;
++	char path[128];
++	int length = sizeof(path);
++
++	if (!PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) || !enabled) {
++		return false;
++	}
++	if (vn_getpath(vp, path, &length) != 0) {
++		return false;
++	}
++	return strncmp(path, "/System/Volumes/Preboot", 23) == 0 && (path[23] == '\0' || path[23] == '/');
++}
++
  static int
  statfs_internal(proc_t p, struct mount *mp, user_addr_t bufp)
  {
-@@ -3509,7 +3511,7 @@
+@@ -3509,7 +3532,7 @@
  		return error;
  	}
  	vp = nd.ni_vp;
@@ -48,7 +69,7 @@
  	nameidone(&nd);
  
  	error = statfs_internal(p, mp, uap->buf);
-@@ -3538,7 +3540,7 @@
+@@ -3538,7 +3561,7 @@
  
  	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
  
@@ -57,16 +78,22 @@
  	if (!mp) {
  		error = EBADF;
  		goto out_vnode;
-@@ -3616,7 +3618,7 @@
+@@ -3616,8 +3639,13 @@
  		goto out;
  	}
  	vp = ndp->ni_vp;
 -	mp = vp->v_mount;
 +	mp = virt_union_top(vp->v_mount);
  	nameidone(ndp);
++	if (virt_preboot_hidden(vp)) {
++		vnode_put(vp);
++		error = ENOENT;
++		goto out;
++	}
  
  #if CONFIG_MACF
-@@ -3674,7 +3676,7 @@
+ 	error = mac_mount_check_stat(ctxp, mp);
+@@ -3674,7 +3702,7 @@
  
  	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
  

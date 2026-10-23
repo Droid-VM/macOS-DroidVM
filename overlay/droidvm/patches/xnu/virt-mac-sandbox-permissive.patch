@@ -117,7 +117,7 @@
  #include <security/mac_mach_internal.h>
  
  #include <bsd/security/audit/audit.h>
-@@ -934,8 +943,8 @@
+@@ -934,8 +943,13 @@
  		}
  
  		error = mac_error_select(
@@ -125,6 +125,11 @@
 -			spawnattr, spawnattrlen, &lcd, &fatal_failure_desc, &fatal_failure_desc_len), error);
 +			virt_mac_launch_filter(mpc, hook(curp, original_parent_id, responsible_pid,
 +			spawnattr, spawnattrlen, &lcd, &fatal_failure_desc, &fatal_failure_desc_len)), error);
++		/* mac-amfi-launch-permissive=1: AMFI's fatal verdict on a macOS binary is dropped with its error (else the panic below). */
++		if (virt_mac_amfi_launch_permissive && fatal_failure_desc_len) {
++			fatal_failure_desc_len = 0;
++			fatal_failure_desc = NULL;
++		}
  
  		/*
  		 * Early exit in case of failure in case we have multiple registered callers.

@@ -1,0 +1,19 @@
+--- a/bsd/vm/vm_unix.c
++++ b/bsd/vm/vm_unix.c
+@@ -4113,6 +4113,16 @@
+ 	char str[20 * 4];
+ 	int len;
+ 
++	/*
++	 * Bring-up (boot-arg malloc-ranges-off=1): macOS 27's libmalloc places its pointer ranges in the "voids" this sysctl reports
++	 * and aborts when the mach_vm_map reservation fails; the 4 KiB iOS-style user address space (63 GiB) cannot hold them.
++	 * ENOENT makes libmalloc run without VM user ranges.
++	 */
++	uint32_t virt_ranges_off = 0;
++	extern boolean_t PE_parse_boot_argn(const char *arg_string, void *arg_ptr, int max_len);
++	if (PE_parse_boot_argn("malloc-ranges-off", &virt_ranges_off, sizeof(virt_ranges_off)) && virt_ranges_off) {
++		return ENOENT;
++	}
+ 	if (vm_map_get_user_range(map, UMEM_RANGE_ID_DEFAULT, &r1)) {
+ 		return ENOENT;
+ 	}

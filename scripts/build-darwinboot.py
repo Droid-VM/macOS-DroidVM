@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build DarwinBoot.efi from the locked UniXNU DarwinBoot with this project's patch, using the local EDK II and GCC.
 
-The patch (patches/darwinboot-reclaim-memory-and-256mb-kernel.patch) ports ios droidvm-linux/patches/darwinboot-reclaim-memory.patch to
+The patch (patches/darwinboot-reclaim-memory-and-512mb-kernel.patch) ports ios droidvm-linux/patches/darwinboot-reclaim-memory.patch to
 the locked DarwinBoot (the /chosen/darwinboot-memory-limit consumer) and raises the kernel read limit from 128 MiB to 256 MiB: the
 macOS kernel embeds 143 MB of block hashes. Output: artifacts/boot-inputs/DarwinBoot.efi and a provenance entry.
 """
@@ -15,7 +15,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / 'out/darwinboot'
 EDK2 = ROOT / 'sources/edk2'
-PATCH = ROOT / 'patches/darwinboot-reclaim-memory-and-256mb-kernel.patch'
+PATCH = ROOT / 'patches/darwinboot-reclaim-memory-and-512mb-kernel.patch'
 
 
 def main():

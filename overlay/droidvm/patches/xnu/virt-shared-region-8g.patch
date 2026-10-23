@@ -1,0 +1,11 @@
+--- a/osfmk/mach/shared_region.h
++++ b/osfmk/mach/shared_region.h
+@@ -88,7 +88,7 @@
+ /* ARM64_TODO: move to higher memory */
+ #endif
+ #define SHARED_REGION_BASE_ARM64                0x180000000ULL
+-#define SHARED_REGION_SIZE_ARM64                0x180000000ULL
++#define SHARED_REGION_SIZE_ARM64                0x200000000ULL /* macOS 27's dyld cache ends at 0x339B14000: 8 GiB, not 6 GiB */
+ #define SHARED_REGION_NESTING_BASE_ARM64        SHARED_REGION_BASE_ARM64
+ #define SHARED_REGION_NESTING_SIZE_ARM64        SHARED_REGION_SIZE_ARM64
+ #define SHARED_REGION_NESTING_MIN_ARM64         ?

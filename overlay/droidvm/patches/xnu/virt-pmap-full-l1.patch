@@ -1,0 +1,15 @@
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -76,6 +76,12 @@
+ #undef __ARM64_PMAP_SUBPAGE_L1__
+ #endif /* __ARM_42BIT_PA_SPACE__ */
+ 
++/*
++ * macOS 27's libmalloc reserves fixed ranges above 454 GiB (virt-user-va-512g.patch): the full-page L1 root, T0SZ/T1SZ 25 (39-bit
++ * VA, 512 GiB), not the 256 GiB sub-page root of the BCM2837 board configuration. VMAPPLE.h does the same.
++ */
++#undef __ARM64_PMAP_SUBPAGE_L1__
++
+ /* For arm platforms, create one pset per cluster */
+ #define MAX_PSETS MAX_CPU_CLUSTERS
+ 

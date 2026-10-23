@@ -7,10 +7,12 @@ The pins describe the images this project built itself (verification.json from l
 hardcoded digests of the upstream author's converted disks.
 """
 import argparse
+import os
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.0.1: MACOS_TAG=27.0.1)
 DEFAULT = 'out/owner/macos-root-pins.json'
 
 
@@ -24,8 +26,8 @@ def load(path=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--os', default='out/owner/os-23G93')
-    parser.add_argument('--systemos', default='out/owner/systemos-23G93')
+    parser.add_argument('--os', default=f'out/owner/os-{TAG}')
+    parser.add_argument('--systemos', default=f'out/owner/systemos-{TAG}')
     parser.add_argument('--output', default=DEFAULT)
     args = parser.parse_args()
     output = (ROOT / args.output).resolve()

@@ -85,6 +85,11 @@ sudo cp -a "$SHIMS/." "$MNT/"
 sudo mkdir -p "$MNT/private/var"
 sudo ln -s var/.data/private/etc "$MNT/private/etc"
 sudo ln -s var/tmp "$MNT/private/tmp"
+# The union does not show the OS volume's root symbolic links /var, /etc and /tmp (macOS 27: lookup of /var and /etc fails with
+# ENOENT while /private/var/... resolves; tzinit then cannot create /var/db/timezone/zoneinfo): provide them in this layer.
+sudo ln -s private/var "$MNT/var"
+sudo ln -s private/etc "$MNT/etc"
+sudo ln -s private/tmp "$MNT/tmp"
 sudo find "$MNT" -maxdepth 1 -exec ls -lad {} + | head -40
 sudo du -sh "$MNT"
 sync

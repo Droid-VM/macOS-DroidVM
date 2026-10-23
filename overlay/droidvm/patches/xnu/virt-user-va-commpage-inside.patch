@@ -1,0 +1,15 @@
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -11380,7 +11380,11 @@
+  * Ensure that 64-bit devices using 4K pages can nest the commpage completely
+  * above the maximum userspace VA.
+  */
+-static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >= MACH_VM_MAX_ADDRESS);
++/*
++ * macOS-style layout (virt-user-va-512g.patch): the user VA reaches 512 GiB, past the commpage nesting region, which
++ * vm_reserved_regions[] (machine_routines.c) keeps users from allocating, as on 16K macOS. The assertion would not hold.
++ */
++// static_assert((_COMM_PAGE64_BASE_ADDRESS & ~ARM_TT_L1_OFFMASK) >= MACH_VM_MAX_ADDRESS);
+ #else
+ #error Nested shared page mapping is unsupported on this config
+ #endif

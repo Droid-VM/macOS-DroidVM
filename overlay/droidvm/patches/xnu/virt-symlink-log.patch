@@ -1,0 +1,89 @@
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -5841,6 +5841,34 @@
+ }
+ 
+ /*
++ * Bring-up diagnostic (boot-arg symlink-log=1): which step of symlink(2) fails, e.g. tzinit's ENOENT creating
++ * /var/db/timezone/zoneinfo.
++ */
++static void
++virt_symlink_probe(vfs_context_t ctx)
++{
++	static const char *const paths[] = {
++		"/var", "/private", "/private/var", "/private/var/db", "/private/var/db/timezone", "/var/db", "/var/db/timezone",
++		"/etc", "/usr/share/zoneinfo.default"
++	};
++	for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
++		vnode_t probe_vp = NULLVP;
++		int probe_error = vnode_lookup(paths[i], 0, &probe_vp, ctx);
++		printf("symlink-probe: %s -> %d\n", paths[i], probe_error);
++		if (probe_error == 0) {
++			vnode_put(probe_vp);
++		}
++	}
++}
++
++#define VIRT_SYMLINK_LOG(stage) do { \
++	uint32_t virt_symlink_log = 0; \
++	if (error != 0 && PE_parse_boot_argn("symlink-log", &virt_symlink_log, sizeof(virt_symlink_log)) && virt_symlink_log) { \
++	        printf("symlink-log: pid %d stage %d error %d\n", proc_selfpid(), (stage), error); \
++	} \
++} while (0)
++
++/*
+  * Make a symbolic link.
+  *
+  * We could add support for ACLs here too...
+@@ -5875,6 +5903,10 @@
+ 
+ 	error = nameiat(&nd, fd);
+ 	if (error) {
++		VIRT_SYMLINK_LOG(1);
++		if (error == ENOENT) {
++			virt_symlink_probe(ctx);
++		}
+ 		goto out;
+ 	}
+ 	dvp = nd.ni_dvp;
+@@ -5890,6 +5922,7 @@
+ 	    dvp, &nd.ni_cnd, &va);
+ #endif
+ 	if (error != 0) {
++		VIRT_SYMLINK_LOG(2);
+ 		goto skipit;
+ 	}
+ 
+@@ -5901,10 +5934,12 @@
+ 	/* authorize */
+ 	if (error == 0) {
+ 		error = vnode_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx);
++		VIRT_SYMLINK_LOG(3);
+ 	}
+ 	/* get default ownership, etc. */
+ 	if (error == 0) {
+ 		error = vnode_authattr_new(dvp, &va, 0, ctx);
++		VIRT_SYMLINK_LOG(4);
+ 	}
+ 
+ #if CONFIG_FILE_LEASES
+@@ -5913,16 +5948,19 @@
+ 
+ 	if (error == 0) {
+ 		error = VNOP_SYMLINK(dvp, &vp, &nd.ni_cnd, &va, path, ctx);
++		VIRT_SYMLINK_LOG(5);
+ 	}
+ 
+ 	/* do fallback attribute handling */
+ 	if (error == 0 && vp) {
+ 		error = vnode_setattr_fallback(vp, &va, ctx);
++		VIRT_SYMLINK_LOG(6);
+ 	}
+ 
+ #if CONFIG_MACF
+ 	if (error == 0 && vp) {
+ 		error = vnode_label(vnode_mount(vp), dvp, vp, &nd.ni_cnd, VNODE_LABEL_CREATE, ctx);
++		VIRT_SYMLINK_LOG(7);
+ 	}
+ #endif
+ 

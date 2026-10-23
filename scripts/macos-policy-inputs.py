@@ -7,11 +7,13 @@ Writes os.manifest.bin, systemos.manifest.bin, trusted-key.bin, os.samples.bin a
 make-virt-root.py, without its CI-key encryption) from out/owner/{os,systemos}-23G93 and macos-root-pins.json.
 """
 import argparse
+import os
 import json
 from pathlib import Path
 import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
+TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.0.1: MACOS_TAG=27.0.1)
 
 
 def main():
@@ -24,7 +26,7 @@ def main():
     pins = json.loads((ROOT / 'out/owner/macos-root-pins.json').read_text())
     records = {}
     for name in ('os', 'systemos'):
-        directory = ROOT / 'out/owner' / f'{name}-23G93'
+        directory = ROOT / 'out/owner' / f'{name}-{TAG}'
         record = json.loads((directory / 'manifest.json').read_text())
         pin = pins[name]
         for key, field in (('image_sha256', 'image_sha256'), ('block_count', 'blocks_verified'),
@@ -37,13 +39,13 @@ def main():
         records[name] = record
     output.mkdir(parents=True)
     for name in ('os', 'systemos'):
-        shutil.copyfile(ROOT / 'out/owner' / f'{name}-23G93' / 'manifest.bin', output / f'{name}.manifest.bin')
-    shutil.copyfile(ROOT / 'out/owner/os-23G93/trusted-key.bin', output / 'trusted-key.bin')
+        shutil.copyfile(ROOT / 'out/owner' / f'{name}-{TAG}' / 'manifest.bin', output / f'{name}.manifest.bin')
+    shutil.copyfile(ROOT / f'out/owner/os-{TAG}/trusted-key.bin', output / 'trusted-key.bin')
     record = records['os']
     count, size = record['block_count'], record['image_bytes']
     indices = [0, 1, count // 2, count - 1]
     lengths = [4096, 4096, 4096, size - (count - 1) * 4096]
-    image = ROOT / 'artifacts/23G93/os.raw'
+    image = ROOT / f'artifacts/{TAG}/os.raw'
     with image.open('rb') as stream, (output / 'os.samples.bin').open('wb') as samples:
         for index, length in zip(indices, lengths):
             stream.seek(index * 4096)

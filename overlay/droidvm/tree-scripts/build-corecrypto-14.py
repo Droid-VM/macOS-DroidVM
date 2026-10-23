@@ -116,7 +116,7 @@ def compile_one(source):
             'diagnostic': result.stdout[-2500:] if result.returncode else None}
 
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
     results = list(executor.map(compile_one, sources))
 failed = [result for result in results if result['exit_code']]
 report = {'source_url': 'https://github.com/ONLYA/corecrypto-2023', 'source_revision': REVISION,
