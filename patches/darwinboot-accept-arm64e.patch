@@ -1,9 +1,11 @@
 --- a/DarwinBootPkg/Driver/DarwinBoot.c
 +++ b/DarwinBootPkg/Driver/DarwinBoot.c
-@@ -124,3 +124,4 @@
+@@ -124,4 +124,7 @@
    if ((Size < 32) || (U32 (Data) != 0xfeedfacf) || (U32 (Data + 4) != 0x100000c) ||
 -      (U32 (Data + 8) != 0) || (U32 (Data + 12) != 2)) {
-+      ((U32 (Data + 8) != 0) && ((U32 (Data + 8) & 0xff) != 2)) || (U32 (Data + 12) != 2)) {
-+    /* cpusubtype 0 is arm64; low byte 2 is arm64e (the ptrauth ABI version sits in the top bits) */
++      ((U32 (Data + 8) != 0) && ((U32 (Data + 8) & 0xff) != 2)) ||
++      ((U32 (Data + 12) != 2) && (U32 (Data + 12) != 12))) {
++    /* cpusubtype 0 is arm64; low byte 2 is arm64e (the ptrauth ABI version sits in the top bits). filetype 12 is an MH_FILESET kernel collection:
++       its segments are loaded like a kernel's and the load commands are left untouched (xnu slides them itself) */
      return EFI_UNSUPPORTED;
    }
