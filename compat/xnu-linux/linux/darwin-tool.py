@@ -30,6 +30,23 @@ def darling_command(config, program):
             'cd -- "$1" && shift && exec "$@"', "darling-tool", str(cwd), program]
 
 
+def run_iig(config, args):
+    """Darling's iig now and then spins at 100% CPU and never exits (and stalls the whole build): bound each run, kill the stuck
+    process inside the container (by exact name, never by command line), drop the half-written outputs and run it again."""
+    command = [*darling_command(config, config["apple_iig"]["binary"]), *args]
+    outputs = [Path(args[i + 1]) for i, x in enumerate(args[:-1]) if x in ("--header", "--impl")]
+    limit = int(os.environ.get("IIG_TIMEOUT", "180"))
+    for attempt in range(1, 4):
+        try:
+            sys.exit(subprocess.run(command, timeout=limit).returncode)
+        except subprocess.TimeoutExpired:
+            print(f"target-iig: no exit after {limit}s (attempt {attempt}/3), killing iig in the container", file=sys.stderr)
+            subprocess.run(["/usr/bin/docker", "exec", config["appleclang"]["container"], "pkill", "-9", "-x", "iig"])
+            for output in outputs:
+                output.unlink(missing_ok=True)
+    sys.exit("target-iig: still hanging after 3 attempts")
+
+
 def plist(path):
     data = Path(path).read_bytes()
     if data.startswith((b"bplist", b"<?xml")):
@@ -45,7 +62,7 @@ def main():
     args = sys.argv[1:]
     name = invoked.name
     if name == "target-iig":
-        execute([*darling_command(config, config["apple_iig"]["binary"]), *args])
+        run_iig(config, args)
     if name in ("target-clang", "target-clang++"):
         command = [config["clangxx" if name.endswith("++") else "clang"]]
         # Options of a newer Apple clang that the compiler in use does not know (e.g. xnu-12377's -mno-implicit-sme).
