@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / 'out/darwinboot'
 EDK2 = ROOT / 'sources/edk2'
 PATCH = ROOT / 'patches/darwinboot-reclaim-memory-and-512mb-kernel.patch'
+PATCHES = [PATCH, ROOT / 'patches/darwinboot-accept-arm64e.patch']
 
 
 def main():
@@ -25,7 +26,8 @@ def main():
     driver = WORK / 'DarwinBoot'
     shutil.rmtree(driver, ignore_errors=True)
     shutil.copytree(ROOT / 'sources/UniXNU/drivers/DarwinBoot', driver, ignore=shutil.ignore_patterns('.git'))
-    subprocess.run(['patch', '-p1', '--no-backup-if-mismatch', '-i', str(PATCH)], cwd=driver, check=True)
+    for patch in PATCHES:
+        subprocess.run(['patch', '-p1', '--no-backup-if-mismatch', '-i', str(patch)], cwd=driver, check=True)
     workspace = WORK / 'ws'
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
@@ -42,7 +44,7 @@ def main():
     record = json.loads(provenance.read_text())
     record['DarwinBoot.efi'] = {
         'sha256': hashlib.sha256(destination.read_bytes()).hexdigest(), 'bytes': destination.stat().st_size,
-        'source': 'scripts/build-darwinboot.py: sources/UniXNU/drivers/DarwinBoot + ' + PATCH.name +
+        'source': 'scripts/build-darwinboot.py: sources/UniXNU/drivers/DarwinBoot + ' + ' + '.join(p.name for p in PATCHES) +
                   ', edk2 ' + subprocess.check_output(['git', '-C', str(EDK2), 'rev-parse', 'HEAD'], text=True).strip()}
     provenance.write_text(json.dumps(record, indent=2) + '\n')
     print(destination, record['DarwinBoot.efi']['sha256'])

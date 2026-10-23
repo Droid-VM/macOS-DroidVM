@@ -14,6 +14,9 @@ import sys
 
 
 def execute(argv):
+    if os.environ.get("GUNYAH_TOOL_TRACE") and not any(str(x) == "-c" for x in argv):
+        with open(os.environ["GUNYAH_TOOL_TRACE"], "a") as trace:
+            trace.write(" ".join(str(x) for x in argv) + "\n")
     os.execv(str(argv[0]), [str(x) for x in argv])
 
 
