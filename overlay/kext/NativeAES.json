@@ -1,0 +1,28 @@
+{
+  "name": "NativeAES",
+  "bundle": "com.unixnu.driver.NativeAES",
+  "version": "1.0.0",
+  "objects": "out/x12377/native-kexts/NativeAES/objects.json",
+  "start": "_native_kext_start",
+  "stop": "_native_kext_stop",
+  "libraries": {
+    "com.apple.iokit.IOCryptoAcceleratorFamily": "1.0.0",
+    "com.apple.kpi.bsd": "18.0.0",
+    "com.apple.kpi.iokit": "18.0.0",
+    "com.apple.kpi.libkern": "18.0.0",
+    "com.apple.kpi.mach": "18.0.0",
+    "com.apple.kpi.private": "18.0.0",
+    "com.apple.kpi.unsupported": "18.0.0"
+  },
+  "personalities": {
+    "NativeAES": {
+      "CFBundleIdentifier": "com.unixnu.driver.NativeAES",
+      "IOClass": "NativeAES",
+      "IOProviderClass": "IOResources",
+      "IOResourceMatch": "IOBSD",
+      "IOProbeScore": 1000,
+      "IOMatchCategory": "NativeAES"
+    }
+  },
+  "vtable": {"class": "NativeAES", "base": "IOAESAccelerator", "base_kext": "com.apple.iokit.IOCryptoAcceleratorFamily", "slots": 285, "ignore_slots": [16]}
+}

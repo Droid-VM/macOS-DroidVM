@@ -1,0 +1,36 @@
+{
+  "name": "NativeRamBlock",
+  "bundle": "com.unixnu.driver.NativeRamBlock",
+  "version": "1.0.0",
+  "objects": "out/x12377/native-kexts/NativeRamBlock/objects.json",
+  "start": "_native_kext_start",
+  "stop": "_native_kext_stop",
+  "libraries": {
+    "com.apple.iokit.IOStorageFamily": "1.0.0",
+    "com.apple.kpi.bsd": "18.0.0",
+    "com.apple.kpi.iokit": "18.0.0",
+    "com.apple.kpi.libkern": "18.0.0",
+    "com.apple.kpi.mach": "18.0.0",
+    "com.apple.kpi.private": "18.0.0",
+    "com.apple.kpi.unsupported": "18.0.0"
+  },
+  "personalities": {
+    "NativeRamBlock": {
+      "CFBundleIdentifier": "com.unixnu.driver.NativeRamBlock",
+      "IOClass": "NativeRamBlock",
+      "IOProviderClass": "IOResources",
+      "IOResourceMatch": "IOBSD",
+      "IOProbeScore": 1000,
+      "IOMatchCategory": "NativeRamBlock"
+    }
+  },
+  "vtable": {
+    "class": "NativeRamBlock",
+    "base": "IOBlockStorageDevice",
+    "base_kext": "com.apple.iokit.IOStorageFamily",
+    "slots": 326,
+    "ignore_slots": [
+      16
+    ]
+  }
+}
