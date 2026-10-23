@@ -1,6 +1,6 @@
 --- a/security/mac_internal.h
 +++ b/security/mac_internal.h
-@@ -258,12 +258,29 @@
+@@ -258,12 +258,32 @@
   * request.  Note that it returns its value via 'error' in the scope
   * of the caller.
   */
@@ -12,6 +12,9 @@
 +extern bool virt_mac_sandbox_permissive;
 +extern bool virt_mac_amfi_launch_permissive;
 +extern int virt_mac_filter_slow(struct mac_policy_conf *mpc, int error);
++extern bool virt_mac_sandbox_skip_exec;
++/* boot-arg mac-sandbox-skip-exec=1: the iPadOS Sandbox kext kills macOS daemons in its exec hook (container upcall); leave it out of exec. */
++extern bool virt_mac_skip_exec_hook(struct mac_policy_conf *mpc);
 +static inline int
 +virt_mac_filter(struct mac_policy_conf *mpc, int error)
 +{
@@ -33,13 +36,14 @@
  	    }                                                           \
 --- a/security/mac_base.c
 +++ b/security/mac_base.c
-@@ -1827,3 +1827,15 @@
+@@ -1827,3 +1827,22 @@
  }
  
  #endif /* !MAC */
 +
 +TUNABLE_WRITEABLE(bool, virt_mac_sandbox_permissive, "mac-sandbox-permissive", false);
 +TUNABLE_WRITEABLE(bool, virt_mac_amfi_launch_permissive, "mac-amfi-launch-permissive", false);
++TUNABLE_WRITEABLE(bool, virt_mac_sandbox_skip_exec, "mac-sandbox-skip-exec", false);
 +
 +int
 +virt_mac_filter_slow(struct mac_policy_conf *mpc, int error)
@@ -48,6 +52,12 @@
 +		return 0;
 +	}
 +	return error;
++}
++
++bool
++virt_mac_skip_exec_hook(struct mac_policy_conf *mpc)
++{
++	return virt_mac_sandbox_permissive && virt_mac_sandbox_skip_exec && mpc->mpc_name != NULL && strcmp(mpc->mpc_name, "Sandbox") == 0;
 +}
 --- a/security/mac_vfs.c
 +++ b/security/mac_vfs.c
@@ -73,12 +83,30 @@
  				    error);
  			}
  			mac_policy_list_unbusy();
+@@ -916,7 +916,7 @@
+ 			size_t spawnattrlen = 0;
+ 			void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
+ 
+-			result = result || hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
++			result = result || (!virt_mac_skip_exec_hook(mpc) && hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen));
+ 		}
+ 		if (mac_policy_list_conditional_busy() != 0) {
+ 			for (; i <= mac_policy_list.maxindex; i++) {
+@@ -933,7 +933,7 @@
+ 				size_t spawnattrlen = 0;
+ 				void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
+ 
+-				result = result || hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
++				result = result || (!virt_mac_skip_exec_hook(mpc) && hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen));
+ 			}
+ 			mac_policy_list_unbusy();
+ 		}
 @@ -1268,10 +1268,10 @@
  			void *spawnattr = exec_spawnattr_getmacpolicyinfo(&imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen);
  
  			error = mac_error_select(
 -				hook(cred,
-+				virt_mac_filter(mpc, hook(cred,
++				virt_mac_filter(mpc, virt_mac_skip_exec_hook(mpc) ? 0 : hook(cred,
  				vp, imgp->ip_scriptvp, mac_vnode_label(vp), imgp->ip_scriptlabelp,
  				imgp->ip_execlabelp, &imgp->ip_ndp->ni_cnd, &imgp->ip_csflags,
 -				spawnattr, spawnattrlen), error);
@@ -91,7 +119,7 @@
  
  				error = mac_error_select(
 -					hook(cred,
-+					virt_mac_filter(mpc, hook(cred,
++					virt_mac_filter(mpc, virt_mac_skip_exec_hook(mpc) ? 0 : hook(cred,
  					vp, imgp->ip_scriptvp, mac_vnode_label(vp), imgp->ip_scriptlabelp,
  					imgp->ip_execlabelp, &imgp->ip_ndp->ni_cnd, &imgp->ip_csflags,
 -					spawnattr, spawnattrlen), error);
