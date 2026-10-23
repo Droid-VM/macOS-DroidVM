@@ -94,3 +94,27 @@ def relocate_text(words, base, shift, remap, report):
         if page is not None and remap.in_old_kernel(page):
             report['skipped'].append((pc, 'adrp', page))
     return changes
+
+
+# CoreEntitlements (inside AMFI) guards its recursion with `sp & ((1 << PAGE_SHIFT_CONST) - 1) < 128`: on Apple's kernel the stack is 16 KiB, aligned to it
+# and the page is 16 KiB, so that means "less than 128 bytes of stack left" (CEElementIterate then fails with an error, and the entitlement
+# dictionary of that process cannot be built: AMFI panics "failed to create OSDictionary copy"). This kernel's stacks sit one 4 KiB guard page
+# above an aligned boundary, so the test also fires for a stack pointer in the first 128 bytes above any aligned boundary inside the stack: a
+# perfectly good place, 4 KiB below the top for the exec path (seputil's entitlements failed this way). The stack has a guard page of its own: the
+# comparison is made one that never holds.
+STACK_CHECK = (0x12800009,   # movn w9, #0
+               0x1ac82128,   # lsl  w8, w9, w8      <- w8 holds PAGE_SHIFT_CONST
+               0x2a2803e8,   # mvn  w8, w8
+               0x910003e9,   # mov  x9, sp
+               0x8a090108,   # and  x8, x8, x9
+               0xf102011f)   # cmp  x8, #128        (followed by b.lo to the error exit)
+CMP_X8_ZERO = 0xf100011f     # cmp  x8, #0: x8 < 0 never holds
+
+
+def patch_stack_checks(words):
+    """Returns {index: new word} for every stack check of the idiom above (the limit becomes 0)."""
+    changes = {}
+    for i in range(len(words) - len(STACK_CHECK) + 1):
+        if tuple(words[i:i + len(STACK_CHECK)]) == STACK_CHECK:
+            changes[i + 5] = CMP_X8_ZERO
+    return changes

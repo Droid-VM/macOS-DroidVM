@@ -200,7 +200,10 @@ def build(args):
             raise SystemExit(f'{name}: {problem}')
         for index, word in changes.items():
             struct.pack_into('<I', image, at + index * 4, word)
-        print(f'{name}: {len(changes)} branches retargeted')
+        stack_checks = kc_reloc.patch_stack_checks(words)
+        for index, word in stack_checks.items():
+            struct.pack_into('<I', image, at + index * 4, word)
+        print(f'{name}: {len(changes)} branches retargeted' + (f', {len(stack_checks)} stack checks' if stack_checks else ''))
         seal_fips(kc, image, name, old_off)
     skipped = report.pop('skipped')
     print('relocation:', report, dict(remap.stats), f'{len(skipped)} words that look like branches/adrp into the kernel are data:', [(hex(a), kind) for a, kind, _ in skipped][:12])
