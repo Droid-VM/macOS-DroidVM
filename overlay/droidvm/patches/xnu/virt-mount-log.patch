@@ -1,0 +1,16 @@
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -7562,6 +7562,13 @@
+ 	}
+ 	mount_list_unlock();
+ 
++	/* Bring-up diagnostic (boot-arg mount-log=1): CoreServices' FileIDTree aborts on two volumes with the same device id. */
++	uint32_t virt_mount_log = 0;
++	if (PE_parse_boot_argn("mount-log", &virt_mount_log, sizeof(virt_mount_log)) && virt_mount_log) {
++		printf("mount-log: %s on %s from %s fsid %#x %#x\n", mp->mnt_vfsstat.f_fstypename, mp->mnt_vfsstat.f_mntonname,
++		    mp->mnt_vfsstat.f_mntfromname, mp->mnt_vfsstat.f_fsid.val[0], mp->mnt_vfsstat.f_fsid.val[1]);
++	}
++
+ 	return res;
+ }
+ 

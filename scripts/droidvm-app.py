@@ -46,7 +46,7 @@ MEM_MB = 3072
 OUT = ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
-REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1']   # see TODO.md: without them launchd cannot get far
+REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1']   # see TODO.md: without them launchd cannot get far
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
 adb, sh = ios.adb, ios.sh
@@ -60,9 +60,9 @@ ios.fix_owner = fix_owner
 
 
 def template(persistent):
-    """The iOS VM definition with the macOS particulars: one vCPU, boot disk as --block, no GPU/input mmio devices."""
+    """The iOS VM definition with the macOS particulars: eight vCPUs, boot disk as --block, no GPU/input mmio devices."""
     vm = ORIGINAL_VM_CONFIG(persistent)
-    vm.update({'cpu_count': 1, 'cpu_topology_auto': False, 'disks': [],
+    vm.update({'cpu_count': 8, 'disks': [],
                'extra_options': ['--block', BOOT + ',lock=false', '--dump-device-tree-blob', DTB,
                                  '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
@@ -93,7 +93,7 @@ def boot_disk(args):
     fdt = OUT / 'generated.dtb'
     adb('pull', DTB, str(fdt), timeout=60)
     adt = OUT / 'kernel.macho.adt'
-    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000), '47554e5941480001', adt)
+    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000), '47554e5941480001', adt, cpu_regs=None)   # every vCPU the app gives the VM
     artifacts = ROOT / 'artifacts/23G93'
     line = run.kernel_args(REQUIRED_ARGS + args.kernel_arg)
     local = OUT / 'boot'

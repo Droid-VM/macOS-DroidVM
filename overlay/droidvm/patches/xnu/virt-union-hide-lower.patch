@@ -1,0 +1,52 @@
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -3716,6 +3716,29 @@
+ };
+ 
+ 
++/*
++ * Bring-up (boot-arg union-hide-lower=1): the owner chain union-mounts the SystemOS volume over the OS volume at "/", so getfsstat
++ * lists two mounts on "/". CoreServices' FileIDTree identifies a volume by the device id of its mount point, which is the upper
++ * mount's for both, and aborts ("volume for device id already exists"). The mount whose root vnode another mount covers is left out
++ * of getfsstat, the way a single volume at "/" looks on a real system.
++ */
++static bool
++virt_union_lower_hidden(mount_t mp, vfs_context_t ctx)
++{
++	uint32_t enabled = 0;
++	vnode_t rvp = NULLVP;
++	bool hidden = false;
++
++	if (!PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) || !enabled) {
++		return false;
++	}
++	if (VFS_ROOT(mp, &rvp, ctx) == 0) {
++		hidden = rvp->v_mountedhere != NULL;
++		vnode_put(rvp);
++	}
++	return hidden;
++}
++
+ static int
+ getfsstat_callback(mount_t mp, void * arg)
+ {
+@@ -3724,6 +3747,9 @@
+ 	int error, my_size;
+ 	vfs_context_t ctx = vfs_context_current();
+ 
++	if (virt_union_lower_hidden(mp, ctx)) {
++		return VFS_RETURNED;
++	}
+ 	if (fstp->sfsp && fstp->count < fstp->maxcount) {
+ #if CONFIG_MACF
+ 		error = mac_mount_check_stat(ctx, mp);
+@@ -3907,6 +3933,9 @@
+ 	struct statfs64 sfs;
+ 	int error;
+ 
++	if (virt_union_lower_hidden(mp, vfs_context_current())) {
++		return VFS_RETURNED;
++	}
+ 	if (fstp->sfsp && fstp->count < fstp->maxcount) {
+ #if CONFIG_MACF
+ 		error = mac_mount_check_stat(vfs_context_current(), mp);

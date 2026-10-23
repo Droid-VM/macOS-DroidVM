@@ -1,6 +1,6 @@
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -998,3 +998,45 @@
+@@ -926,3 +926,57 @@
  
  	return ret;
  }
@@ -43,6 +43,18 @@
 +	}
 +	if (info.btui_error != 0) {
 +		printf("abort: pid %d backtrace error %d after %u frames\n", pid, info.btui_error, count);
++	}
++	/* The arguments of an abort message (CSAbortWithMessage and the like) live in the callers' frames. */
++	if (state != NULL) {
++		uint64_t words[8];
++		uint64_t stack = get_saved_state_sp(state);
++		for (uint64_t offset = 0; offset < 0x600; offset += sizeof(words)) {
++			if (copyin((user_addr_t)(stack + offset), words, sizeof(words)) != 0) {
++				break;
++			}
++			printf("abort: pid %d stack +0x%llx: %llx %llx %llx %llx %llx %llx %llx %llx\n", pid, (unsigned long long)offset,
++			    words[0], words[1], words[2], words[3], words[4], words[5], words[6], words[7]);
++		}
 +	}
 +}
 +#endif /* __arm64__ && MACH_BSD */

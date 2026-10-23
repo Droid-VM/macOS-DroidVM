@@ -180,9 +180,14 @@ def full(jobs, legacy_display=False):
     run(sys.executable, ROOT / 'scripts/owner-policy-dirs.py', policy_inputs, BUILD / 'droidvm/tree', 'macos')
     run(sys.executable, ROOT / 'scripts/macos-root-probe.py', UNIXNU / 'scripts/build-verified-root-probe.py',
         FULL_DEVICE / 'scripts/build-verified-root-probe.py')
+    # Build scripts of the reference tree that this project replaces (an object cache for the immutable corecrypto sources).
+    for script in (ROOT / 'overlay/droidvm/tree-scripts').glob('*.py'):
+        target = TREE / 'scripts' / script.name
+        if not target.exists() or target.read_bytes() != script.read_bytes():
+            shutil.copyfile(script, target)
     for patch in (ROOT / 'overlay/droidvm/patches/xnu').glob('*.patch'):
         target = FULL_DEVICE / 'patches/xnu' / patch.name
-        if not target.exists():
+        if not target.exists() or target.read_bytes() != patch.read_bytes():   # an edited overlay patch replaces its stale copy
             shutil.copyfile(patch, target)
     # The owner patches name the OS volume UUID of the upstream author's converted disk; this project keeps Apple's own volume
     # UUID (macos-root-pins.json) and changes the kernel's constant instead of rewriting the APFS volume.

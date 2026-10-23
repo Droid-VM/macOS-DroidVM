@@ -1,0 +1,21 @@
+--- a/security/mac_base.c
++++ b/security/mac_base.c
+@@ -1614,6 +1614,18 @@
+ 	}
+ 
+ done:
++	/*
++	 * Bring-up (mac-sandbox-permissive=1): a macOS daemon names its own profile in sandbox_init(); the iPadOS Sandbox kext does not
++	 * know it: call 22 (profile lookup) answers ENOENT and the follow-up call 1 (apply) EINVAL, after which the daemon aborts. Report
++	 * the failed Sandbox call and let the process run unsandboxed.
++	 */
++	if (error != 0 && virt_mac_sandbox_permissive && strcmp(target, "Sandbox") == 0) {
++		printf("sandbox-call: pid %d %s call %d error %d%s\n", proc_pid(p), proc_best_name(p), uap->call, error,
++		    ((error == ENOENT || error == EINVAL) && (uap->call == 1 || uap->call == 22)) ? " (ignored)" : "");
++		if (((error == ENOENT || error == EINVAL) && (uap->call == 1 || uap->call == 22))) {
++			error = 0;
++		}
++	}
+ 	return error;
+ }
+ 

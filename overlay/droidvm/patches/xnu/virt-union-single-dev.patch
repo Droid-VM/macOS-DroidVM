@@ -1,0 +1,132 @@
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -13153,3 +13153,27 @@
+ }
+ 
+ #endif /* CONFIG_FILE_LEASES */
++
++/*
++ * Bring-up (boot-arg union-hide-lower=1): the owner chain union-mounts the SystemOS volume over the OS volume at "/", so files under "/"
++ * come from two APFS volumes with two device ids. CoreServices expects one device per mount point and aborts on a device id that no
++ * mount lists. The mount whose root vnode another mount covers reports the covering mount's device id and statfs.
++ */
++mount_t
++virt_union_top(mount_t mp)
++{
++	uint32_t enabled = 0;
++	vnode_t rvp = NULLVP;
++	mount_t top = mp;
++
++	if (mp == NULL || !PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) || !enabled) {
++		return mp;
++	}
++	if (VFS_ROOT(mp, &rvp, vfs_context_current()) == 0) {
++		if (rvp->v_mountedhere != NULL) {
++			top = rvp->v_mountedhere;
++		}
++		vnode_put(rvp);
++	}
++	return top;
++}
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -3463,6 +3463,8 @@
+ }
+ #endif /* QUOTA */
+ 
++extern mount_t virt_union_top(mount_t mp);
++
+ static int
+ statfs_internal(proc_t p, struct mount *mp, user_addr_t bufp)
+ {
+@@ -3509,7 +3511,7 @@
+ 		return error;
+ 	}
+ 	vp = nd.ni_vp;
+-	mp = vp->v_mount;
++	mp = virt_union_top(vp->v_mount);
+ 	nameidone(&nd);
+ 
+ 	error = statfs_internal(p, mp, uap->buf);
+@@ -3538,7 +3540,7 @@
+ 
+ 	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
+ 
+-	mp = vp->v_mount;
++	mp = virt_union_top(vp->v_mount);
+ 	if (!mp) {
+ 		error = EBADF;
+ 		goto out_vnode;
+@@ -3616,7 +3618,7 @@
+ 		goto out;
+ 	}
+ 	vp = ndp->ni_vp;
+-	mp = vp->v_mount;
++	mp = virt_union_top(vp->v_mount);
+ 	nameidone(ndp);
+ 
+ #if CONFIG_MACF
+@@ -3674,7 +3676,7 @@
+ 
+ 	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
+ 
+-	mp = vp->v_mount;
++	mp = virt_union_top(vp->v_mount);
+ 	if (!mp) {
+ 		error = EBADF;
+ 		goto out;
+--- a/bsd/vfs/vfs_vnops.c
++++ b/bsd/vfs/vfs_vnops.c
+@@ -1434,6 +1434,8 @@
+ 	return error;
+ }
+ 
++extern mount_t virt_union_top(mount_t mp);
++
+ /*
+  * File table vnode stat routine.
+  *
+@@ -1508,10 +1510,10 @@
+ 	 * Copy from vattr table
+ 	 */
+ 	if (isstat64 != 0) {
+-		sb64->st_dev = va.va_fsid;
++		sb64->st_dev = virt_union_top(vp->v_mount) == vp->v_mount ? va.va_fsid : virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid.val[0];
+ 		sb64->st_ino = (ino64_t)va.va_fileid;
+ 	} else {
+-		sb->st_dev = va.va_fsid;
++		sb->st_dev = virt_union_top(vp->v_mount) == vp->v_mount ? va.va_fsid : virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid.val[0];
+ 		sb->st_ino = (ino_t)va.va_fileid;
+ 	}
+ 	mode = va.va_mode;
+--- a/bsd/vfs/vfs_attrlist.c
++++ b/bsd/vfs/vfs_attrlist.c
+@@ -191,6 +191,8 @@
+ 	attrlist_pack_variable2(ab, source, count, NULL, 0);
+ }
+ 
++extern mount_t virt_union_top(mount_t mp);
++
+ /*
+  * Attempt to pack a string. This is a special case of a variable width attribute.
+  *
+@@ -1669,6 +1671,9 @@
+ 			ATTR_PACK4((*abp),
+ 			    mp->mnt_vfsstat.f_fsid.val[0]);
+ 			abp->actual.commonattr |= ATTR_CMN_DEVID;
++		} else if (vp && virt_union_top(vp->v_mount) != vp->v_mount) {
++			ATTR_PACK4((*abp), virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid.val[0]);
++			abp->actual.commonattr |= ATTR_CMN_DEVID;
+ 		} else if (VATTR_IS_ACTIVE(vap, va_fsid) && VATTR_IS_SUPPORTED(vap, va_fsid)) {
+ 			ATTR_PACK4((*abp), vap->va_fsid);
+ 			abp->actual.commonattr |= ATTR_CMN_DEVID;
+@@ -1688,6 +1693,9 @@
+ 			ATTR_PACK8((*abp),
+ 			    mp->mnt_vfsstat.f_fsid);
+ 			abp->actual.commonattr |= ATTR_CMN_FSID;
++		} else if (vp && virt_union_top(vp->v_mount) != vp->v_mount) {
++			ATTR_PACK8((*abp), virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid);
++			abp->actual.commonattr |= ATTR_CMN_FSID;
+ 		} else if (VATTR_IS_SUPPORTED(vap, va_fsid64)) {
+ 			ATTR_PACK8((*abp), vap->va_fsid64);
+ 			abp->actual.commonattr |= ATTR_CMN_FSID;

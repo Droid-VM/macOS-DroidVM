@@ -1,0 +1,16 @@
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -3586,6 +3586,13 @@
+ 	vfs_getfstypename(mp, sfs->f_fstypename, MFSTYPENAMELEN);
+ 	strlcpy(&sfs->f_mntonname[0], &vsfs->f_mntonname[0], MAXPATHLEN);
+ 	strlcpy(&sfs->f_mntfromname[0], &vsfs->f_mntfromname[0], MAXPATHLEN);
++
++	/* Bring-up diagnostic (boot-arg mount-log=1): the fsid a process sees; see virt-mount-log.patch. */
++	uint32_t virt_mount_log = 0;
++	if (PE_parse_boot_argn("mount-log", &virt_mount_log, sizeof(virt_mount_log)) && virt_mount_log) {
++		printf("mount-log: statfs64 pid %d %s: %s fsid %#x %#x flags %#x ext %#x subtype %u\n", proc_selfpid(), proc_best_name(current_proc()),
++		    vsfs->f_mntonname, vsfs->f_fsid.val[0], vsfs->f_fsid.val[1], sfs->f_flags, sfs->f_flags_ext, sfs->f_fssubtype);
++	}
+ }
+ 
+ /*
