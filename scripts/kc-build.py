@@ -32,7 +32,7 @@ LC_SEGMENT_64, LC_SYMTAB, LC_DYSYMTAB, LC_UNIXTHREAD, LC_SPLIT_INFO, LC_FUNCTION
 LC_FILESET_ENTRY, LC_CHAINED_FIXUPS = 0x80000035, 0x80000034
 
 # Top-level segments that move from where KC265 has them (offsets from the collection base) to make room for the larger kernel.
-DATA_CONST_START = 0x810000
+DATA_CONST_START = 0x78c000
 DATA_START = 0x3814000
 
 
