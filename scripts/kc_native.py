@@ -101,7 +101,7 @@ def link(objects, resolve, allocate, header_reserve, data_reserve, start_symbol,
     segments = {}
     for seg in SEGMENT_ORDER:
         cursor = header_reserve if seg == '__TEXT' else data_reserve if seg == '__DATA' else 0
-        order = []
+        order, spans = [], []
         for name, members in layout[seg]:
             start = None
             for obj, sect in members:
@@ -111,6 +111,8 @@ def link(objects, resolve, allocate, header_reserve, data_reserve, start_symbol,
                 if start is None:
                     start = cursor
                 cursor += sect['size']
+            # one section per name: OSRuntimeInitializeCPP finds __mod_init_func by name and runs the first one only
+            spans.append((name, start, cursor - start, members[0][1]['flags']))
         got_at = None
         if seg == '__DATA_CONST' and got_names:
             cursor = (cursor + 7) // 8 * 8
@@ -134,7 +136,7 @@ def link(objects, resolve, allocate, header_reserve, data_reserve, start_symbol,
             placement[(id(obj), sect['index'])] = base + at
             if not sect['flags'] & 0xff in (1, 0xc, 0x12):
                 segments[seg]['data'][at:at + sect['size']] = obj.data[sect['offset']:sect['offset'] + sect['size']]
-            segments[seg]['sections'].append((PLACEMENT[(sect['segment'], sect['name'])][1], base + at, sect['size'], sect['flags']))
+        segments[seg]['sections'] = [(name, base + start, size, flags) for name, start, size, flags in spans if size]
         for obj, symbol in commons:
             symbol['address'] = base + symbol['common_offset']
         if got_at is not None:
