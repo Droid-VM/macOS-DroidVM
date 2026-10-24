@@ -3,6 +3,7 @@
 
     apple-ld.py install          extract usr/bin/ld-classic from the CLTools package into the container's tools
     apple-ld.py LDFLAGS...       link (arm64e, macOS 14.0 / SDK 26.1, -F overlay/metal/frameworks)
+    apple-ld.py --raw ARGS...    as a compiler driver's linker (clang --ld-path): the driver's arguments as they are
 
 Neither of the Linux linkers does: cctools-port's ld64-711 has no TAPI (no .tbd), and ld64.lld has no arm64e authenticated pointer
 relocations. ld (ld-prime) needs a newer libc++ than Darling's; ld-classic does not. Paths are host paths under the workspace."""
@@ -63,21 +64,29 @@ def install():
             return
 
 
-def link(arguments):
+def darling(path):
+    return '/Volumes/SystemRoot' + str(Path(path).resolve())
+
+
+def link(arguments, raw=False):
     if not (TOOLS / 'bin/ld-classic').is_file():
         install()
     container = json.loads((TOOLCHAIN / 'bin/linux-toolchain.json').read_text())['appleclang']['container']
     subprocess.run(['docker', 'start', container], check=True, stdout=subprocess.DEVNULL)
-    darling = lambda path: '/Volumes/SystemRoot' + str(Path(path).resolve())   # noqa: E731
-    command = [f'{DARLING_TOOLS}/bin/ld-classic', '-arch', 'arm64e', '-platform_version', 'macos', '14.0', '26.1',
-               '-syslibroot', darling(SDK), '-F', darling(ROOT / 'overlay/metal/frameworks'), *arguments]
+    output = arguments[arguments.index('-o') + 1] if '-o' in arguments else None
+    if raw:
+        # host absolute paths (objects, archives, the SDK, the output) as Darling sees them
+        arguments = [darling(a) if a.startswith('/') and Path(a).parent.is_dir() else a for a in arguments]
+        command = [f'{DARLING_TOOLS}/bin/ld-classic', *arguments]
+    else:
+        command = [f'{DARLING_TOOLS}/bin/ld-classic', '-arch', 'arm64e', '-platform_version', 'macos', '14.0', '26.1',
+                   '-syslibroot', darling(SDK), '-F', darling(ROOT / 'overlay/metal/frameworks'), *arguments]
     # Darling's shell takes one command line: quote every argument; Darling's /usr/lib lacks libcodedirectory, the CLT's has it
     script = f'cd {darling(os.getcwd())} && DYLD_LIBRARY_PATH={DARLING_TOOLS}/lib exec ' + ' '.join(
         "'" + a.replace("'", "'\\''") + "'" for a in command)
     result = subprocess.run(['docker', 'exec', '-i', container, 'darling', 'shell', '/bin/bash', '--noprofile', '--norc', '-c', script],
                             capture_output=True, text=True, timeout=600)
     sys.stderr.write(''.join(l for l in (result.stdout + result.stderr).splitlines(True) if 'rlimit' not in l))
-    output = arguments[arguments.index('-o') + 1] if '-o' in arguments else None
     if result.returncode or (output and not Path(output).is_file()):
         raise SystemExit(f'ld-classic failed ({result.returncode})')
 
@@ -85,5 +94,7 @@ def link(arguments):
 if __name__ == '__main__':
     if sys.argv[1:] == ['install']:
         install()
+    elif sys.argv[1:2] == ['--raw']:
+        link(sys.argv[2:], raw=True)
     else:
         link(sys.argv[1:])
