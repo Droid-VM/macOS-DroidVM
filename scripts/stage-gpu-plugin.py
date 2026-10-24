@@ -3,9 +3,11 @@
 searches for <MetalPluginName>.bundle; /Library is a link into the Data volume's .data, make-macos-systemos.sh), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
 make-owner-trust-bundle.py).
 
-    stage-gpu-plugin.py [--probe EXECUTABLE] BUNDLE...        [MACOS_TAG=27.0.1]
+    stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] BUNDLE...        [MACOS_TAG=27.0.1]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
+--setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
+(Language Chooser waits for bluetoothd, which the board disables, in IOBluetoothHostController's first use).
 
 Output: out/metal/stage/{scratch-data.img,kernel.macho.trustcache}; boot with MACOS_DATA_SEED / MACOS_TRUSTCACHE set to them
 (scripts/droidvm-app.py). The Data volume is volatile (NativeRamBlock), so the seed is what the guest sees on every boot. Needs sudo
@@ -32,6 +34,7 @@ LC_CODE_SIGNATURE = 0x1d
 GPU_BUNDLES = '.data/Library/GPUBundles'
 PROBE_DIR = '.data/usr/local/libexec'                  # /usr/local is a link into .data as well
 PROBE_JOB = '.data/Library/LaunchDaemons/org.droidvm.metal-probe.plist'
+SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
 
 
 def cdhash(path):
@@ -78,6 +81,7 @@ def trust_bundle(hashes, original):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--probe', type=Path)
+    parser.add_argument('--setup-done', action='store_true')
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
     bundles = [b.resolve() for b in args.bundles]
@@ -124,6 +128,10 @@ def main():
                     subprocess.run(['sudo', 'tee', str(job)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(job)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(job)], check=True)
+                if args.setup_done:
+                    marker = mount / SETUP_DONE
+                    subprocess.run(['sudo', 'mkdir', '-p', str(marker.parent)], check=True)
+                    subprocess.run(['sudo', 'install', '-o', '0', '-g', '0', '-m', '444', '/dev/null', str(marker)], check=True)
                 subprocess.run(['sync'], check=True)
             finally:
                 subprocess.run(['sudo', 'umount', str(mount)], check=True)

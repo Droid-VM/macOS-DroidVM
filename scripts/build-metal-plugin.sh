@@ -31,4 +31,4 @@ open(sys.argv[1], 'wb').write(plistlib.dumps(dict(
     CFBundleSupportedPlatforms=['MacOSX'], LSMinimumSystemVersion='14.0'), fmt=plistlib.FMT_XML))
 EOF
 [ -x out/metal/probe/metal-probe ] || bash scripts/build-metal-probe.sh
-python3 scripts/stage-gpu-plugin.py --probe out/metal/probe/metal-probe $O/NativeAdrenoMetal.bundle
+python3 scripts/stage-gpu-plugin.py --probe out/metal/probe/metal-probe ${STAGE_ARGS:-} $O/NativeAdrenoMetal.bundle

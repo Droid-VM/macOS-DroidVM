@@ -54,6 +54,9 @@ DTB = FOLDER + '/generated.dtb'
 GPU = os.environ.get('MACOS_GPU') == '1'
 GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1']
 REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000', 'mac-sandbox-skip-exec=1']   # see TODO.md: without them launchd cannot get far
+# The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
+# vCPU the busy host did not run for that long while holding one panicked the guest at launchd's spawn storms; 40 times is 10 s
+REQUIRED_ARGS.append('ml-timeout-lock-scale=40')
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
 adb, sh = ios.adb, ios.sh
