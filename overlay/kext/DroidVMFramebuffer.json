@@ -1,0 +1,17 @@
+{
+  "name": "DroidVMFramebuffer",
+  "bundle": "com.unixnu.driver.DroidVMFramebuffer",
+  "version": "1.0.0",
+  "libraries": {
+    "com.apple.iokit.IOGraphicsFamily": "1.0.0"
+  },
+  "personalities": {
+    "DroidVMFramebuffer": {
+      "CFBundleIdentifier": "com.apple.iokit.IOGraphicsFamily",
+      "IOClass": "IOBootFramebuffer",
+      "IOProviderClass": "IOPlatformDevice",
+      "IONameMatch": "droidvm,framebuffer",
+      "IOMatchCategory": "IOFramebuffer"
+    }
+  }
+}

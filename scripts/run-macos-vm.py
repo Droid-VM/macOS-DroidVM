@@ -7,6 +7,7 @@ generated from the FDT this exact VM configuration produces (crosvm --dump-devic
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -87,10 +88,20 @@ def vm_command(os_img, systemos_img, mem_mb):
             APP + '/share/droidvm/edk2-gunyah.fd']
 
 
+# The iOS board's offline display probes (bsd_init's native_mobile_graphics_load_probe): on xnu-12377 they find DroidVMDisplay's
+# IOMobileFramebuffer and drive a user client with no owner (offline-mobile-graphics-client: a NULL dereference in externalMethod).
+IOS_DISPLAY_PROBES = ('offline-mobile-graphics-load', 'offline-mobile-graphics-client', 'offline-legacy-register', 'offline-legacy-gop',
+                      'offline-legacy-phase', 'offline-legacy-unit-scale', 'offline-legacy-pm', 'offline-legacy-validate',
+                      'offline-legacy-transfer', 'offline-legacy-cpu-present')
+
+
 def kernel_args(extra):
     board = tomllib.loads(BOARD.read_text())
     arguments = [a for a in board['payload']['kernel_args'] if not a.startswith(GPU_ARGS)]
     dropped = {a[5:] for a in extra if a.startswith('drop:')}      # drop:NAME removes a board argument (the line is limited to 1000 bytes)
+    if os.environ.get('MACOS_KERNEL'):
+        # armcpu-diagnostics=1 panics when one interrupt drains more than 128 timer interrupts: a macOS boot under load reaches that
+        dropped |= set(IOS_DISPLAY_PROBES) | {'armcpu-diagnostics'}
     extra = [a for a in extra if not a.startswith('drop:')]
     names = {a.split('=', 1)[0] for a in extra}
     arguments = [a for a in arguments if a.split('=', 1)[0] not in names | dropped] + extra
@@ -100,8 +111,19 @@ def kernel_args(extra):
     return line
 
 
-def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0'):
-    """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight)."""
+def last_virtio_mmio(tool, fdt):
+    spec = importlib.util.spec_from_file_location('make_droidvm_adt', tool)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    base = max(base for base, _ in module.describe(module.parse_fdt(Path(fdt).read_bytes()))['virtio_mmio'])
+    if base <= 0x0a002000:
+        raise SystemExit(f'{fdt} has no virtio-mmio window after the data store: prepare again with --droidvm-gpu in the VM')
+    return base
+
+
+def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False):
+    """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight).
+    gpu: crosvm --droidvm-gpu is on; its window is the FDT's last virtio-mmio one (it follows the disks) and becomes /arm-io/gpu."""
     tool = ADT_TOOL
     if os.environ.get('MACOS_KERNEL'):
         # xnu-12377 asks the bootloader for 256 bytes of entropy (xnu-10063: 64); the tool of sources/ stays untouched.
@@ -116,6 +138,17 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0'):
         assert text.count(marker) == 1
         sip = int(os.environ.get('MACOS_LP_SIP0', '0x0'), 0)
         text = text.replace(marker, f"node('manifest-properties'), node('asmb', [('lp-sip0', struct.pack('<Q', {sip:#x})), ('lp-sip1', struct.pack('<I', 1))])]),")
+        # MACOS_IOFB=1, the fallback display: /arm-io/framebuffer is the console the bootloader set up (boot_args Video, the GOP), which
+        # IOGraphicsFamily's IOBootFramebuffer drives when its provider has AAPL,boot-display (overlay/kext/DroidVMFramebuffer.json);
+        # WindowServer (CoreDisplay's CGXMappedDisplayStart) opens every IOFramebuffer. The display route is IOMFB (DroidVMDisplay).
+        marker = "              *[node('gpu', [('compatible', b'droidvm,gpu\\0'),"
+        assert text.count(marker) == 1
+        if os.environ.get('MACOS_IOFB') == '1':
+            text = text.replace(marker, "              node('framebuffer', [('compatible', b'droidvm,framebuffer\\0'), ('AAPL,boot-display', struct.pack('<I', 1))]),\n" + marker)
+        # MACOS_DISPLAY=1, the display: IOMobileFramebuffer.framework expects the framebuffers of an /arm-io node compatible
+        # "paravirtualizedgraphics,gpu" (as vma2's), whose nub DroidVMDisplay's AppleParavirtGPU matches (overlay/kext/DroidVMDisplay.json).
+        if os.environ.get('MACOS_DISPLAY') == '1':
+            text = text.replace(marker, "              node('display', [('compatible', b'paravirtualizedgraphics,gpu\\0')]),\n" + marker)
         tool.write_text(text)
     subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
@@ -123,6 +156,7 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0'):
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
                     '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
+                    *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt))] if gpu else []),
                     '--output', str(output)], check=True)
 
 

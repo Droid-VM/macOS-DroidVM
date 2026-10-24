@@ -49,6 +49,10 @@ MEM_MB = 3072
 OUT = ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
+# MACOS_GPU=1: crosvm's --droidvm-gpu (the host's KGSL) as the last virtio-mmio device; the template changes, so register and
+# prepare again (the ADT must list the device), then boot. The guest side is DroidVMGpu with its CP_MEM_WRITE self-test only.
+GPU = os.environ.get('MACOS_GPU') == '1'
+GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1']
 REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000', 'mac-sandbox-skip-exec=1']   # see TODO.md: without them launchd cannot get far
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
@@ -69,7 +73,7 @@ def template(persistent):
                'extra_options': ['--block', BOOT + ',lock=false', '--dump-device-tree-blob', DTB,
                                  '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
-                                 '--virtio-mmio-block', run.STORE + ',lock=false']})
+                                 '--virtio-mmio-block', run.STORE + ',lock=false', *(['--droidvm-gpu'] if GPU else [])]})
     return vm
 
 
@@ -96,9 +100,9 @@ def boot_disk(args):
     fdt = OUT / 'generated.dtb'
     adb('pull', DTB, str(fdt), timeout=60)
     adt = OUT / 'kernel.macho.adt'
-    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000), '47554e5941480001', adt, cpu_regs=None)   # every vCPU the app gives the VM
+    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000), '47554e5941480001', adt, cpu_regs=None, gpu=GPU)   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
-    line = run.kernel_args(REQUIRED_ARGS + args.kernel_arg)
+    line = run.kernel_args(REQUIRED_ARGS + (GPU_ARGS if GPU else []) + args.kernel_arg)
     local = OUT / 'boot'
     if local.exists():
         subprocess.run(['rm', '-rf', str(local)], check=True)
