@@ -1,19 +1,19 @@
-From 097b3bbbf9a91aaa8fa6ef692321a04455608231 Mon Sep 17 00:00:00 2001
+From ba207d7757c23962c22ff85ca8d866d8728fdcf8 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 7/7] bring-up diagnostics: stderr-log, sc-trace, sample-pid
+Subject: [PATCH 9/9] bring-up diagnostics: stderr-log, sc-trace, sample-pid
  helpers, crash-log registers, port_crumb/port_exc breadcrumbs
 
 ---
- bsd/dev/arm/systemcalls.c     |  36 ++++++++++
- bsd/kern/bsd_init.c           |  35 ++++++++++
- bsd/kern/sys_generic.c        |  25 +++++++
- iokit/Kernel/IOUserClient.cpp |  82 ++++++++++++++++++++++
+ bsd/dev/arm/systemcalls.c     |  36 ++++++++
+ bsd/kern/bsd_init.c           |  35 ++++++++
+ bsd/kern/sys_generic.c        |  25 ++++++
+ iokit/Kernel/IOUserClient.cpp |  82 +++++++++++++++++
  osfmk/arm/arm_init.c          |   3 +
- osfmk/arm64/locore.s          |  13 ++++
- osfmk/kern/exception.c        | 127 ++++++++++++++++++++++++++++++++++
+ osfmk/arm64/locore.s          |  13 +++
+ osfmk/kern/exception.c        | 160 ++++++++++++++++++++++++++++++++++
  osfmk/kern/static_if_common.c |   6 ++
- 8 files changed, 327 insertions(+)
+ 8 files changed, 360 insertions(+)
 
 diff --git a/bsd/dev/arm/systemcalls.c b/bsd/dev/arm/systemcalls.c
 index be208dd..5a7b717 100644
@@ -318,10 +318,18 @@ index 3f42af8..fd736d1 100644
  	 * We couldn't process the exception due to either having an invalid
  	 * exception stack or because we previously tried to process it and failed.
 diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
-index d2f978a..d5c25f1 100644
+index d2f978a..58056d0 100644
 --- a/osfmk/kern/exception.c
 +++ b/osfmk/kern/exception.c
-@@ -194,6 +194,33 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
+@@ -88,6 +88,7 @@
+ #include <kern/exception_policy.h>
+ 
+ #include <vm/vm_map_xnu.h>
++#include <vm/vm_kern_xnu.h>
+ #include <vm/vm_map.h>
+ #include <sys/reason.h>
+ #include <security/mac_mach_internal.h>
+@@ -194,6 +195,33 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
  		    (unsigned long long)get_saved_state_pc(state), (unsigned long long)get_saved_state_lr(state),
  		    (unsigned long long)get_saved_state_sp(state), (unsigned long long)get_saved_state_fp(state),
  		    (unsigned long long)get_saved_state_far(state), get_saved_state_esr(state));
@@ -355,14 +363,15 @@ index d2f978a..d5c25f1 100644
  	}
  	count = backtrace_user(frames, VIRT_CRASH_FRAMES, NULL, &info);
  	for (unsigned int i = 0; i < count; i += 4) {
-@@ -204,6 +231,106 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
+@@ -204,6 +232,138 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
  		printf("crash: pid %d backtrace error %d after %u frames\n", pid, info.btui_error, count);
  	}
  }
 +
 +/*
 + * Virtual machine boards: boot-arg sample-pid=<pid> [sample-period=<seconds>] prints, every period, one line per thread of that
-+ * process (state, wait event, user pc/lr/sp/fp) to the message buffer: where a stuck launchd is waiting.
++ * process (state, wait event, user pc/lr/sp/fp) to the message buffer: where a stuck launchd is waiting. sample-name=<name> samples
++ * the first process of that name instead (looked up every period, for a daemon whose pid is not known in advance).
 + */
 +#include <kern/thread_call.h>
 +#include <kern/queue.h>
@@ -373,14 +382,32 @@ index d2f978a..d5c25f1 100644
 +extern uint64_t virt_region_path(task_t, uint64_t, char *, int, uint64_t *);
 +
 +static TUNABLE(int, virt_sample_pid, "sample-pid", 0);
++static TUNABLE_STR(virt_sample_name, 32, "sample-name", "");
++static int virt_sample_now;   /* the pid sampled this period (the tunables are read-only after startup) */
++extern const char *proc_best_name(struct proc *p);   /* as osfmk/vm/vm_protos.h */
 +static TUNABLE(uint32_t, virt_sample_period, "sample-period", 5);
 +static thread_call_t virt_sample_call;
 +
 +static void
 +virt_sample_run(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 +{
-+	void *proc = virt_sample_pid > 0 ? proc_find(virt_sample_pid) : NULL;
-+	if (proc != NULL || virt_sample_pid < 0) {
++	void *proc = NULL;
++	virt_sample_now = virt_sample_pid;
++	if (virt_sample_name[0] != '\0') {
++		virt_sample_now = 0;
++		for (int pid = 1; pid < 4000 && proc == NULL; pid++) {
++			proc = proc_find(pid);
++			if (proc != NULL && strncmp(proc_best_name((struct proc *)proc), virt_sample_name, sizeof(virt_sample_name)) != 0) {
++				proc_rele(proc);
++				proc = NULL;
++			} else if (proc != NULL) {
++				virt_sample_now = pid;
++			}
++		}
++	} else if (virt_sample_pid > 0) {
++		proc = proc_find(virt_sample_pid);
++	}
++	if (proc != NULL || (virt_sample_pid < 0 && virt_sample_name[0] == '\0')) {
 +		task_t task = proc != NULL ? proc_task(proc) : kernel_task;
 +		thread_t thread;
 +		static struct {
@@ -425,7 +452,7 @@ index d2f978a..d5c25f1 100644
 +			static char path[160];
 +			uint64_t size, start;
 +			printf("sample: pid %d tid %llu state 0x%x wait 0x%llx msg %s main 0x%llx pri %d pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx\n",
-+			    virt_sample_pid, seen[i].tid, seen[i].state, seen[i].wait, seen[i].msg, (unsigned long long)task->mach_header_vm_address,
++			    virt_sample_now, seen[i].tid, seen[i].state, seen[i].wait, seen[i].msg, (unsigned long long)task->mach_header_vm_address,
 +			    seen[i].pri, seen[i].pc, seen[i].lr, seen[i].sp, seen[i].fp);
 +			for (unsigned int k = 0; k < seen[i].kcount; k++) {
 +				printf("sample:   k%u 0x%llx\n", k, (unsigned long long)seen[i].kframes[k]);
@@ -435,9 +462,22 @@ index d2f978a..d5c25f1 100644
 +				printf("sample:   pc in 0x%llx+0x%llx %s\n", (unsigned long long)start, (unsigned long long)size, path);
 +				start = virt_region_path(task, seen[i].lr, path, sizeof(path), &size);
 +				printf("sample:   lr in 0x%llx+0x%llx %s\n", (unsigned long long)start, (unsigned long long)size, path);
++				/* the user frame records (fp, lr) from fp: where a waiting process waits */
++				uint64_t ufp = seen[i].fp;
++				for (unsigned int u = 0; u < 24 && ufp != 0 && (ufp & 7) == 0; u++) {
++					uint64_t frame[2];
++					if (copyinmap(get_task_map(task), ufp, frame, sizeof(frame)) != KERN_SUCCESS || frame[1] == 0) {
++						break;
++					}
++					printf("sample:   u%u 0x%llx\n", u, (unsigned long long)(frame[1] & ((1ULL << 47) - 1)));
++					if (frame[0] <= ufp) {
++						break;
++					}
++					ufp = frame[0];
++				}
 +			}
 +		}
-+		printf("sample: pid %d %u threads\n", virt_sample_pid, total);
++		printf("sample: pid %d %u threads\n", virt_sample_now, total);
 +		if (proc != NULL) {
 +			proc_rele(proc);
 +		}
@@ -451,7 +491,7 @@ index d2f978a..d5c25f1 100644
 +static void
 +virt_sample_init(void)
 +{
-+	if (virt_sample_pid != 0) {
++	if (virt_sample_pid != 0 || virt_sample_name[0] != '\0') {
 +		uint64_t deadline;
 +		virt_sample_call = thread_call_allocate(virt_sample_run, NULL);
 +		clock_interval_to_deadline(virt_sample_period, NSEC_PER_SEC, &deadline);

@@ -1,0 +1,110 @@
+From 952abb44202221a3fffaeffdadb7a2b04d0135f6 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 11:01:34 -0400
+Subject: [PATCH 8/9] shared region pager: release the source page before
+ gathering the rest of its 16 KiB slide page
+
+Faulting a neighbour while the source page and its placeholder in the top object were still busy
+deadlocked two faults in one slide page (each waited on the page the other held): xpcproxy's
+auth remap then waited forever on the backing object's paging and every later exec queued behind it.
+---
+ osfmk/vm/vm_shared_region_pager.c | 50 +++++++++++++++++++++++--------
+ 1 file changed, 38 insertions(+), 12 deletions(-)
+
+diff --git a/osfmk/vm/vm_shared_region_pager.c b/osfmk/vm/vm_shared_region_pager.c
+index 4d35ccc..0bafe6f 100644
+--- a/osfmk/vm/vm_shared_region_pager.c
++++ b/osfmk/vm/vm_shared_region_pager.c
+@@ -474,6 +474,29 @@ shared_region_pager_data_initialize(
+ 	return KERN_FAILURE;
+ }
+ 
++/*
++ * Release the result of vm_fault_page() on the backing object: the source page's object is
++ * locked on entry, nothing is locked on return.
++ */
++static void
++shared_region_pager_source_done(
++	vm_object_t src_top_object,
++	vm_page_t src_page,
++	vm_page_t top_page)
++{
++	vm_object_t     src_page_object = VM_PAGE_OBJECT(src_page);
++
++	vm_page_wakeup_done(src_page_object, src_page);
++	vm_object_paging_end(src_page_object);
++	vm_object_unlock(src_page_object);
++	if (top_page != VM_PAGE_NULL) {
++		vm_object_lock(src_top_object);
++		VM_PAGE_FREE(top_page);
++		vm_object_paging_end(src_top_object);
++		vm_object_unlock(src_top_object);
++	}
++}
++
+ /*
+  * A slide info page (16 KiB for the arm64 shared cache) can be larger than the kernel's
+  * PAGE_SIZE (4 KiB here). The data request is then answered one VM page at a time: the
+@@ -488,7 +511,6 @@ shared_region_pager_read_backing_page(
+ 	struct vm_object_fault_info *fault_info)
+ {
+ 	vm_object_t     src_top_object = pager->srp_backing_object;
+-	vm_object_t     src_page_object;
+ 	vm_page_t       src_page, top_page;
+ 	vm_prot_t       prot;
+ 	kern_return_t   kr;
+@@ -521,17 +543,8 @@ retry:
+ 	default:
+ 		return error_code ? error_code : KERN_MEMORY_ERROR;
+ 	}
+-	src_page_object = VM_PAGE_OBJECT(src_page);
+ 	bcopy((const char *)phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page) << PAGE_SHIFT), buffer, PAGE_SIZE);
+-	vm_page_wakeup_done(src_page_object, src_page);
+-	vm_object_paging_end(src_page_object);
+-	vm_object_unlock(src_page_object);
+-	if (top_page != VM_PAGE_NULL) {
+-		vm_object_lock(src_top_object);
+-		VM_PAGE_FREE(top_page);
+-		vm_object_paging_end(src_top_object);
+-		vm_object_unlock(src_top_object);
+-	}
++	shared_region_pager_source_done(src_top_object, src_page, top_page);
+ 	return KERN_SUCCESS;
+ }
+ 
+@@ -778,11 +791,21 @@ retry_src_fault:
+ 				in_range = page_backing - pager->srp_slide_info->si_start;
+ 				window = in_range & ~((vm_object_offset_t)slide_info_page_size - 1);
+ 				window_buffer = kalloc_data(slide_info_page_size, Z_WAITOK);
++				/*
++				 * Copy the source page and release it (with its placeholder in the top object) before
++				 * reading its neighbours: a request for another page of this slide page holds that page
++				 * busy while it reads this one, so two faults in one slide page would wait on each other.
++				 */
++				bcopy((const char *)src_vaddr, (char *)window_buffer + (in_range - window), PAGE_SIZE);
++				vm_object_lock(src_page_object);
++				shared_region_pager_source_done(src_top_object, src_page, top_page);
++				src_page = VM_PAGE_NULL;
++				top_page = VM_PAGE_NULL;
+ 				kr = KERN_SUCCESS;
+ 				for (k = 0; k < slide_info_page_size && kr == KERN_SUCCESS; k += PAGE_SIZE) {
+ 					vm_object_offset_t want = pager->srp_slide_info->si_start + window + k;
+ 					if (want == page_backing) {
+-						bcopy((const char *)src_vaddr, (char *)window_buffer + k, PAGE_SIZE);
++						/* copied above */
+ 					} else if (want >= pager->srp_slide_info->si_end) {
+ 						bzero((char *)window_buffer + k, PAGE_SIZE);
+ 					} else {
+@@ -898,6 +921,9 @@ retry_src_fault:
+ 			shared_region_pager_slid++;
+ 		}
+ 
++		if (src_page == VM_PAGE_NULL) {
++			continue;       /* released by the slide page path */
++		}
+ 		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
+ 		assert(src_page->vmp_busy);
+ 		assert(src_page_object->paging_in_progress > 0);
+-- 
+2.53.0
+

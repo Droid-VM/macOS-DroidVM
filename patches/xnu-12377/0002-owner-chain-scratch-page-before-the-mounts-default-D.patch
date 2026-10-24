@@ -1,7 +1,7 @@
 From 7c7f30d256944c87cb0347763c306e4bfe68b91a Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 2/7] owner chain: scratch page before the mounts, default Data
+Subject: [PATCH 2/9] owner chain: scratch page before the mounts, default Data
  volume UUID, Data seed lookup through the verified block device, rootauth=0
  boot-arg
 

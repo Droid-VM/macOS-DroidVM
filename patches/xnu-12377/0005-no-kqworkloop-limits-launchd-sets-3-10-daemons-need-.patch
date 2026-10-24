@@ -1,7 +1,7 @@
 From 799147af3e189e3e68ed33e78a75f195c8a01b4e Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 5/7] no kqworkloop limits (launchd sets 3/10, daemons need
+Subject: [PATCH 5/9] no kqworkloop limits (launchd sets 3/10, daemons need
  more)
 
 ---

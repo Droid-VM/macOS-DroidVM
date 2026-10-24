@@ -1,16 +1,16 @@
-From ad5f8fc540a4a39d0fb108a9d59d6da763160a38 Mon Sep 17 00:00:00 2001
+From acbd6d4d47c7f5fe52fc3fe3e294841f1a72e7b0 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 6/7] Sandbox: macOS 27 userland vs the 26.5 kext
+Subject: [PATCH 6/9] Sandbox: macOS 27 userland vs the 26.5 kext
  (ENOENT/EINVAL on calls 0/1/22, ENOTSUP on 1/264 are ignored under
  mac-sandbox-permissive; sandbox-call-shift boot-arg)
 
 ---
- security/mac_base.c | 29 ++++++++++++++++++++++++-----
- 1 file changed, 24 insertions(+), 5 deletions(-)
+ security/mac_base.c | 42 +++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 37 insertions(+), 5 deletions(-)
 
 diff --git a/security/mac_base.c b/security/mac_base.c
-index 6dc2004..ce9db35 100644
+index 6dc2004..369a7e9 100644
 --- a/security/mac_base.c
 +++ b/security/mac_base.c
 @@ -1560,6 +1560,9 @@ mac_proc_check_mac_syscall(proc_t p, const char *target, int callnum)
@@ -61,7 +61,7 @@ index 6dc2004..ce9db35 100644
  				break;
  			}
  		}
-@@ -1620,9 +1636,10 @@ done:
+@@ -1620,9 +1636,23 @@ done:
  	 * the failed Sandbox call and let the process run unsandboxed.
  	 */
  	if (error != 0 && virt_mac_sandbox_permissive && strcmp(target, "Sandbox") == 0) {
@@ -70,12 +70,25 @@ index 6dc2004..ce9db35 100644
 -		if (((error == ENOENT || error == EINVAL) && (uap->call == 1 || uap->call == 22))) {
 +		/* calls 1 (apply) and 264 (a storage-class check dirhelper makes on the new folder, unknown to the 26.5 kext) answer ENOTSUP: "sandbox initialization failed: Operation not supported", the daemon exits 1 */
 +		bool ignore = ((error == ENOENT || error == EINVAL) && (uap->call == 0 || uap->call == 1 || uap->call == 22)) || (error == ENOTSUP && (uap->call == 1 || uap->call == 264));
-+		printf("sandbox-call: pid %d %s call %d error %d%s\n", proc_pid(p), proc_best_name(p), uap->call, error, ignore ? " (ignored)" : "");
++		/* each (pid, call, error) once: cfprefsd repeats call 4 / EPERM on every preference read and floods the console */
++		static struct { int pid, call, error; } reported[16];
++		static unsigned int reported_next;
++		bool seen = false;
++		for (unsigned int r = 0; r < 16 && !seen; r++) {
++			seen = reported[r].pid == proc_pid(p) && reported[r].call == uap->call && reported[r].error == error;
++		}
++		if (!seen) {
++			reported[reported_next % 16].pid = proc_pid(p);
++			reported[reported_next % 16].call = uap->call;
++			reported[reported_next % 16].error = error;
++			reported_next++;
++			printf("sandbox-call: pid %d %s call %d error %d%s\n", proc_pid(p), proc_best_name(p), uap->call, error, ignore ? " (ignored)" : "");
++		}
 +		if (ignore) {
  			error = 0;
  		}
  	}
-@@ -1840,6 +1857,8 @@ mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __
+@@ -1840,6 +1870,8 @@ mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __
  
  #endif /* !MAC */
  
