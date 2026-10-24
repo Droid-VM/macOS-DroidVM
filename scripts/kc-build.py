@@ -28,6 +28,7 @@ import kc_reloc  # noqa: E402
 PAGE = 0x4000
 NEW_BASE = 0xfffffff007004000        # VM_KERNEL_LINK_ADDRESS of the iOS-layout kernel (makedefs/MakeInc.def ARM64_LINK_ADDR)
 MH_DYLIB_IN_CACHE = 0x80000000
+NATIVE_HEADER_RESERVE = 0x1000   # a native kext's Mach-O header, before its __TEXT (DroidVMGpu's sections need more than 2 KiB)
 LC_SEGMENT_64, LC_SYMTAB, LC_DYSYMTAB, LC_UNIXTHREAD, LC_SPLIT_INFO, LC_FUNCTION_STARTS = 0x19, 2, 0xb, 5, 0x1e, 0x26
 LC_FILESET_ENTRY, LC_CHAINED_FIXUPS = 0x80000035, 0x80000034
 
@@ -113,12 +114,12 @@ def read_threaded_chains(kernel, image, flat):
     return sites
 
 
-def dependency_closure(info, roots):
+def dependency_closure(info, roots, exclude=()):
     by_id = {e['CFBundleIdentifier']: e for e in info}
     keep, todo = set(), list(roots)
     while todo:
         name = todo.pop()
-        if name in keep or name not in by_id:
+        if name in keep or name not in by_id or name in exclude:
             continue
         keep.add(name)
         todo.extend(by_id[name].get('OSBundleLibraries', {}))
@@ -140,7 +141,13 @@ def build(args):
     plist_entries_original = [dict(e) for e in plist['_PrelinkInfoDictionary']]
     natives = [json.loads(Path(p).read_text()) for p in args.native]
     roots = list(args.keep) + [lib for spec in natives for lib in spec['libraries']]
-    keep = dependency_closure(plist['_PrelinkInfoDictionary'], roots) & set(kc.entries)
+    # A description without "objects" is a codeless bundle: personalities for classes of the collection's kexts (its libraries).
+    codeless = [spec for spec in natives if 'objects' not in spec]
+    natives = [spec for spec in natives if 'objects' in spec]
+    # A native kext may stand in for kexts of the collection ("stands_in_for"): those stay out, and what the kept kexts reference in them
+    # (branches, pointers) is rebound by name to the stand-in's symbols, which also replaces them as a library (see stand_in()).
+    stand_ins = {name: spec for spec in natives for name in spec.get('stands_in_for', [])}
+    keep = dependency_closure(plist['_PrelinkInfoDictionary'], roots, stand_ins) & set(kc.entries)
     print(f'keeping {len(keep)} kexts: {sorted(keep)}')
 
     # 1. Clear every segment of the old kernel and of the dropped kexts (everything but their shared LINKEDIT).
@@ -225,26 +232,34 @@ def build(args):
                 return name
         return None
 
+    kext_targets = set()   # sites whose target is in a kext: only these can point into a stood-in kext (the new kernel overlaps old kext addresses)
     for site, value, target, auth, diversity, addr_div, key in kc.chained_sites():
         if owner(site):
             kext_sites.append((site + shift, remap.map(target) if remap.in_old_kernel(target) else target + shift, auth, diversity, addr_div, key))
+            if not remap.in_old_kernel(target):
+                kext_targets.add(site + shift)
     kept_old_sites = {s[0]: s[1] for s in kext_sites}
     print(f'kexts: {len(kext_sites)} chained pointers')
 
     # Kexts of our own (drivers that derive from classes of the collection's kexts): link, place, describe.
     native_entries, native_commands = [], []
     if natives:
-        exported = {}
+        exported, private = {}, {}
         for name in sorted(keep):
             for symbol, kind, sect, desc, value in kc.symbols(kc.macho(name)):
                 if kind & 0x0f == 0x0f and not kind & 0xe0:
                     exported.setdefault(symbol, []).append(value + shift)
+                elif kind & 0xef == 0x0e:   # a local of a kext: what a derived class's vtable names may be private there
+                    private.setdefault(name, {})[symbol] = value + shift
 
         def resolve(symbol):
             found = new_symbols.get(symbol, [])
             if len(found) == 1:
                 return found[0]
             found = exported.get(symbol, [])
+            if len(found) == 1:
+                return found[0]
+            found = [private[library][symbol] for library in current['libraries'] if symbol in private.get(library, {})]
             return found[0] if len(found) == 1 else None
 
         used = [(new_off(s['va']), new_off(s['va']) + s['size']) for s in placed]
@@ -271,10 +286,12 @@ def build(args):
             used.append((cursor, cursor + size))
             return NEW_BASE + cursor
 
+        current = {}
         for spec in natives:
+            current = spec   # resolve() also takes locals of the kexts this one links against
             objects = json.loads(Path(spec['objects']).read_text())
             try:
-                linked = kc_native.link(objects, resolve, allocate, 0x800, 0xd0, spec['start'], spec['stop'])
+                linked = kc_native.link(objects, resolve, allocate, NATIVE_HEADER_RESERVE, 0xd0, spec['start'], spec['stop'])
             except kc_native.LinkError as problem:
                 raise SystemExit(f'{spec["bundle"]}: {problem}')
             segs = linked['segments']
@@ -301,6 +318,8 @@ def build(args):
                 '_PrelinkExecutableLoadAddr': to_signed(text_va), '_PrelinkExecutableSourceAddr': to_signed(text_va),
                 '_PrelinkExecutableSize': len(segs['__TEXT']['data']), '_PrelinkKmodInfo': to_signed(data_va)})
             print(f'{spec["bundle"]}: linked, header at {text_va:#x}, {len(linked["sites"])} pointers')
+            spec['_symbols'] = linked['symbols']
+        stand_in(kc, image, keep, stand_ins, kext_sites, kext_targets, shift, old_off)
 
     # 4. Chains: every pointer of the collection is a format-8 chained rebase, encoded per page.
     sites = {}
@@ -322,18 +341,34 @@ def build(args):
     keep_ids = keep | {'com.apple.kernel'}
     resources = {e['CFBundleIdentifier'] for e in plist['_PrelinkInfoDictionary'] if e.get('OSKernelResource')}
     entries = []
+    # "patch_personalities" of a native kext: {bundle: {personality: {key: value}}} merged into kept kexts' personalities (e.g. a resource
+    # gate that orders a collection driver after ours).
+    patches = [(bundle, changes) for spec in natives + codeless for bundle, changes in spec.get('patch_personalities', {}).items()]
     for entry in plist['_PrelinkInfoDictionary']:
         name = entry['CFBundleIdentifier']
+        for bundle, changes in patches:
+            if bundle == name:
+                for personality, values in changes.items():
+                    entry['IOKitPersonalities'][personality].update(values)
         if name in keep:
             for key in ('_PrelinkExecutableLoadAddr', '_PrelinkExecutableSourceAddr', '_PrelinkKmodInfo'):
                 if key in entry:
                     entry[key] += shift
+            libraries = entry.get('OSBundleLibraries', {})
+            for library in [lib for lib in libraries if lib in stand_ins]:
+                del libraries[library]
+                libraries[stand_ins[library]['bundle']] = stand_ins[library].get('version', '1.0.0')
             entries.append(entry)
         elif entry.get('OSKernelResource'):
             entries.append(entry)        # the kernel's pseudo-extensions (com.apple.kpi.*), which kexts list as libraries
         elif '_PrelinkExecutableLoadAddr' not in entry and set(entry.get('OSBundleLibraries', {})) <= (keep | resources):
             entries.append(entry)        # personality-only bundles whose libraries survive
     entries.extend(native_entries)
+    entries.extend({'CFBundleIdentifier': spec['bundle'], 'CFBundleName': spec['name'], 'CFBundleVersion': spec.get('version', '1.0.0'),
+                    'CFBundleShortVersionString': spec.get('version', '1.0.0'), 'CFBundlePackageType': 'KEXT',
+                    'CFBundleInfoDictionaryVersion': '6.0', 'OSBundleRequired': 'Root', 'OSBundleLibraries': spec['libraries'],
+                    'IOKitPersonalities': spec['personalities'], '_PrelinkBundlePath': f'/System/Library/Extensions/{spec["name"]}.kext'}
+                   for spec in codeless)
     plist['_PrelinkInfoDictionary'] = entries
     blob = plistlib.dumps(plist, fmt=plistlib.FMT_XML) + b'\0'
     info_size = up(len(blob))
@@ -419,11 +454,14 @@ def build(args):
     kmod_info = {e['CFBundleIdentifier']: e['_PrelinkKmodInfo'] for e in plist_entries_original if '_PrelinkKmodInfo' in e}
     for text_va, segs, spec in native_commands:
         header = kext_header(segs, uuid.uuid5(uuid.NAMESPACE_URL, spec['bundle']).bytes, shared_start, linkedit_end)
-        if len(header) > 0x800:
+        if len(header) > NATIVE_HEADER_RESERVE:
             raise SystemExit('native kext header outgrew its reserve')
         image[new_off(text_va):new_off(text_va) + len(header)] = header
     for name in keep:
-        shift_entry(kc, image, name, old_off, shift, shared_start, linkedit_end)
+        try:
+            shift_entry(kc, image, name, old_off, shift, shared_start, linkedit_end)
+        except struct.error as problem:
+            raise SystemExit(f'{name}: its header could not be moved: {problem}')
         # kmod_info_t is packed: address sits at +156 and is the one raw (unchained) absolute address a kext carries; OSKext adds the slide to it
         at = old_off(kmod_info[name] & (2 ** 64 - 1)) + 156
         address, = struct.unpack_from('<Q', image, at)
@@ -464,6 +502,53 @@ def build(args):
     image[0:0x4000] = head + blob_cmds + bytes(0x4000 - 32 - len(blob_cmds))
     Path(args.output).write_bytes(image)
     print(f'wrote {args.output}: {len(image):#x} bytes, base {NEW_BASE:#x}, {len(sites)} chained pointers')
+
+
+def stand_in(kc, image, keep, stand_ins, kext_sites, kext_targets, shift, old_off):
+    """Rebind what the kept kexts reference in the stood-in kexts (chained pointers, b/bl) to the stand-in's symbols of the same names."""
+    if not stand_ins:
+        return
+    ranges, names = [], {}
+    for name, spec in stand_ins.items():
+        for segment in kc.macho(name)['segments']:
+            if segment['size'] and segment['name'] != '__LINKEDIT':
+                ranges.append((segment['va'] + shift, segment['va'] + segment['size'] + shift, spec))
+        for symbol, kind, sect, desc, value in kc.symbols(kc.macho(name)):
+            if value and sect:
+                names.setdefault(value + shift, []).append(symbol)
+    inside = lambda va: next((spec for low, high, spec in ranges if low <= va < high), None)   # noqa: E731
+    missing = set()
+
+    def rebind(va, spec):
+        for symbol in names.get(va, []):
+            if symbol in spec['_symbols']:
+                return spec['_symbols'][symbol]
+        missing.add('/'.join(names.get(va, [hex(va)])))
+        return va
+
+    pointers = 0
+    for index, (va, target, *rest) in enumerate(kext_sites):
+        spec = inside(target) if va in kext_targets else None
+        if spec:
+            kext_sites[index] = (va, rebind(target, spec), *rest)
+            pointers += 1
+    branches = 0
+    for name in sorted(keep):
+        text = next(s for s in kc.macho(name)['segments'] if s['name'] == '__TEXT_EXEC')
+        at = old_off(text['va'])
+        for i, word in enumerate(struct.unpack_from(f'<{text["size"] // 4}I', image, at)):
+            pc = text['va'] + shift + i * 4
+            target = kc_reloc.branch_target(word, pc)
+            spec = inside(target) if target is not None and target in names else None   # not exactly a symbol: data (as kc_reloc)
+            if spec:
+                delta = rebind(target, spec) - pc
+                if delta & 3 or not -(1 << 27) <= delta < (1 << 27):
+                    raise SystemExit(f'{name}: the branch at {pc:#x} cannot reach the stand-in')
+                struct.pack_into('<I', image, at + i * 4, word & 0xfc000000 | (delta >> 2) & 0x3ffffff)
+                branches += 1
+    if missing:
+        raise SystemExit('stand-ins lack: ' + ', '.join(sorted(missing)))
+    print(f'stand-ins for {sorted(stand_ins)}: {pointers} pointers and {branches} branches rebound')
 
 
 def check_vtable(kc, linked, kept_sites, spec, shift, old_off):
