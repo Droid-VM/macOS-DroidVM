@@ -1,0 +1,39 @@
+diff --git a/NativeVirtioBlock.cpp b/NativeVirtioBlock.cpp
+index 0d1a147..18def38 100644
+--- a/NativeVirtioBlock.cpp
++++ b/NativeVirtioBlock.cpp
+@@ -159,7 +159,7 @@ bool NativeVirtioBlock::reset()
+   online = false;
+   write32(0x70, 0);
+   uint64_t deadline;
+-  clock_interval_to_deadline(1000, kMillisecondScale, &deadline);
++  clock_interval_to_deadline(30000, kMillisecondScale, &deadline);
+   while (read32(0x70)) {
+     if (mach_absolute_time() >= deadline) return false;
+     IODelay(1);
+@@ -470,7 +470,7 @@ IOReturn NativeVirtioBlock::readSectors(uint64_t sector, uint32_t bytes)
+   write32(0x50, 0);
+   auto *used = reinterpret_cast<volatile uint16_t *>(queue + 256);
+   uint64_t deadline;
+-  clock_interval_to_deadline(1000, kMillisecondScale, &deadline);
++  clock_interval_to_deadline(30000, kMillisecondScale, &deadline);
+   while (used[1] == usedIndex) {
+     if (mach_absolute_time() >= deadline) {
+       reset();
+@@ -522,7 +522,16 @@ bool NativeVirtioBlock::start(IOService *provider)
+   __atomic_fetch_add(&native_virtio_verified_devices, 1, __ATOMIC_RELAXED);
+ #endif
+   native_virtio_read_checkpoint(this);
++  // port: APFS deadlocks when it mounts two containers at once (the three devices are published together on a busy host): publish
++  // one device at a time, highest MMIO address first (the root volume is the first device, so everything it unions with is there
++  // when it appears), and give each container a moment to mount before the next one appears
++  static volatile uint32_t published;
++  uint64_t slot = mapping->getPhysicalAddress();
++  uint32_t rank = slot >= 0xa000000 && slot <= 0xa002000 ? static_cast<uint32_t>((0xa002000 - slot) >> 12) : 0;
++  for (unsigned waited = 0; published != rank && waited < 20000; waited += 10) IOSleep(10);
+   registerService();
++  IOSleep(1500);
++  OSIncrementAtomic(reinterpret_cast<volatile SInt32 *>(&published));
+   return true;
+ }
+ 
