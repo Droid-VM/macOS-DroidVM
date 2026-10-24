@@ -6,14 +6,18 @@ SECS=$1; shift; ARGS=(); while [ $# -gt 0 ] && [ "$1" != -- ]; do ARGS+=("$1"); 
 [ $# -gt 0 ] || set -- $(cat configs/kc-keep.txt)
 export MACOS_LP_SIP0=${MACOS_LP_SIP0-0x2}   # CSR_ALLOW_UNRESTRICTED_FS: the dyld cache has no SF_RESTRICTED (temporary, docs/xnu-12377-port.md)
 NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json overlay/kext/NativeAES.json overlay/kext/NativeRamBlock.json}
+[ "${MACOS_IOFB:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMFramebuffer.json"   # fallback display (IOBootFramebuffer); the route is IOMFB
+[ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/ARMPlatformStandIn.json overlay/kext/DroidVMDisplay.json"   # the IOMFB display; register/prepare with it too (ADT node)
+[ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMEthernet.json"   # en0 for the TimeSync clock ID: WindowServer waits on clocksyncd without one
+[ "${MACOS_GPU:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMGpu.json"   # build first: scripts/build-droidvm-gpu.py
 K=out/x12377/kernel12377e-osx-kc.macho; KC=out/x12377/kc12377e-m2.bin
 llvm-nm -n --defined-only $K > out/rig/kc12377e-m2.nm
-python3 scripts/kc-build.py out/kc/kc265.bin $K $KC --keep "$@" ${NATIVE:+--native $NATIVE} 2>&1 | grep -E "Unresolv|Error|not defined|wrote|Traceback" | cut -c1-300 || exit 1
+python3 scripts/kc-build.py out/kc/kc265.bin $K $KC --keep "$@" ${NATIVE:+--native $NATIVE} 2>&1 | grep -E "Unresolv|Error|not defined|lack|wrote|Traceback" | cut -c1-300; [ "${PIPESTATUS[0]}" = 0 ] || exit 1   # never boot a stale KC
 sleep 12
 for try in 1 2 3; do
   DMESG_LINES=3000 MACOS_KERNEL=$PWD/$KC timeout 400 scripts/xnu12377-smoke.sh $SECS "${ARGS[@]}" > /tmp/smoke.out 2>&1
   grep -q "failed to start VM" /tmp/smoke.out || break   # the previous VM is still shutting down
   sleep 30
 done
-scripts/kc-panic.sh 500
+scripts/kc-panic.sh 6000 | grep -a -v "PC=0x0000000000000000" | head -${PANIC_LINES:-110}   # zone report, backtrace, kexts in backtrace
 grep -a -v "FIPSPOST\|DebuggerXCall\|magazine" /tmp/smoke.out | tail -${TAIL:-20} | cut -c1-220

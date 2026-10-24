@@ -1,0 +1,41 @@
+{
+  "name": "DroidVMEthernet",
+  "bundle": "com.unixnu.driver.DroidVMEthernet",
+  "version": "1.0.0",
+  "objects": "out/x12377/native-kexts/DroidVMEthernet/objects.json",
+  "start": "_native_kext_start",
+  "stop": "_native_kext_stop",
+  "libraries": {
+    "com.apple.iokit.IONetworkingFamily": "1.0.0b1",
+    "com.apple.kpi.bsd": "18.0.0",
+    "com.apple.kpi.iokit": "18.0.0",
+    "com.apple.kpi.libkern": "18.0.0",
+    "com.apple.kpi.mach": "18.0.0",
+    "com.apple.kpi.unsupported": "18.0.0"
+  },
+  "personalities": {
+    "DroidVMEthernet": {
+      "CFBundleIdentifier": "com.unixnu.driver.DroidVMEthernet",
+      "IOClass": "DroidVMEthernet",
+      "IOProviderClass": "IOResources",
+      "IOResourceMatch": "IOBSD",
+      "IOMatchCategory": "DroidVMEthernet"
+    }
+  },
+  "patch_personalities": {
+    "com.apple.iokit.IOTimeSyncFamily": {
+      "IOTimeSyncRootService": {
+        "IOResourceMatch": "DroidVMEthernet"
+      }
+    }
+  },
+  "vtable": {
+    "class": "DroidVMEthernet",
+    "base": "IOEthernetController",
+    "base_kext": "com.apple.iokit.IONetworkingFamily",
+    "slots": 400,
+    "ignore_slots": [
+      16
+    ]
+  }
+}

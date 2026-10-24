@@ -8,3 +8,5 @@ com.apple.filesystems.apfs
 com.apple.AppleFSCompression.AppleFSCompressionTypeZlib
 com.apple.AppleFSCompression.AppleFSCompressionTypeDataless
 com.apple.iokit.IOHIDFamily
+com.apple.iokit.IOTimeSyncFamily
+com.apple.plugin.IOgPTPPlugin
