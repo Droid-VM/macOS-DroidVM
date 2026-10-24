@@ -2,8 +2,9 @@
 """Print the XNU message buffer (struct msgbuf at _msgbufp) of the macOS VM running on the phone, from the host side.
 
 Adapted from ios tools/rig/{peek,dmesg}.py (ios commit 9a1e72d). The kernel is mapped linearly from DarwinBoot's hand-off
-(KERNEL_VA -> KERNEL_PA, the console line "DARWINBOOT: ARM64 va= pa=" of the run's serial.log); guest PA -> host address goes
-through the crosvm_guest memfd mapping whose file offset is PA - 0x80000000. Needs root on the phone (su).
+(KERNEL_VA -> KERNEL_PA, the console line "DARWINBOOT: ARM64 va= pa=" of the run's serial.log); other kernel addresses (the heap,
+e.g. a msgbuf= buffer) are translated through the kernel pmap's tables (kernel_pmap_store's root, 4 KiB granule, 39-bit L1 root).
+Guest PA -> host address goes through the crosvm_guest memfd mapping whose file offset is PA - 0x80000000. Needs root on the phone (su).
 
   rig-dmesg.py SERIAL_LOG [--serial ADB_SERIAL]
   rig-dmesg.py --peek SYMBOL|va:HEX|0xPA [LENGTH] SERIAL_LOG
@@ -21,6 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 KERNEL = Path(os.environ.get('MACOS_KERNEL', ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'))
 MEMFD_GUEST_BASE = 0x80000000
+KERNELCACHE_SPAN = 0x6000000   # the fileset kernelcache the hand-off maps linearly
 
 
 class Phone:
@@ -73,7 +75,29 @@ class Phone:
             raise SystemExit(f'guest PA {pa:#x} is not in a crosvm_guest mapping')
         self.adb(f"printf '\\x{value:02x}' | dd of=/proc/{pid}/mem bs=1 seek={address} count=1 conv=notrunc 2>&1")
 
+    def translate(self, va):
+        """Kernel VA -> guest PA: linear for the kernelcache, else a walk of the kernel pmap (L1 -> L2 -> L3, 4 KiB pages)."""
+        if 0 <= va - self.kernel_va < KERNELCACHE_SPAN:
+            return va - self.kernel_va + self.kernel_pa
+        if not hasattr(self, 'root'):
+            self.root = struct.unpack('<Q', self.read('va:%x' % (self.symbol('kernel_pmap_store') + 8), 8)[1])[0]   # pmap.ttep
+        table = self.root
+        for level, shift in ((1, 30), (2, 21), (3, 12)):
+            entry = struct.unpack('<Q', self.read('%#x' % (table + ((va >> shift) & 0x1ff) * 8), 8)[1])[0]
+            if not entry & 1:
+                raise SystemExit(f'va {va:#x}: level {level} entry {entry:#x} is invalid')
+            address = entry & 0x0000fffffffff000
+            if level == 3 or not entry & 2:   # a page, or a block at level 1/2
+                return (address & ~((1 << shift) - 1)) | (va & ((1 << shift) - 1))
+            table = address
+
     def read(self, target, length):
+        if target.startswith('va:') and not 0 <= int(target[3:], 16) - self.kernel_va < KERNELCACHE_SPAN:
+            va, data = int(target[3:], 16), b''   # not linear: page by page
+            while len(data) < length:
+                chunk = min(length - len(data), 0x1000 - (va + len(data)) % 0x1000)
+                data += self.read('%#x' % self.translate(va + len(data)), chunk)[1]
+            return self.translate(va), data
         if target.startswith('0x'):
             pa = int(target, 16)
         else:

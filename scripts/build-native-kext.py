@@ -23,13 +23,15 @@ parser.add_argument('-D', dest='defines', action='append', default=[], help='NAM
 parser.add_argument('--obj', default='e-obj', help='kernel object tree under out/x12377/build/xnu')
 args = parser.parse_args()
 tree = X / 'build/xnu' / args.obj / 'DEVELOPMENT_ARM64_BCM2837'
-record = json.JSONDecoder().raw_decode((tree / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text())[0]
+recipes = {suffix: json.JSONDecoder().raw_decode((tree / name).read_text())[0]   # C sources build like the kernel's C files
+           for suffix, name in (('.cpp', 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'), ('.c', 'bsd/DEVELOPMENT/bsd_init.o.json'))}
 out = X / 'native-kexts' / args.name
 out.mkdir(parents=True, exist_ok=True)
 objects = []
 for source in args.sources:
     source = Path(source).resolve()
     destination = out / (source.stem + '.o')
+    record = recipes['.c' if source.suffix == '.c' else '.cpp']
     command, arguments, index = [], record['arguments'], 0
     while index < len(arguments):
         value = arguments[index]
