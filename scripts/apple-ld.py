@@ -24,8 +24,7 @@ MEMBER = './Library/Developer/CommandLineTools/usr/bin/ld-classic'
 
 def install():
     config = json.loads((TOOLCHAIN / 'bin/linux-toolchain.json').read_text())['appleclang']['sources']['apple']
-    package = next(p for p in [TOOLCHAIN / 'appleclang' / config['file'], ROOT.parent / 'ios/out/gunyah-linux/appleclang' / config['file']]
-                   if p.is_file())
+    package = TOOLCHAIN / 'appleclang' / config['file']   # the CLTools package the toolchain's clang came from (sha256 in the config)
     stream = package.open('rb')
     stream.seek(config['payload_offset'])
     if stream.read(4) != b'pbzx':
