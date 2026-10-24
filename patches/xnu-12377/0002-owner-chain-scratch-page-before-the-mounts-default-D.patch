@@ -1,0 +1,125 @@
+From ee9594a34ea30d177e93833c913157ad72b27491 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 00:52:10 -0400
+Subject: [PATCH 2/7] owner chain: scratch page before the mounts, default Data
+ volume UUID, Data seed lookup through the verified block device, rootauth=0
+ boot-arg
+
+---
+ bsd/kern/bsd_init.c      |  9 ++++++++
+ bsd/kern/kern_exec.c     |  8 ++++---
+ osfmk/kern/link_compat.c | 48 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 62 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 5bc65a1..265ef59 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1074,6 +1074,15 @@ bsd_init(void)
+ 		require_rootauth = TRUE;
+ #endif // XNU_TARGET_OS_OSX && defined(__arm64__)
+ 
++#ifdef BCM2837
++		{
++			/* port: no boot manifest here to authenticate the sealed system volume against; rootauth=0 mounts it unauthenticated (see docs, owner policy) */
++			int rootauth = 1;
++			if (PE_parse_boot_argn("rootauth", &rootauth, sizeof(rootauth)) && rootauth == 0) {
++				require_rootauth = FALSE;
++			}
++		}
++#endif
+ 		if (require_rootauth) {
+ 			/* enforce sealedness */
+ 			int autherr = VNOP_IOCTL(rootvnode, FSIOC_KERNEL_ROOTAUTH, NULL, 0, vfs_context_kernel());
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index cb4882e..3edad4b 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8122,7 +8122,8 @@ done:
+ #endif
+ #if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+ #ifndef XNU_OWNER_DATA_VOLUME_UUID
+-#error Supply the observed scratch volume UUID for the IOKit backend
++/* the volume of the Data seed (scripts/make-macos-data-seed.sh VOLUME_UUID) */
++#define XNU_OWNER_DATA_VOLUME_UUID "8748FE31-7E7F-4BFA-A7E2-7A4F5E14D0F6"
+ #endif
+ extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
+ #endif
+@@ -8449,6 +8450,9 @@ load_init_program(proc_t p)
+ 	mach_vm_offset_t scratch_addr = 0;
+ 	mach_vm_size_t map_page_size = vm_map_page_size(map);
+ 
++	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size,
++	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
++
+ #if DEVELOPMENT || DEBUG
+ 	user_addr_t init_envp = USER_ADDR_NULL;
+ #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+@@ -8474,8 +8478,6 @@ load_init_program(proc_t p)
+ 	exec_log_handle = os_log_create("com.apple.xnu.bsd", "exec");
+ #endif /* DEVELOPMENT || DEBUG */
+ 
+-	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size,
+-	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
+ #if CONFIG_MEMORYSTATUS
+ 	(void) memorystatus_init_at_boot_snapshot();
+ #endif /* CONFIG_MEMORYSTATUS */
+diff --git a/osfmk/kern/link_compat.c b/osfmk/kern/link_compat.c
+index ecc09d8..4bd4aff 100644
+--- a/osfmk/kern/link_compat.c
++++ b/osfmk/kern/link_compat.c
+@@ -35,3 +35,51 @@ pid_hibernate(void *p, void *args, int *ret)
+ 
+ /* Bring-up breadcrumb: the last boot step reached, read from the host with rig-dmesg.py --peek port_crumb. */
+ volatile unsigned long long port_crumb;
++
++/* Fault record of the exception that could not be spilled: ESR, ELR, FAR, SP, flag (locore.s). */
++volatile unsigned long long port_exc[8];
++
++#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
++/*
++ * port: the owner chain of kern_exec.c (union-mount of the SystemOS volume over /) asks the verified block driver whether a device is the
++ * authenticated one. There is no verified build of the block driver here yet (docs: boot chain, owner policy), so every device is.
++ */
++int
++native_verified_block_root_authorized(unsigned int device)
++{
++	(void)device;
++	return 1;
++}
++
++#include <libkern/crypto/sha2.h>
++/* the manifest digest of a volume: SHA-384 of its UUID text, standing in for the manifest of the verified block driver */
++int
++native_verified_block_manifest_sha384(unsigned int device, const char *uuid, uint8_t digest[48])
++{
++	SHA384_CTX context;
++	(void)device;
++	SHA384_Init(&context);
++	SHA384_Update(&context, uuid, strlen(uuid));
++	SHA384_Final(digest, &context);
++	return 1;
++}
++
++#endif
++
++/*
++ * The Data volume's seed lookup of the fork (its NativeRamBlock driver answers it, with the seed digest the owner policy checks): here the
++ * driver is a kext, and the volume is found like the SystemOS one, by the UUID of its IOMedia. No digest: the policy of this port is stubbed.
++ */
++extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
++int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
++int
++native_ram_block_volume_seed(const char *uuid, dev_t *device, char *path, size_t length, uint64_t *base, uint64_t *size, uint8_t *digest)
++{
++	if (!native_verified_block_volume_device(uuid, device, path, length)) {
++		return 0;
++	}
++	*base = 0;
++	*size = 4096;     /* only checked to be nonzero and page aligned */
++	bzero(digest, 32);
++	return 1;
++}
+-- 
+2.53.0
+

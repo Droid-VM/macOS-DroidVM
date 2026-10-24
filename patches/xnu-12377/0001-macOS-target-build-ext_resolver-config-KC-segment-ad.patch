@@ -1,0 +1,191 @@
+From 6d7a09f175ec942be4f6fb10d6b59dd4edbb063a Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 00:52:10 -0400
+Subject: [PATCH 1/7] macOS target build: ext_resolver config, KC segment
+ addresses, arm64e PAC defines, kext kalloc type views, 4 KiB contiguous-hint
+ and CTRR fallbacks, DriverKit sed
+
+---
+ bsd/kern/ubc_subr.c             |  3 ++-
+ config/MASTER.arm64.bcm2837     |  4 ++--
+ iokit/DriverKit/Makefile        |  3 +++
+ libkern/os/base.h               |  5 +++++
+ makedefs/MakeInc.def            |  4 ++--
+ osfmk/arm64/arm_vm_init.c       | 10 ++++++++++
+ osfmk/arm64/machine_routines.c  |  7 +++++++
+ osfmk/kern/kalloc.c             | 13 +++++++++++++
+ pexpert/pexpert/arm64/BCM2837.h |  5 +++++
+ 9 files changed, 49 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/kern/ubc_subr.c b/bsd/kern/ubc_subr.c
+index 96150a8..ef98eb4 100644
+--- a/bsd/kern/ubc_subr.c
++++ b/bsd/kern/ubc_subr.c
+@@ -105,6 +105,7 @@ static void ubc_cs_free(struct ubc_info *uip);
+ static boolean_t ubc_cs_supports_multilevel_hash(struct cs_blob *blob);
+ static kern_return_t ubc_cs_convert_to_multilevel_hash(struct cs_blob *blob);
+ #if defined(XNU_NATIVE_CS_HASH_CACHE) && XNU_NATIVE_CS_HASH_CACHE
++#include <mach/mach_vm.h>   /* mach_vm_protect */
+ static int cs_native4k_prepare(vnode_t vp, struct cs_blob *blob);
+ #endif
+ 
+@@ -5953,7 +5954,7 @@ cs_native4k_prepare(vnode_t vp, struct cs_blob *blob)
+ 			memcpy((void *)(storage + index * md->cs_size), digest, md->cs_size);
+ 		}
+ 	}
+-	kr = vm_map_protect(kernel_map, storage, storage + allocation, VM_PROT_READ, TRUE);
++	kr = mach_vm_protect(kernel_map, storage, allocation, TRUE, VM_PROT_READ);
+ 	if (kr != KERN_SUCCESS) {
+ 		error = EPERM;
+ 		goto out;
+diff --git a/config/MASTER.arm64.bcm2837 b/config/MASTER.arm64.bcm2837
+index 5c66c91..a10a62b 100644
+--- a/config/MASTER.arm64.bcm2837
++++ b/config/MASTER.arm64.bcm2837
+@@ -33,7 +33,7 @@
+ #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel config_imgsrc_access ]
+ #  BSD_DEV =        [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEV ]
+ #  BSD_DEBUG =      [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEBUG ]
+-#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs]
++#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver]
+ #  FILESYS_RELEASE= [ FILESYS_BASE ]
+ #  FILESYS_DEV =    [ FILESYS_BASE fdesc config_union_mounts ]
+ #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc config_union_mounts ]
+@@ -93,7 +93,7 @@
+ #  VM_DEV =         [ VM_BASE dynamic_codesigning ubsan_minimal VM_EXTRA_DEV ]
+ #  VM_DEBUG =       [ VM_BASE dynamic_codesigning ubsan_minimal VM_EXTRA_DEV ]
+ #  VM_KASAN =       [ VM_BASE dynamic_codesigning config_kasan config_ubsan config_kcov config_ksancov kernel_tagging kernel_tbi]
+-#  SECURITY_BASE =    [ config_macf kernel_integrity config_secure_bsd_root reslide_shared_cache ]
++#  SECURITY_BASE =    [ config_macf config_audit kernel_integrity config_csr config_csr_from_dt config_secure_bsd_root config_supplemental_signatures second_static_trust_cache reslide_shared_cache ]
+ #  SECURITY_RELEASE = [ SECURITY_BASE ]
+ #  SECURITY_DEV =     [ SECURITY_BASE config_setuid config_kas_info ]
+ #  SECURITY_DEBUG =   [ SECURITY_BASE config_setuid config_kas_info ]
+diff --git a/iokit/DriverKit/Makefile b/iokit/DriverKit/Makefile
+index d456318..8e1ccc4 100644
+--- a/iokit/DriverKit/Makefile
++++ b/iokit/DriverKit/Makefile
+@@ -60,6 +60,9 @@ $(GENERATED_HEADERS) : \
+ 	%.h : %.iig
+ 	@$(LOG_IIG) "$@"
+ 	$(_v)$(IIG) --def $< --header $@ --impl $(patsubst %.h,%.iig.cpp,$@) --framework-name DriverKit ${OTHER_IIG_FLAGS} -- ${OTHER_IIG_CFLAGS} $(_vstdout)
++	@# port: without Apple clang's __builtin_load_member_function_pointer iig falls back to a union pun, which keeps the member function pointer's
++	@# pointer-auth discriminator and then fails the call through the C function pointer type; OSMemberFunctionCast resigns it correctly
++	$(_v)sed -i 's|^#define SimpleMemberFunctionCast(cfnty, self, func) ({ union.*$$|#define SimpleMemberFunctionCast(cfnty, self, func) OSMemberFunctionCast(cfnty, \&(self), func)|' $(patsubst %.h,%.iig.cpp,$@)
+ 
+ $(GENERATED_IMPL) : $(GENERATED_HEADERS)
+ 
+diff --git a/libkern/os/base.h b/libkern/os/base.h
+index 243507d..0e60280 100644
+--- a/libkern/os/base.h
++++ b/libkern/os/base.h
+@@ -355,7 +355,12 @@ typedef void (^os_block_t)(void);
+ #if __has_feature(ptrauth_calls)
+ #include <ptrauth.h>
+ #define OS_PTRAUTH_SIGNED_PTR(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type))
++#if defined(__apple_build_version__)
+ #define OS_PTRAUTH_SIGNED_PTR_AUTH_NULL(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type), "authenticates-null-values")
++#else
++/* upstream LLVM 21 has no "authenticates-null-values" option; null stays unsigned (only xnu-private fields use this) */
++#define OS_PTRAUTH_SIGNED_PTR_AUTH_NULL(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type))
++#endif
+ #define OS_PTRAUTH_DISCRIMINATOR(str) ptrauth_string_discriminator(str)
+ #define __ptrauth_only
+ #else //  __has_feature(ptrauth_calls)
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index 200e3c2..c3969ff 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -1036,8 +1036,8 @@ LDFLAGS_KERNEL_PROFILEX86_64H = $(LDFLAGS_KERNEL_RELEASEX86_64H)
+ LDFLAGS_KERNEL_GENARM64 = \
+ 	-Wl,-pie \
+ 	-Wl,-static \
+-	-Wl,-segaddr,__PRELINK_TEXT,$(ARM64_PLKSEG_ADDR) \
+-	-Wl,-image_base,$(ARM64_LINK_ADDR) \
++	$(if $(XNU_KC_SEGADDRS),,-Wl,-segaddr,__PRELINK_TEXT,$(ARM64_PLKSEG_ADDR)) \
++	$(if $(XNU_KC_SEGADDRS),$(XNU_KC_SEGADDRS),-Wl,-image_base,$(ARM64_LINK_ADDR)) \
+ 	\
+ 	-Wl,-rename_section,__HIB,__text,__TEXT_EXEC,__hib_text \
+ 	\
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index e41237f..d856a65 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -1682,6 +1682,16 @@ arm_vm_prot_finalize(boot_args * args __unused)
+ 	}
+ 
+ 	/* tighten permissions on kext read only data and code */
++#ifdef BCM2837
++	/*
++	 * port: with 4 KiB pages the kernel's own __TEXT, which sits inside the collection's __PRELINK_TEXT, is large enough to have been
++	 * mapped with the contiguous hint; re-protecting it here without the hint trips the active-mapping assert. It is already RNX.
++	 */
++	if (kernel_mach_header_is_in_fileset(&_mh_execute_header) && segTEXTB >= segPRELINKTEXTB && segTEXTB + segSizeTEXT <= segPRELINKTEXTB + segSizePRELINKTEXT) {
++		arm_vm_page_granular_RNX(segPRELINKTEXTB, segTEXTB - segPRELINKTEXTB, ARM64_GRANULE_ALLOW_BLOCK);
++		arm_vm_page_granular_RNX(segTEXTB + segSizeTEXT, segPRELINKTEXTB + segSizePRELINKTEXT - (segTEXTB + segSizeTEXT), ARM64_GRANULE_ALLOW_BLOCK);
++	} else
++#endif
+ 	arm_vm_page_granular_RNX(segPRELINKTEXTB, segSizePRELINKTEXT, ARM64_GRANULE_ALLOW_BLOCK);
+ 	arm_vm_page_granular_RNX(segPLKDATACONSTB, segSizePLKDATACONST, ARM64_GRANULE_ALLOW_BLOCK);
+ 
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index ac03c45..20d564f 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -3400,6 +3400,13 @@ ml_unsafe_kernel_text_init(void)
+ 		_unsafe_kernel_text_initialized = true;
+ 		_unsafe_kernel_text = (0 == *(const int *)value);
+ 	}
++#ifdef BCM2837
++	else {
++		/* port: the device tree carries no iBoot CTRR property; kernel text is never writable here */
++		_unsafe_kernel_text_initialized = true;
++		_unsafe_kernel_text = false;
++	}
++#endif
+ }
+ STARTUP(TUNABLES, STARTUP_RANK_FIRST, ml_unsafe_kernel_text_init);
+ 
+diff --git a/osfmk/kern/kalloc.c b/osfmk/kern/kalloc.c
+index 5d37de5..94e3292 100644
+--- a/osfmk/kern/kalloc.c
++++ b/osfmk/kern/kalloc.c
+@@ -1009,7 +1009,20 @@ kalloc_type_view_copy(
+ 		 * Note that KT_VAR_DATA_HEAP is fake "data" heap, variable kalloc_type handles
+ 		 * the actual redirection in the entry points kalloc/kfree_type_var_impl.
+ 		 */
++#ifdef BCM2837
++		/* port: the views of kexts carry Apple's real type signatures, but the kernel's are all data (no type summary); one heap policy for both */
++		if (!kalloc_type_is_data(kt_flags)) {
++			/* the entry points read the flag from the view itself */
++			if (type == KTV_FIXED) {
++				((kalloc_type_view_t)cur)->kt_flags |= KT_DATA_ONLY;
++			} else {
++				((kalloc_type_var_view_t)cur)->kt_flags |= KT_DATA_ONLY;
++			}
++		}
++		if (true) {
++#else
+ 		if (kalloc_type_is_data(kt_flags)) {
++#endif
+ 			kalloc_type_func(type, handle_data_view, cur);
+ 			cur += kalloc_type_func(type, view_sz);
+ 			continue;
+diff --git a/pexpert/pexpert/arm64/BCM2837.h b/pexpert/pexpert/arm64/BCM2837.h
+index 72d6568..0d7e976 100644
+--- a/pexpert/pexpert/arm64/BCM2837.h
++++ b/pexpert/pexpert/arm64/BCM2837.h
+@@ -9,6 +9,11 @@
+ #define NO_ECORE 1
+ 
+ #define BCM2837
++/* arm64e kernel (XNU_ARCH=arm64e): the 26.5 kexts are arm64e, so the kernel signs and authenticates pointers too */
++#define CPU_HAS_APPLE_PAC 1
++#if defined(__arm64e__)
++#define HAS_APPLE_PAC 1
++#endif
+ #define BCM2837_BRINGUP
+ #define ARM_ARCH_TIMER
+ 
+-- 
+2.53.0
+

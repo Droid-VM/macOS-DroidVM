@@ -1,0 +1,34 @@
+From f83a6c70b350fb3b4ada6ce0516ec36d6624d6b7 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 00:52:10 -0400
+Subject: [PATCH 5/7] no kqworkloop limits (launchd sets 3/10, daemons need
+ more)
+
+---
+ bsd/kern/kern_proc.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/bsd/kern/kern_proc.c b/bsd/kern/kern_proc.c
+index dfb3a45..ad9bee5 100644
+--- a/bsd/kern/kern_proc.c
++++ b/bsd/kern/kern_proc.c
+@@ -5460,8 +5460,16 @@ proc_set_kqworkloop_limits(proc_t p, int soft_limit, int hard_limit)
+ 	struct filedesc *fdp = &p->p_fd;
+ 	lck_mtx_lock_spin_always(&fdp->fd_kqhashlock);
+ 
++#ifdef BCM2837
++	/* port: launchd's kqworkloop limits (opendirectoryd: 3 soft, 10 hard) kill daemons that allocate a normal number of workloops: no limits */
++	(void)soft_limit;
++	(void)hard_limit;
++	fdp->kqwl_dyn_soft_limit = KQWL_LIMIT_SENTINEL;
++	fdp->kqwl_dyn_hard_limit = KQWL_LIMIT_SENTINEL;
++#else
+ 	fdp->kqwl_dyn_soft_limit = soft_limit;
+ 	fdp->kqwl_dyn_hard_limit = hard_limit;
++#endif
+ 	/* Make sure existing limits aren't exceeded already */
+ 	kqworkloop_check_limit_exceeded(fdp);
+ 
+-- 
+2.53.0
+

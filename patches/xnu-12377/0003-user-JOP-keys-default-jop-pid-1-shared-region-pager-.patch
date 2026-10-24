@@ -1,0 +1,95 @@
+From b415954af0e5de357cf506a6ec606a331f0f5f5d Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 00:52:10 -0400
+Subject: [PATCH 3/7] user JOP keys: default jop pid 1, shared-region pager
+ signs with the process key, no keys-off for 3P plugins, PAC exception bits
+ masked
+
+---
+ bsd/kern/mach_loader.c             |  2 ++
+ osfmk/arm/machine_routines_apple.c | 12 ++++++++++--
+ osfmk/kern/exception.c             |  2 +-
+ osfmk/vm/vm_shared_region_pager.c  |  7 ++++++-
+ 4 files changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/bsd/kern/mach_loader.c b/bsd/kern/mach_loader.c
+index 18cc33d..6ce6141 100644
+--- a/bsd/kern/mach_loader.c
++++ b/bsd/kern/mach_loader.c
+@@ -1158,10 +1158,12 @@ load_machfile(
+ 	 * arm64e plugin hosts currently run with JOP keys disabled, since they
+ 	 * may need to run arm64 plugins.
+ 	 */
++#if !defined(BCM2837)
+ 	if (imgp->ip_flags & IMGPF_3P_PLUGINS) {
+ 		imgp->ip_flags |= IMGPF_NOJOP;
+ 		pmap_disable_user_jop(pmap);
+ 	}
++#endif /* !BCM2837 */
+ 
+ #if CONFIG_ROSETTA
+ 	/* Disable JOP keys if the Rosetta runtime being used isn't arm64e */
+diff --git a/osfmk/arm/machine_routines_apple.c b/osfmk/arm/machine_routines_apple.c
+index 144dab5..5efcf52 100644
+--- a/osfmk/arm/machine_routines_apple.c
++++ b/osfmk/arm/machine_routines_apple.c
+@@ -250,7 +250,11 @@ ml_default_jop_pid(void)
+ 	vmapple_pac_get_default_keys();
+ 	return vmapple_default_jop_pid;
+ #else
+-	return 0;
++	/*
++	 * Without paravirtualized key switching the hardware keys are the same for every process, and the shared-region
++	 * pager signs the cache's pointers only for a nonzero key: nonzero stands for "the user keys are in use".
++	 */
++	return 1;
+ #endif /* HAS_PARAVIRTUALIZED_PAC */
+ }
+ 
+@@ -264,7 +268,11 @@ ml_non_arm64e_user_jop_pid(void)
+ #if HAS_PARAVIRTUALIZED_PAC
+ 	return generate_jop_key();
+ #else
+-	return 0;
++	/*
++	 * Keys-off processes (AMFI asks for it, for sh among others) cannot really run without the hardware keys here, as those are
++	 * not switched per process: their cache pointers have to be signed just the same, so the key is nonzero as for any other.
++	 */
++	return 1;
+ #endif /* HAS_PARAVIRTUALIZED_PAC */
+ }
+ #endif /* HAS_APPLE_PAC */
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 2ebc6f0..d2f978a 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -169,7 +169,7 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
+ 	if (!virt_crash_log || thread != current_thread() || task == kernel_task) {
+ 		return;
+ 	}
+-	switch (exception) {
++	switch (exception & ~(EXC_PTRAUTH_BIT | EXC_MAY_BE_UNRECOVERABLE_BIT)) {
+ 	case EXC_BAD_ACCESS:
+ 	case EXC_BAD_INSTRUCTION:
+ 	case EXC_ARITHMETIC:
+diff --git a/osfmk/vm/vm_shared_region_pager.c b/osfmk/vm/vm_shared_region_pager.c
+index 479dbab..4d35ccc 100644
+--- a/osfmk/vm/vm_shared_region_pager.c
++++ b/osfmk/vm/vm_shared_region_pager.c
+@@ -794,7 +794,12 @@ retry_src_fault:
+ 					    (vm_offset_t)window_buffer,
+ 					    (mach_vm_offset_t)(window + slide_start_address),
+ 					    (uint32_t)(window / slide_info_page_size),
+-					    0);
++#if __has_feature(ptrauth_calls)
++					    pager->srp_slide_info->si_ptrauth ? pager->srp_jop_key : 0
++#else /* __has_feature(ptrauth_calls) */
++					    0
++#endif /* __has_feature(ptrauth_calls) */
++					    );
+ 				}
+ 				if (kr == KERN_SUCCESS) {
+ 					bcopy((const char *)window_buffer + (in_range - window), (char *)dst_vaddr, PAGE_SIZE);
+-- 
+2.53.0
+

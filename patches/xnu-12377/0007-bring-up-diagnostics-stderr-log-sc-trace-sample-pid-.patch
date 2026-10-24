@@ -1,0 +1,373 @@
+From a5477a7dfc69a24fdbb6c48446c637b224c88025 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 00:52:10 -0400
+Subject: [PATCH 7/7] bring-up diagnostics: stderr-log, sc-trace, sample-pid
+ helpers, crash-log registers, port_crumb/port_exc breadcrumbs
+
+---
+ bsd/dev/arm/systemcalls.c     |  34 +++++++++
+ bsd/kern/bsd_init.c           |  35 ++++++++++
+ bsd/kern/sys_generic.c        |  25 +++++++
+ osfmk/arm/arm_init.c          |   3 +
+ osfmk/arm64/locore.s          |  13 ++++
+ osfmk/kern/exception.c        | 127 ++++++++++++++++++++++++++++++++++
+ osfmk/kern/static_if_common.c |   6 ++
+ 7 files changed, 243 insertions(+)
+
+diff --git a/bsd/dev/arm/systemcalls.c b/bsd/dev/arm/systemcalls.c
+index be208dd..30748d6 100644
+--- a/bsd/dev/arm/systemcalls.c
++++ b/bsd/dev/arm/systemcalls.c
+@@ -88,6 +88,8 @@ extern int mach_trap_count;
+  * Outputs:	none
+  */
+ TUNABLE(bool, virt_syscall_err_log, "syscall-err-log", false);
++static char virt_sc_trace_name[96];   /* comma-separated process names */
++static int virt_sc_trace_state;   /* 0: boot-arg not read yet, 1: off, 2: on */
+ 
+ void
+ unix_syscall(
+@@ -188,6 +190,38 @@ unix_syscall(
+ skip_syscall:
+ #endif /* CONFIG_MACF */
+ 
++	if (__improbable(virt_sc_trace_state != 1)) {
++		/* bring-up diagnostic (boot-arg sc-trace=<name>[,<name>...]): every failing syscall of those processes, with the path of the path-taking ones */
++		if (virt_sc_trace_state == 0) {
++			virt_sc_trace_state = PE_parse_boot_argn("sc-trace", virt_sc_trace_name, sizeof(virt_sc_trace_name)) ? 2 : 1;
++		}
++		bool virt_match = false;
++		if (virt_sc_trace_state == 2 && error != 0 && error != ERESTART && error != EJUSTRETURN && error != EWOULDBLOCK && code != 202 && code != 74 && code != 169 && code != 327 && code != 336 && code != 75 && code != 73 &&
++		    code != 92 && code != 6 && code != 25 && code != 24) {
++			/* noisy calls (sigaction/mprotect/mmap/close/...) are skipped; the list holds comma-separated names */
++			for (const char *n = virt_sc_trace_name; *n && !virt_match;) {
++				size_t l = 0;
++				while (n[l] && n[l] != ',') {
++					l++;
++				}
++				if (l && l <= 16 && strncmp(proc->p_comm, n, l) == 0 && (l == 16 || proc->p_comm[l] == 0)) {
++					virt_match = true;
++				}
++				n += l + (n[l] == ',');
++			}
++		}
++		if (virt_match) {
++			char virt_p[100] = "";
++			size_t virt_l;
++			int idx = (code == 463 || code == 470) ? 1 : 0;   /* openat, fstatat64 */
++			if (code == 5 || code == 398 || code == 463 || code == 338 || code == 340 || code == 33 || code == 58 || code == 470 ||
++			    code == 345 || code == 220 || code == 11 || code == 12 || code == 61 || code == 73) {
++				(void)copyinstr((user_addr_t)uthread->uu_arg[idx], virt_p, sizeof(virt_p), &virt_l);
++			}
++			printf("sc: %s %d err %d a0 %llx '%s'\n", proc->p_comm, code, error, (unsigned long long)uthread->uu_arg[0], virt_p);
++		}
++	}
++
+ 	if (__improbable(virt_syscall_err_log) && error != 0 && error != ERESTART && error != EJUSTRETURN &&
+ 	    error != EWOULDBLOCK && code < 1024 && error < 128) {
+ 		/* first failure of each (syscall, errno) pair, per boot */
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 265ef59..5362b32 100644
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -1810,3 +1810,38 @@ netboot_root(void)
+ 	return 0;
+ }
+ #endif
++
++#ifdef BCM2837
++/* port: for osfmk/kern/exception.c's sample-pid diagnostic: what a sleeping BSD thread says it waits for */
++const char *
++virt_thread_wmesg(thread_t thread)
++{
++	struct uthread *ut = get_bsdthread_info(thread);
++	return (ut != NULL && ut->uu_wmesg != NULL) ? ut->uu_wmesg : "-";
++}
++#endif
++
++#ifdef BCM2837
++#include <sys/bsdtask_info.h>
++/* port: name the file behind a user address of TASK (sample-pid diagnostic): returns the region start, fills BUF with the vnode path */
++uint64_t
++virt_region_path(task_t task, uint64_t address, char *buf, int len, uint64_t *size)
++{
++	struct proc_regioninfo_internal info;
++	uintptr_t vnodeaddr = 0;
++	uint32_t vid = 0;
++
++	buf[0] = '\0';
++	*size = 0;
++	if (fill_procregioninfo(task, address, &info, &vnodeaddr, &vid) == 0) {
++		return 0;
++	}
++	*size = info.pri_size;
++	if (vnodeaddr != 0 && vnode_getwithvid((vnode_t)vnodeaddr, vid) == 0) {
++		int l = len;
++		vn_getpath((vnode_t)vnodeaddr, buf, &l);
++		vnode_put((vnode_t)vnodeaddr);
++	}
++	return info.pri_address;
++}
++#endif
+diff --git a/bsd/kern/sys_generic.c b/bsd/kern/sys_generic.c
+index edac75b..edd0012 100644
+--- a/bsd/kern/sys_generic.c
++++ b/bsd/kern/sys_generic.c
+@@ -73,6 +73,7 @@
+  */
+ 
+ #include <sys/param.h>
++#include <pexpert/pexpert.h>
+ #include <sys/systm.h>
+ #include <sys/filedesc.h>
+ #include <sys/ioctl.h>
+@@ -700,6 +701,30 @@ write_internal(struct proc *p, int fd, user_addr_t buf, user_size_t nbyte,
+ int
+ write_nocancel(struct proc *p, struct write_nocancel_args *uap, user_ssize_t *retval)
+ {
++#if defined(BCM2837)
++	/* bring-up diagnostic (boot-arg stderr-log=1): show what processes write to stdout/stderr (dyld and daemon error messages) */
++	{
++		static int stderr_log = -1;
++		if (stderr_log < 0) {
++			int v = 0;
++			PE_parse_boot_argn("stderr-log", &v, sizeof(v));
++			stderr_log = v ? 1 : 0;
++		}
++		if (stderr_log && (uap->fd == 1 || uap->fd == 2) && uap->nbyte) {
++			char buf[160];
++			size_t n = uap->nbyte < sizeof(buf) - 1 ? (size_t)uap->nbyte : sizeof(buf) - 1;
++			if (copyin(uap->cbuf, buf, n) == 0) {
++				for (size_t i = 0; i < n; i++) {
++					if (buf[i] == '\n' || buf[i] == '\r') {
++						buf[i] = ' ';
++					}
++				}
++				buf[n] = 0;
++				printf("fd%d: pid %d %s: %s\n", uap->fd, proc_getpid(p), p->p_comm, buf);
++			}
++		}
++	}
++#endif
+ 	return write_internal(p, uap->fd, uap->cbuf, uap->nbyte, (off_t)-1, 0,
+ 	           NULL, retval);
+ }
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+index bee138e..ac1713e 100644
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -358,9 +358,12 @@ arm_init(
+ 	DTEntry chosen = NULL;
+ 	unsigned int dt_entry_size = 0;
+ 
++	port_crumb = 100;
+ 	arm_slide_rebase_and_sign_image();
++	port_crumb = 101;
+ 
+ 	arm_static_if_init(args);
++	port_crumb = 102;
+ 
+ 	/* If kernel integrity is supported, use a constant copy of the boot args. */
+ 	const_boot_args = *args;
+diff --git a/osfmk/arm64/locore.s b/osfmk/arm64/locore.s
+index 3f42af8..fd736d1 100644
+--- a/osfmk/arm64/locore.s
++++ b/osfmk/arm64/locore.s
+@@ -834,6 +834,19 @@ Lel1_sp1_synchronous_vector_continue:
+ LEXT(el1_sp1_synchronous_vector_long_spill_failed)
+ 	TRAP_UNWIND_PROLOGUE
+ 	TRAP_UNWIND_DIRECTIVES
++	/* port bring-up: record ESR/ELR/FAR/SP of the fault we could not spill */
++	adrp	x0, EXT(port_exc)@page
++	add		x0, x0, EXT(port_exc)@pageoff
++	mrs		x1, ESR_EL1
++	str		x1, [x0]
++	mrs		x1, ELR_EL1
++	str		x1, [x0, #8]
++	mrs		x1, FAR_EL1
++	str		x1, [x0, #16]
++	mov		x1, sp
++	str		x1, [x0, #24]
++	mov		x1, #1
++	str		x1, [x0, #32]
+ 	/*
+ 	 * We couldn't process the exception due to either having an invalid
+ 	 * exception stack or because we previously tried to process it and failed.
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index d2f978a..d5c25f1 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -194,6 +194,33 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
+ 		    (unsigned long long)get_saved_state_pc(state), (unsigned long long)get_saved_state_lr(state),
+ 		    (unsigned long long)get_saved_state_sp(state), (unsigned long long)get_saved_state_fp(state),
+ 		    (unsigned long long)get_saved_state_far(state), get_saved_state_esr(state));
++		for (unsigned int r = 0; r < 29; r += 4) {
++			printf("crash: pid %d x%u 0x%llx 0x%llx 0x%llx 0x%llx\n", pid, r, (unsigned long long)get_saved_state_reg(state, r),
++			    (unsigned long long)get_saved_state_reg(state, r + 1), (unsigned long long)get_saved_state_reg(state, r + 2),
++			    r + 3 < 29 ? (unsigned long long)get_saved_state_reg(state, r + 3) : 0ULL);
++		}
++		{
++			static const unsigned int dump_regs[] = {19, 0};
++			for (unsigned int d = 0; d < 2; d++) {
++				uint64_t address = get_saved_state_reg(state, dump_regs[d]) & 0xfffffffffULL;
++				uint64_t words[8];
++				if (copyin(address, words, sizeof(words)) == 0) {
++					printf("crash: pid %d mem x%u 0x%llx: %llx %llx %llx %llx %llx %llx %llx %llx\n", pid, dump_regs[d],
++					    (unsigned long long)address, (unsigned long long)words[0], (unsigned long long)words[1],
++					    (unsigned long long)words[2], (unsigned long long)words[3], (unsigned long long)words[4],
++					    (unsigned long long)words[5], (unsigned long long)words[6], (unsigned long long)words[7]);
++				} else {
++					printf("crash: pid %d mem x%u 0x%llx unreadable\n", pid, dump_regs[d], (unsigned long long)address);
++				}
++			}
++		}
++		extern uint64_t virt_region_path(task_t, uint64_t, char *, int, uint64_t *);
++		static char path[160];
++		uint64_t size, start;
++		start = virt_region_path(task, get_saved_state_pc(state), path, sizeof(path), &size);
++		printf("crash: pid %d pc in 0x%llx+0x%llx %s\n", pid, (unsigned long long)start, (unsigned long long)size, path);
++		start = virt_region_path(task, get_saved_state_lr(state), path, sizeof(path), &size);
++		printf("crash: pid %d lr in 0x%llx+0x%llx %s\n", pid, (unsigned long long)start, (unsigned long long)size, path);
+ 	}
+ 	count = backtrace_user(frames, VIRT_CRASH_FRAMES, NULL, &info);
+ 	for (unsigned int i = 0; i < count; i += 4) {
+@@ -204,6 +231,106 @@ virt_crash_log_thread(exception_type_t exception, mach_exception_data_t code, ma
+ 		printf("crash: pid %d backtrace error %d after %u frames\n", pid, info.btui_error, count);
+ 	}
+ }
++
++/*
++ * Virtual machine boards: boot-arg sample-pid=<pid> [sample-period=<seconds>] prints, every period, one line per thread of that
++ * process (state, wait event, user pc/lr/sp/fp) to the message buffer: where a stuck launchd is waiting.
++ */
++#include <kern/thread_call.h>
++#include <kern/queue.h>
++extern void *proc_find(int pid);
++extern void proc_rele(void *p);
++extern task_t proc_task(void *p);
++extern const char *virt_thread_wmesg(thread_t);
++extern uint64_t virt_region_path(task_t, uint64_t, char *, int, uint64_t *);
++
++static TUNABLE(int, virt_sample_pid, "sample-pid", 0);
++static TUNABLE(uint32_t, virt_sample_period, "sample-period", 5);
++static thread_call_t virt_sample_call;
++
++static void
++virt_sample_run(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	void *proc = virt_sample_pid > 0 ? proc_find(virt_sample_pid) : NULL;
++	if (proc != NULL || virt_sample_pid < 0) {
++		task_t task = proc != NULL ? proc_task(proc) : kernel_task;
++		thread_t thread;
++		static struct {
++			uint64_t tid, pc, lr, sp, fp, wait;
++			uint64_t kframes[16];
++			unsigned int kcount;
++			uint32_t state;
++			int pri;
++			const char *msg;
++		} seen[128];
++		unsigned int n = 0, total = 0;
++
++		task_lock(task);
++		queue_iterate(&task->threads, thread, thread_t, task_threads) {
++			struct arm_saved_state *state = find_user_regs(thread);
++			total++;
++			if (n < 128) {
++				seen[n].tid = thread_tid(thread);
++				seen[n].state = thread->state;
++				seen[n].wait = (uint64_t)thread->wait_event;
++				seen[n].pri = thread->sched_pri;
++				seen[n].msg = virt_thread_wmesg(thread);
++				seen[n].pc = state ? get_saved_state_pc(state) : 0;
++				seen[n].lr = state ? get_saved_state_lr(state) : 0;
++				seen[n].sp = state ? get_saved_state_sp(state) : 0;
++				seen[n].fp = state ? get_saved_state_fp(state) : 0;
++				seen[n].kcount = 0;
++				if ((thread->state & TH_RUN) == 0 && thread->kernel_stack != 0 && thread->machine.kstackptr != NULL) {
++					struct arm_kernel_saved_state *ks = (struct arm_kernel_saved_state *)thread->machine.kstackptr;
++					uint64_t fp = ks->fp;
++					seen[n].kframes[seen[n].kcount++] = VM_KERNEL_STRIP_PTR(ks->lr);
++					while (seen[n].kcount < 16 && fp >= thread->kernel_stack && fp + 16 <= thread->kernel_stack + KERNEL_STACK_SIZE && (fp & 7) == 0) {
++						seen[n].kframes[seen[n].kcount++] = VM_KERNEL_STRIP_PTR(((uint64_t *)fp)[1]);
++						fp = ((uint64_t *)fp)[0];
++					}
++				}
++				n++;
++			}
++		}
++		task_unlock(task);
++		for (unsigned int i = 0; i < n; i++) {
++			static char path[160];
++			uint64_t size, start;
++			printf("sample: pid %d tid %llu state 0x%x wait 0x%llx msg %s main 0x%llx pri %d pc 0x%llx lr 0x%llx sp 0x%llx fp 0x%llx\n",
++			    virt_sample_pid, seen[i].tid, seen[i].state, seen[i].wait, seen[i].msg, (unsigned long long)task->mach_header_vm_address,
++			    seen[i].pri, seen[i].pc, seen[i].lr, seen[i].sp, seen[i].fp);
++			for (unsigned int k = 0; k < seen[i].kcount; k++) {
++				printf("sample:   k%u 0x%llx\n", k, (unsigned long long)seen[i].kframes[k]);
++			}
++			if (seen[i].pc != 0 && task->mach_header_vm_address != 0) {
++				start = virt_region_path(task, seen[i].pc, path, sizeof(path), &size);
++				printf("sample:   pc in 0x%llx+0x%llx %s\n", (unsigned long long)start, (unsigned long long)size, path);
++				start = virt_region_path(task, seen[i].lr, path, sizeof(path), &size);
++				printf("sample:   lr in 0x%llx+0x%llx %s\n", (unsigned long long)start, (unsigned long long)size, path);
++			}
++		}
++		printf("sample: pid %d %u threads\n", virt_sample_pid, total);
++		if (proc != NULL) {
++			proc_rele(proc);
++		}
++	}
++	uint64_t deadline;
++	clock_interval_to_deadline(virt_sample_period, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(virt_sample_call, deadline);
++}
++
++__startup_func
++static void
++virt_sample_init(void)
++{
++	if (virt_sample_pid != 0) {
++		uint64_t deadline;
++		virt_sample_call = thread_call_allocate(virt_sample_run, NULL);
++		clock_interval_to_deadline(virt_sample_period, NSEC_PER_SEC, &deadline);
++		thread_call_enter_delayed(virt_sample_call, deadline);
++	}
++}
++STARTUP(THREAD_CALL, STARTUP_RANK_LAST, virt_sample_init);
+ #endif /* __arm64__ && MACH_BSD */
+ 
+ /*
+diff --git a/osfmk/kern/static_if_common.c b/osfmk/kern/static_if_common.c
+index 1e553d6..5e60de8 100644
+--- a/osfmk/kern/static_if_common.c
++++ b/osfmk/kern/static_if_common.c
+@@ -251,6 +251,8 @@ static_if_init(const char *args)
+ {
+ 	struct static_if_entry *sie = __static_if_entries_end;
+ 	unsigned long sie_flags;
++	extern volatile unsigned long long port_crumb;
++	port_crumb = 110;
+ 	static_if_key_t sie_key;
+ 
+ 	while (--sie >= __static_if_entries) {
+@@ -262,12 +264,16 @@ static_if_init(const char *args)
+ 		sie_key->sik_entries_count++;
+ 	}
+ 
++	port_crumb = 111;
+ 	for (static_if_initializer *f = __static_if_initializer_entries;
+ 	    f < __static_if_initializer_entries_end; f++) {
++		port_crumb = 112;
+ 		(*f)(args);
++		port_crumb = 113;
+ 	}
+ 
+ 	ml_static_if_flush_icache();
++	port_crumb = 114;
+ }
+ 
+ MARK_AS_FIXUP_TEXT void
+-- 
+2.53.0
+

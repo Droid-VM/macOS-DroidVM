@@ -1,0 +1,192 @@
+From 6fed744cf59c8badcab319425f0b4533aeb3d8c2 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 00:52:10 -0400
+Subject: [PATCH 4/7] user VA width: hardware T0SZ 17 from the first
+ instruction through a one-entry L0 shim, pmap geometry stays 39-bit
+
+---
+ osfmk/arm/pmap/pmap.c  | 20 +++++++++++++++++++-
+ osfmk/arm/pmap/pmap.h  |  8 ++++++++
+ osfmk/arm64/proc_reg.h | 23 ++++++++++++++++++++---
+ osfmk/arm64/sleh.c     |  2 +-
+ osfmk/arm64/start.s    | 16 +++++++++++++++-
+ 5 files changed, 63 insertions(+), 6 deletions(-)
+
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 97607b3..29a55d9 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -3108,6 +3108,14 @@ pmap_create_options_internal(
+ 	}
+ 
+ 	p->ttep = ml_static_vtop((vm_offset_t)p->tte);
++	p->hw_tte = pmap_tt1_allocate(p, pmap_root_alloc_size(p), 0);
++	if (!p->hw_tte) {
++		pmap_tt1_deallocate(p, p->tte, pmap_root_alloc_size(p), 0);
++		p->tte = NULL;
++		local_kr = KERN_RESOURCE_SHORTAGE;
++		goto tt1_alloc_fail;
++	}
++	p->hw_ttep = ml_static_vtop((vm_offset_t)p->hw_tte);
+ 	PMAP_TRACE(4, PMAP_CODE(PMAP__TTE), VM_KERNEL_ADDRHIDE(p), VM_KERNEL_ADDRHIDE(p->min), VM_KERNEL_ADDRHIDE(p->max), p->ttep);
+ 
+ 	/* nullify the translation table */
+@@ -3115,6 +3123,11 @@ pmap_create_options_internal(
+ 		p->tte[i] = ARM_TTE_TYPE_FAULT;
+ 	}
+ 
++	for (i = 0; i < tte_index_max; i++) {
++		p->hw_tte[i] = ARM_TTE_TYPE_FAULT;
++	}
++	p->hw_tte[0] = (p->ttep & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID;
++
+ 	FLUSH_PTE();
+ 
+ 	/*
+@@ -3398,6 +3411,11 @@ pmap_destroy_internal(
+ 		pmap->tte = (tt_entry_t *) NULL;
+ 		pmap->ttep = 0;
+ 	}
++	if (pmap->hw_tte) {
++		pmap_tt1_deallocate(pmap, pmap->hw_tte, pmap_root_alloc_size(pmap), 0);
++		pmap->hw_tte = (tt_entry_t *) NULL;
++		pmap->hw_ttep = 0;
++	}
+ 
+ 	assert((tt_free_entry_t*)pmap->tt_entry_free == NULL);
+ 
+@@ -7958,7 +7976,7 @@ pmap_switch_user_ttb(pmap_t pmap, pmap_cpu_data_t *cpu_data_ptr)
+ 
+ 
+ 	if (pmap != kernel_pmap) {
+-		set_mmu_ttb((pmap->ttep & TTBR_BADDR_MASK) | (((uint64_t)pmap->hw_asid) << TTBR_ASID_SHIFT));
++		set_mmu_ttb((pmap->hw_ttep & TTBR_BADDR_MASK) | (((uint64_t)pmap->hw_asid) << TTBR_ASID_SHIFT));
+ 	} else if (!pmap_user_ttb_is_clear()) {
+ 		pmap_clear_user_ttb_internal();
+ 	}
+diff --git a/osfmk/arm/pmap/pmap.h b/osfmk/arm/pmap/pmap.h
+index 0bd7332..b236ca6 100644
+--- a/osfmk/arm/pmap/pmap.h
++++ b/osfmk/arm/pmap/pmap.h
+@@ -343,6 +343,14 @@ struct pmap {
+ 	/* Physical page of the root translation table. */
+ 	pmap_paddr_t ttep;
+ 
++	/*
++	 * The table TTBR0 points at: a level-0 table whose entry 0 is the root above. Userland built for macOS strips pointer
++	 * authentication codes with a 47-bit mask, so the hardware address width (TCR.T0SZ, where the code starts) has to be
++	 * at least 47 bits, while this pmap's own geometry stays the 39-bit full-page level-1 root.
++	 */
++	tt_entry_t *hw_tte;
++	pmap_paddr_t hw_ttep;
++
+ 	/*
+ 	 * The min and max fields represent the lowest and highest addressable VAs
+ 	 * as dictated strictly by the paging hierarchy (root level + root table size)
+diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
+index dfcc405..8492d15 100644
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -103,6 +103,12 @@
+  */
+ #undef __ARM64_PMAP_SUBPAGE_L1__
+ 
++/*
++ * macOS 27's libmalloc reserves fixed ranges above 454 GiB (virt-user-va-512g.patch): the full-page L1 root, T0SZ/T1SZ 25 (39-bit
++ * VA, 512 GiB), not the 256 GiB sub-page root of the BCM2837 board configuration. VMAPPLE.h does the same.
++ */
++#undef __ARM64_PMAP_SUBPAGE_L1__
++
+ /* For arm platforms, create one pset per cluster */
+ #define MAX_PSETS MAX_CPU_CLUSTERS
+ 
+@@ -1149,9 +1155,20 @@
+ #define TCR_EL1_ASID 0
+ #endif /* HAS_16BIT_ASID */
+ 
++/*
++ * The address width the hardware runs TTBR0 with. Pointer authentication codes sit above the top address bit, and macOS userland
++ * strips them with a 47-bit mask, so a 4 KiB build (T0SZ_BOOT 25, a level-1 root) lets TTBR0 start its walk at level 0 (T0SZ 17): the
++ * V=P bootstrap table and every user pmap go through a one-entry level-0 table (see start.s and pmap_create). The pmap's own
++ * geometry keeps T0SZ_BOOT; the width has to be right from the first instruction, since the code of a signed pointer follows it.
++ */
++#ifdef __ARM_16K_PG__
++#define T0SZ_HW T0SZ_BOOT
++#else
++#define T0SZ_HW 17ULL
++#endif
+ #define TCR_EL1_BASE \
+ 	(TCR_IPS_VALUE | TCR_SH0_OUTER | TCR_ORGN0_WRITEBACK |         \
+-	 TCR_IRGN0_WRITEBACK | (T0SZ_BOOT << TCR_T0SZ_SHIFT) |          \
++	 TCR_IRGN0_WRITEBACK | (T0SZ_HW << TCR_T0SZ_SHIFT) |          \
+ 	 TCR_SH1_OUTER | TCR_ORGN1_WRITEBACK | \
+ 	 TCR_IRGN1_WRITEBACK | (TCR_TG1_GRANULE_SIZE) |                 \
+ 	 TCR_TBI0_TOPBYTE_IGNORED | (TCR_TBID0_ENABLE) | TCR_E0PD_VALUE | \
+@@ -1185,8 +1202,8 @@
+ #endif /* CONFIG_SPTM */
+ #endif /* __ARM_KERNEL_PROTECT__ */
+ 
+-#define TCR_EL1_4KB  (TCR_EL1_BASE | (T1SZ_BOOT << TCR_T1SZ_SHIFT) | (TCR_TG0_GRANULE_4KB))
+-#define TCR_EL1_16KB (TCR_EL1_BASE | (T1SZ_BOOT << TCR_T1SZ_SHIFT) | (TCR_TG0_GRANULE_16KB))
++#define TCR_EL1_4KB  ((TCR_EL1_BASE & ~(TCR_T0SZ_MASK << TCR_T0SZ_SHIFT)) | (T0SZ_BOOT << TCR_T0SZ_SHIFT) | (T1SZ_BOOT << TCR_T1SZ_SHIFT) | (TCR_TG0_GRANULE_4KB))
++#define TCR_EL1_16KB ((TCR_EL1_BASE & ~(TCR_T0SZ_MASK << TCR_T0SZ_SHIFT)) | (T0SZ_BOOT << TCR_T0SZ_SHIFT) | (T1SZ_BOOT << TCR_T1SZ_SHIFT) | (TCR_TG0_GRANULE_16KB))
+ 
+ /*
+  * Bit 55 of the VA is used to select which TTBR to use during a translation table walk.
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index 3c3d8d9..d8f1b19 100644
+--- a/osfmk/arm64/sleh.c
++++ b/osfmk/arm64/sleh.c
+@@ -1873,7 +1873,7 @@ user_fault_matches_pac_error_code(vm_offset_t fault_addr, uint64_t pc, bool data
+ 		 * EnhancedPAC2 CPUs don't encode error codes at fixed positions, so
+ 		 * treat all non-canonical address bits like potential poison bits.
+ 		 */
+-		uint64_t mask = fault_addr_bitmask(64 - T0SZ_BOOT, 54);
++		uint64_t mask = fault_addr_bitmask(64 - T0SZ_HW, 54);
+ 		if (!tbi) {
+ 			mask |= fault_addr_bitmask(56, 63);
+ 		}
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index dafb665..325192c 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -437,6 +437,7 @@ start_cpu:
+ 3:	add	$4, $4, PGBYTES
+ 	/* Refuse before a new table can overwrite adjacent kernel globals. */
+ 	add $6, x25, #(BOOTSTRAP_TABLE_BYTES >> 12), lsl #12
++	sub $6, $6, PGBYTES							// the last page of the pool is the TTBR0 level-0 table
+ 	cmp $4, $6
+ 	b.hs Lbootstrap_tables_exhausted
+ 
+@@ -632,6 +633,17 @@ Lbootstrap_tables_exhausted:
+ 	// the early debugger rather than corrupting memory or forging a map.
+ 	b Lbootstrap_tables_exhausted
+ Lbootstrap_tables_ready:
++	/*
++	 * TTBR0 walks from level 0 (T0SZ_HW): a table whose only entry points at the V=P L1 table. It is the last page of the
++	 * pool, which the invalidation above has cleared.
++	 */
++	add		x0, x25, #(BOOTSTRAP_TABLE_BYTES >> 12), lsl #12
++	sub		x0, x0, PGBYTES
++	mov		x1, #(ARM_TTE_BOOT_TABLE)
++	and		x2, x25, #(ARM_TTE_TABLE_MASK)
++	orr		x1, x1, x2
++	str		x1, [x0]
++
+ 	/* Ensure TTEs are visible */
+ 	dsb		ish
+ 
+@@ -676,7 +688,9 @@ common_start:
+ 	 * arm_vm_init.c.
+ 	 */
+ #endif
+-	and		x0, x25, #(TTBR_BADDR_MASK)
++	add		x0, x25, #(BOOTSTRAP_TABLE_BYTES >> 12), lsl #12
++	sub		x0, x0, PGBYTES						// the TTBR0 level-0 table, last page of the pool
++	and		x0, x0, #(TTBR_BADDR_MASK)
+ 	mov		x19, lr
+ 	bl		EXT(set_mmu_ttb)
+ 	mov		lr, x19
+-- 
+2.53.0
+
