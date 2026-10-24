@@ -90,8 +90,10 @@ def vm_command(os_img, systemos_img, mem_mb):
 def kernel_args(extra):
     board = tomllib.loads(BOARD.read_text())
     arguments = [a for a in board['payload']['kernel_args'] if not a.startswith(GPU_ARGS)]
+    dropped = {a[5:] for a in extra if a.startswith('drop:')}      # drop:NAME removes a board argument (the line is limited to 1000 bytes)
+    extra = [a for a in extra if not a.startswith('drop:')]
     names = {a.split('=', 1)[0] for a in extra}
-    arguments = [a for a in arguments if a.split('=', 1)[0] not in names] + extra
+    arguments = [a for a in arguments if a.split('=', 1)[0] not in names | dropped] + extra
     line = ' '.join(arguments)
     if len(line) > 1000:
         raise SystemExit(f'kernel command line is {len(line)} bytes; the limit is 1000')
