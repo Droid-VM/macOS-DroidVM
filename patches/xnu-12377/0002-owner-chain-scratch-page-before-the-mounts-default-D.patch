@@ -1,4 +1,4 @@
-From ee9594a34ea30d177e93833c913157ad72b27491 Mon Sep 17 00:00:00 2001
+From 7c7f30d256944c87cb0347763c306e4bfe68b91a Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
 Subject: [PATCH 2/7] owner chain: scratch page before the mounts, default Data
@@ -6,10 +6,11 @@ Subject: [PATCH 2/7] owner chain: scratch page before the mounts, default Data
  boot-arg
 
 ---
- bsd/kern/bsd_init.c      |  9 ++++++++
- bsd/kern/kern_exec.c     |  8 ++++---
- osfmk/kern/link_compat.c | 48 ++++++++++++++++++++++++++++++++++++++++
- 3 files changed, 62 insertions(+), 3 deletions(-)
+ bsd/kern/bsd_init.c           |  9 +++++++
+ bsd/kern/kern_exec.c          |  8 +++---
+ iokit/bsddev/IOKitBSDInit.cpp | 46 +++++++++++++++++++++++++++++++++
+ osfmk/kern/link_compat.c      | 48 +++++++++++++++++++++++++++++++++++
+ 4 files changed, 108 insertions(+), 3 deletions(-)
 
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 index 5bc65a1..265ef59 100644
@@ -64,6 +65,60 @@ index cb4882e..3edad4b 100644
  #if CONFIG_MEMORYSTATUS
  	(void) memorystatus_init_at_boot_snapshot();
  #endif /* CONFIG_MEMORYSTATUS */
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index 2b49e3c..afee67a 100644
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -1943,3 +1943,49 @@ IOVnodeGetEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
+ 	}
+ 	return value;
+ }
++
++#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
++/*
++ * port: the IOMedia whose UUID property is UUID (an APFS volume), as the device the owner chain mounts: its dev_t and /dev path.
++ * (kern_exec.c native_owner_cache_prepare; the verified block driver provides this in the fork's own builds.)
++ */
++extern "C" int
++native_verified_block_volume_device(const char *uuid, dev_t *device, char *path, size_t length)
++{
++	OSDictionary *match = IOService::serviceMatching("IOMedia");
++	OSDictionary *properties = OSDictionary::withCapacity(1);
++	OSString *value = OSString::withCString(uuid);
++	int found = 0;
++
++	if (match == NULL || properties == NULL || value == NULL) {
++		goto done;
++	}
++	properties->setObject("UUID", value);
++	match->setObject(gIOPropertyMatchKey, properties);
++	{
++		IOService *media = IOService::waitForMatchingService(match, 60ULL * NSEC_PER_SEC);
++		if (media != NULL) {
++			OSString *name = OSDynamicCast(OSString, media->getProperty(kIOBSDNameKey));
++			OSNumber *major = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMajorKey));
++			OSNumber *minor = OSDynamicCast(OSNumber, media->getProperty(kIOBSDMinorKey));
++			if (name != NULL && major != NULL && minor != NULL) {
++				snprintf(path, length, "/dev/%s", name->getCStringNoCopy());
++				*device = makedev(major->unsigned32BitValue(), minor->unsigned32BitValue());
++				found = 1;
++			}
++			media->release();
++		}
++	}
++done:
++	if (value) {
++		value->release();
++	}
++	if (properties) {
++		properties->release();
++	}
++	if (match) {
++		match->release();
++	}
++	return found;
++}
++#endif
 diff --git a/osfmk/kern/link_compat.c b/osfmk/kern/link_compat.c
 index ecc09d8..4bd4aff 100644
 --- a/osfmk/kern/link_compat.c

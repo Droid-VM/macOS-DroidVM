@@ -1,33 +1,35 @@
-From a5477a7dfc69a24fdbb6c48446c637b224c88025 Mon Sep 17 00:00:00 2001
+From 780296797f7ab41fe5650d27692d0f85111ee7af Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
 Subject: [PATCH 7/7] bring-up diagnostics: stderr-log, sc-trace, sample-pid
  helpers, crash-log registers, port_crumb/port_exc breadcrumbs
 
 ---
- bsd/dev/arm/systemcalls.c     |  34 +++++++++
+ bsd/dev/arm/systemcalls.c     |  36 ++++++++++
  bsd/kern/bsd_init.c           |  35 ++++++++++
  bsd/kern/sys_generic.c        |  25 +++++++
+ iokit/Kernel/IOUserClient.cpp |  82 ++++++++++++++++++++++
  osfmk/arm/arm_init.c          |   3 +
  osfmk/arm64/locore.s          |  13 ++++
  osfmk/kern/exception.c        | 127 ++++++++++++++++++++++++++++++++++
  osfmk/kern/static_if_common.c |   6 ++
- 7 files changed, 243 insertions(+)
+ 8 files changed, 327 insertions(+)
 
 diff --git a/bsd/dev/arm/systemcalls.c b/bsd/dev/arm/systemcalls.c
-index be208dd..30748d6 100644
+index be208dd..5a7b717 100644
 --- a/bsd/dev/arm/systemcalls.c
 +++ b/bsd/dev/arm/systemcalls.c
-@@ -88,6 +88,8 @@ extern int mach_trap_count;
+@@ -88,6 +88,9 @@ extern int mach_trap_count;
   * Outputs:	none
   */
  TUNABLE(bool, virt_syscall_err_log, "syscall-err-log", false);
 +static char virt_sc_trace_name[96];   /* comma-separated process names */
-+static int virt_sc_trace_state;   /* 0: boot-arg not read yet, 1: off, 2: on */
++static int virt_sc_trace_state;
++static int virt_sc_trace_all;     /* boot-arg sc-trace-all=1: also the calls that succeed */   /* 0: boot-arg not read yet, 1: off, 2: on */
  
  void
  unix_syscall(
-@@ -188,6 +190,38 @@ unix_syscall(
+@@ -188,6 +191,39 @@ unix_syscall(
  skip_syscall:
  #endif /* CONFIG_MACF */
  
@@ -35,9 +37,10 @@ index be208dd..30748d6 100644
 +		/* bring-up diagnostic (boot-arg sc-trace=<name>[,<name>...]): every failing syscall of those processes, with the path of the path-taking ones */
 +		if (virt_sc_trace_state == 0) {
 +			virt_sc_trace_state = PE_parse_boot_argn("sc-trace", virt_sc_trace_name, sizeof(virt_sc_trace_name)) ? 2 : 1;
++			(void)PE_parse_boot_argn("sc-trace-all", &virt_sc_trace_all, sizeof(virt_sc_trace_all));
 +		}
 +		bool virt_match = false;
-+		if (virt_sc_trace_state == 2 && error != 0 && error != ERESTART && error != EJUSTRETURN && error != EWOULDBLOCK && code != 202 && code != 74 && code != 169 && code != 327 && code != 336 && code != 75 && code != 73 &&
++		if (virt_sc_trace_state == 2 && (virt_sc_trace_all || (error != 0 && error != ERESTART && error != EJUSTRETURN && error != EWOULDBLOCK)) && code != 202 && code != 74 && code != 169 && code != 327 && code != 336 && code != 75 && code != 73 &&
 +		    code != 92 && code != 6 && code != 25 && code != 24) {
 +			/* noisy calls (sigaction/mprotect/mmap/close/...) are skipped; the list holds comma-separated names */
 +			for (const char *n = virt_sc_trace_name; *n && !virt_match;) {
@@ -152,6 +155,127 @@ index edac75b..edd0012 100644
  	return write_internal(p, uap->fd, uap->cbuf, uap->nbyte, (off_t)-1, 0,
  	           NULL, retval);
  }
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+index 6898497..a63278e 100644
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -2728,6 +2728,72 @@ is_io_service_match_property_table_bin(
+ 	return internal_io_service_match_property_table(service, matching, matchingCnt, matches);
+ }
+ 
++
++#ifdef BCM2837
++/* bring-up diagnostic (boot-arg iokit-log=NAME[,NAME...]): what the named processes look up and open in the IORegistry */
++static bool
++virt_iokit_log_enabled(void)
++{
++	static char names[64];
++	static int state;     /* 0: not read, 1: off, 2: on */
++	if (state == 0) {
++		state = PE_parse_boot_argn("iokit-log", names, sizeof(names)) ? 2 : 1;
++	}
++	if (state != 2) {
++		return false;
++	}
++	char comm[MAXCOMLEN + 1];
++	proc_selfname(comm, sizeof(comm));
++	for (const char *n = names; *n;) {
++		size_t l = 0;
++		while (n[l] && n[l] != ',') {
++			l++;
++		}
++		if (l && strncmp(comm, n, l) == 0 && comm[l] == 0) {
++			return true;
++		}
++		n += l + (n[l] == ',');
++	}
++	return false;
++}
++
++static void
++virt_iokit_log_match(const char *what, OSObject *matching, kern_return_t kr)
++{
++	if (!virt_iokit_log_enabled()) {
++		return;
++	}
++	char text[240];
++	size_t at = 0;
++	text[0] = 0;
++	OSSerialize *serializer = OSSerialize::withCapacity(1024);
++	if (serializer && matching && matching->serialize(serializer)) {
++		const char *raw = serializer->text();
++		bool tag = false;
++		for (size_t k = 0; raw[k] && at + 2 < sizeof(text); k++) {
++			char c = raw[k];
++			if (c == '<') {
++				tag = true;
++				if (at && text[at - 1] != ' ') {
++					text[at++] = ' ';
++				}
++			} else if (c == '>') {
++				tag = false;
++			} else if (!tag && c != '\n' && c != '\t') {
++				text[at++] = c;
++			}
++		}
++		text[at] = 0;
++	}
++	if (serializer) {
++		serializer->release();
++	}
++	char comm[MAXCOMLEN + 1];
++	proc_selfname(comm, sizeof(comm));
++	printf("iokit: %s %s: %s -> 0x%x\n", comm, what, text, kr);
++}
++#endif
++
+ static kern_return_t
+ internal_io_service_get_matching_services(
+ 	mach_port_t main_port,
+@@ -2753,6 +2819,9 @@ internal_io_service_get_matching_services(
+ 	} else {
+ 		kr = kIOReturnBadArgument;
+ 	}
++#ifdef BCM2837
++	virt_iokit_log_match("services", obj, kr);
++#endif
+ 
+ 	if (obj) {
+ 		obj->release();
+@@ -2836,6 +2905,9 @@ internal_io_service_get_matching_service(
+ 	} else {
+ 		kr = kIOReturnBadArgument;
+ 	}
++#ifdef BCM2837
++	virt_iokit_log_match("service", obj, kr);
++#endif
+ 
+ 	if (obj) {
+ 		obj->release();
+@@ -2936,6 +3008,9 @@ internal_io_service_add_notification(
+ 			continue;
+ 		}
+ 		IOTaskRegistryCompatibilityMatching(current_task(), dict);
++#ifdef BCM2837
++		virt_iokit_log_match(notification_type, obj, 0);
++#endif
+ 
+ 		if ((sym == gIOPublishNotification)
+ 		    || (sym == gIOFirstPublishNotification)) {
+@@ -4623,6 +4698,13 @@ is_io_service_open_extended(
+ 	}while (false);
+ 
+ 	*connection = client;
++#ifdef BCM2837
++	if (virt_iokit_log_enabled()) {
++		char comm[MAXCOMLEN + 1];
++		proc_selfname(comm, sizeof(comm));
++		printf("iokit: %s open %s type %u -> 0x%x\n", comm, service->getMetaClass()->getClassName(), connect_type, res);
++	}
++#endif
+ 	*result = res;
+ 
+ 	return err;
 diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
 index bee138e..ac1713e 100644
 --- a/osfmk/arm/arm_init.c

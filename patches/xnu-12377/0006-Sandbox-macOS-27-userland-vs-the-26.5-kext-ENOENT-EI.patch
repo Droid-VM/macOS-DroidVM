@@ -1,4 +1,4 @@
-From c99cc8389b85ca8bfa2d7b628a7455ca0ab12da0 Mon Sep 17 00:00:00 2001
+From be42f32c08a7647dd41f0d0f1cb41aee2136a347 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
 Subject: [PATCH 6/7] Sandbox: macOS 27 userland vs the 26.5 kext
