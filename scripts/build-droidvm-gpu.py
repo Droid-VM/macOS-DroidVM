@@ -64,6 +64,33 @@ def stage(script):
 
 scope = stage(export())
 adreno = scope['ADRENO']
+# macOS on top of the staged edits: the render server is WindowServer (iOS's is backboardd), which takes the large window of slot 0 and
+# is not capped; twelve connections instead of six (WindowServer, loginwindow, SecurityAgent, the menu bar, Dock, the installer UI and
+# the agents that draw icons each keep one), the added windows following the others at 256 MiB each, 3.75 GiB of the VBO's 128 GiB; and
+# 32 opens per process name per boot instead of 8, since the login UI processes are relaunched with each WindowServer.
+publish = scope['staged'].read_text()
+for name in ('name_', 'opener'):
+    old = f'strncmp({name},"backboardd",sizeof {name})'
+    new = f'(strncmp({name},"backboardd",sizeof {name}) && strncmp({name},"WindowServer",sizeof {name}))'
+    count = {'name_': 1, 'opener': 1}[name]
+    if name == 'name_':
+        old, new = '!' + old + ' && !g.slots[0]', '!' + new + ' && !g.slots[0]'
+    if publish.count(old) != count:
+        sys.exit(f'{scope["staged"]}: the render server test on {name} changed')
+    publish = publish.replace(old, new)
+cap = '(limit && limit<8?limit:8)'
+windows = ('enum : unsigned {NativeAdrenoMaxClients=6};\n'
+           'static const struct {uint64_t start,bytes;} kClientWindows[NativeAdrenoMaxClients]={\n'
+           '    {0x20000000ull,0x40000000ull},{0x60000000ull,0x10000000ull},{0x70000000ull,0x10000000ull},\n'
+           '    {0x80000000ull,0x10000000ull},{0x90000000ull,0x10000000ull},{0xa0000000ull,0x10000000ull}};')
+if publish.count(cap) != 1 or publish.count(windows) != 1:
+    sys.exit(f'{scope["staged"]}: the open cap or the six client windows changed')
+publish = publish.replace(cap, '(limit && limit<32?limit:32)')
+publish = publish.replace(windows, 'enum : unsigned {NativeAdrenoMaxClients=12};\n'
+                          'static const struct {uint64_t start,bytes;} kClientWindows[NativeAdrenoMaxClients]={\n'
+                          '    {0x20000000ull,0x40000000ull},' + ','.join('{%#xull,0x10000000ull}' % (0x60000000 + i * 0x10000000)
+                                                                    for i in range(11)) + '};')
+scope['staged'].write_text(publish)
 sources = [adreno / 'NativeAdrenoSubmit.cpp', scope.get('staged_memory', adreno / 'NativeAdrenoMemory.cpp'), adreno / 'NativeAdrenoCpu.cpp',
            scope.get('staged_client', adreno / 'NativeAdrenoUserClient.cpp'), scope['staged'], SRC / 'kits/droidvm/DroidVMGpu.cpp', SRC / 'kits/AdrenoPM4/AdrenoPM4.c',
            ROOT / 'overlay/kext/DroidVMGpuKext.cpp', ROOT / 'overlay/kext/NativeKextGlue.cpp']
