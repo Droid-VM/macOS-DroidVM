@@ -1,0 +1,10 @@
+com.apple.security.AppleImage4
+com.apple.driver.AppleMobileFileIntegrity
+com.apple.security.sandbox
+com.apple.security.quarantine
+com.apple.AppleSystemPolicy
+com.apple.kec.pthread
+com.apple.filesystems.apfs
+com.apple.AppleFSCompression.AppleFSCompressionTypeZlib
+com.apple.AppleFSCompression.AppleFSCompressionTypeDataless
+com.apple.iokit.IOHIDFamily
