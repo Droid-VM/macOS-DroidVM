@@ -107,7 +107,10 @@ def boot_disk(args):
     if local.exists():
         subprocess.run(['rm', '-rf', str(local)], check=True)
     local.mkdir()
-    disk = run.build_boot_disk(local, artifacts / 'boot/kernel.macho.trustcache', artifacts / 'data-seed/scratch-data.img', adt, line)
+    # MACOS_TRUSTCACHE / MACOS_DATA_SEED: replacements staged by scripts/stage-gpu-plugin.py (the Metal plugin and its CDHashes)
+    trust = Path(os.environ.get('MACOS_TRUSTCACHE') or artifacts / 'boot/kernel.macho.trustcache')
+    seed = Path(os.environ.get('MACOS_DATA_SEED') or artifacts / 'data-seed/scratch-data.img')
+    disk = run.build_boot_disk(local, trust, seed, adt, line)
     adb('push', str(disk), BOOT, timeout=900)
     fix_owner(BOOT)
     print('boot disk pushed:', BOOT, '\nkernel args:', line)

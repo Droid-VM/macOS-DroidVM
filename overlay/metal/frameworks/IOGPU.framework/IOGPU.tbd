@@ -1,0 +1,10 @@
+--- !tapi-tbd
+# IOGPU.framework (private, not in the SDK): only what the Metal plugin links against. The exports are those of the macOS 27.0.1 cache.
+tbd-version:     4
+targets:         [ arm64e-macos ]
+install-name:    '/System/Library/PrivateFrameworks/IOGPU.framework/Versions/A/IOGPU'
+current-version: 162.11
+exports:
+  - targets:         [ arm64e-macos ]
+    objc-classes:    [ IOGPUMetalDevice ]
+...
