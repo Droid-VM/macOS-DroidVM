@@ -67,7 +67,12 @@ adreno = scope['ADRENO']
 sources = [adreno / 'NativeAdrenoSubmit.cpp', scope.get('staged_memory', adreno / 'NativeAdrenoMemory.cpp'), adreno / 'NativeAdrenoCpu.cpp',
            scope.get('staged_client', adreno / 'NativeAdrenoUserClient.cpp'), scope['staged'], SRC / 'kits/droidvm/DroidVMGpu.cpp', SRC / 'kits/AdrenoPM4/AdrenoPM4.c',
            ROOT / 'overlay/kext/DroidVMGpuKext.cpp', ROOT / 'overlay/kext/NativeKextGlue.cpp']
-includes = [adreno, SRC / 'kits/ArmSmmu4K', SRC / 'kits/AdrenoPM4', SRC / 'kits/droidvm']
+# IOKit/graphics (AGXAccelerator's IOAccelerator) from the macOS SDK's Kernel.framework: toolchains/sdks/MacOSX26.1.sdk.tar.xz, extracted
+GRAPHICS = ROOT / 'out/x12377/inc-gfx'
+if not (GRAPHICS / 'IOKit/graphics').exists():
+    (GRAPHICS / 'IOKit').mkdir(parents=True, exist_ok=True)
+    (GRAPHICS / 'IOKit/graphics').symlink_to(ROOT / 'toolchains/sdks/MacOSX26.1.sdk/System/Library/Frameworks/Kernel.framework/Headers/IOKit/graphics')
+includes = [adreno, SRC / 'kits/ArmSmmu4K', SRC / 'kits/AdrenoPM4', SRC / 'kits/droidvm', GRAPHICS]
 print(f'droidvm-gpu: wire {WIRE} ({REF}, NativeAdreno {ADRENO_PIN[:7]})')
 subprocess.run(['python3', str(ROOT / 'scripts/build-native-kext.py'), 'DroidVMGpu', *map(str, sources),
                 *[f'-I{path}' for path in includes]], check=True)
