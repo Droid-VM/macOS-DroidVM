@@ -90,9 +90,95 @@ publish = publish.replace(windows, 'enum : unsigned {NativeAdrenoMaxClients=12};
                           'static const struct {uint64_t start,bytes;} kClientWindows[NativeAdrenoMaxClients]={\n'
                           '    {0x20000000ull,0x40000000ull},' + ','.join('{%#xull,0x10000000ull}' % (0x60000000 + i * 0x10000000)
                                                                     for i in range(11)) + '};')
+# Bring-up: a failed call names the process, the method, the status and the window's peak, and a connection's window peak is logged
+# each 64 MiB it grows (WindowServer's command stream allocation failed after twenty minutes logged in, with nothing logged).
+peak = ("                if(connection->core_->windowPeak()>>20>record->peak_mib)record->peak_mib=uint32_t(connection->core_->windowPeak()>>20);\n"
+        "        IOLockUnlock(g.lock);\n")
+record = 'struct NativeAdrenoClientRecord {'
+if publish.count(record) != 1:
+    sys.exit(f'{scope["staged"]}: the client record changed')
+publish = publish.replace(record, 'extern "C" volatile uint32_t native_adreno_pool_stats[8];   // [3] pool MiB used, [4] its peak\n' + record)
+if publish.count(peak) != 1:
+    sys.exit(f'{scope["staged"]}: the window peak record changed')
+publish = publish.replace(peak,
+    "                if(connection->core_->windowPeak()>>20>record->peak_mib) {\n"
+    "                    if((connection->core_->windowPeak()>>26)>(record->peak_mib>>6))IOLog(\"droidvm-gpu: %s window peak %llu MiB, pool %u MiB used, peak %u, pinned %llu+%llu MiB\\n\",connection->name_,connection->core_->windowPeak()>>20,native_adreno_pool_stats[3],native_adreno_pool_stats[4],native_adreno_pinned_bytes[0]>>20,native_adreno_pinned_bytes[1]>>20);\n"
+    "                    record->peak_mib=uint32_t(connection->core_->windowPeak()>>20);\n"
+    "                }\n"
+    "        if(status && connection->live_ && !(method==NativeAdrenoMethodGetStatus && status==kIOReturnUnsupported)) {\n"
+    "            static uint32_t logged;\n"
+    "            if(logged<200) {++logged;IOLog(\"droidvm-gpu: %s call %u failed %#x, %lu objects, window peak %llu MiB, pool %u MiB used\\n\",connection->name_,method,status,(unsigned long)connection->core_->liveObjects(),connection->core_->windowPeak()>>20,native_adreno_pool_stats[3]);}\n"
+    "        }\n"
+    "        if(method==NativeAdrenoMethodBoAlloc && !status && connection->live_ && !(connection->core_->liveObjects()%128))\n"
+    "            IOLog(\"droidvm-gpu: %s has %lu objects, pool %u MiB used\\n\",connection->name_,(unsigned long)connection->core_->liveObjects(),native_adreno_pool_stats[3]);\n"
+    "        IOLockUnlock(g.lock);\n")
+imported = '        const IOReturn status=live_?core_->importBo(&request,current_task(),&reply):kIOReturnNotReady;\n'
+if publish.count(imported) != 1:
+    sys.exit(f'{scope["staged"]}: the import call changed')
+publish = publish.replace(imported, imported +
+    '        if(live_ && (status || !(core_->liveObjects()%128)))IOLog("droidvm-gpu: %s import of %llu bytes: %#x, %lu objects, pool %u MiB used\\n",'
+    'name_,(unsigned long long)request.bytes,status,(unsigned long)core_->liveObjects(),native_adreno_pool_stats[3]);\n')
+# Object limits: 1024 live objects per client and 1024 GPU mappings across all of them. WindowServer, the login UI and the agents that
+# draw ran out of mappings after ten or twenty minutes logged in (BoMap refused, Turnip's command stream allocation failed with
+# VK_ERROR_OUT_OF_DEVICE_MEMORY and WindowServer wrote through the null stream). Every table is scanned linearly and allocated once.
+views = 'enum {MaxViews=1024};'
+if publish.count(views) != 1:
+    sys.exit(f'{scope["staged"]}: the view cache changed')
+publish = publish.replace(views, 'enum {MaxViews=4096};   /* NativeAdrenoClientMaxObjects (build-droidvm-gpu.py raises it) */')
+for header, old, new in [(adreno / 'NativeAdrenoVm.h', 'NativeAdrenoVmMaxObjects=1024}', 'NativeAdrenoVmMaxObjects=8192}'),
+                         (adreno / 'NativeAdrenoUserClient.h', 'NativeAdrenoClientMaxObjects=1024,', 'NativeAdrenoClientMaxObjects=4096,')]:
+    text = header.read_text()
+    if text.count(new) != 1:
+        if text.count(old) != 1:
+            sys.exit(f'{header}: the object limit changed')
+        header.write_text(text.replace(old, new))
+# The binding table, one row per GPU mapping, on the heap: at the raised mapping limit it would not fit the collection's room for a
+# native kext's __DATA (kc-build: no room for a 0x3d730-byte __DATA).
+board = (SRC / 'kits/droidvm/DroidVMGpu.cpp').read_text()
+for old, new in [('Binding gBindings[NativeAdrenoVmMaxObjects];\n', 'Binding *gBindings;   // NativeAdrenoVm::attach allocates it\n'),
+                 ('    mappings_ = IONewZeroData(Mapping, NativeAdrenoVmMaxObjects);\n    if (!mappings_) return kIOReturnNoMemory;\n',
+                  '    mappings_ = IONewZeroData(Mapping, NativeAdrenoVmMaxObjects);\n    if (!mappings_) return kIOReturnNoMemory;\n'
+                  '    if (!gBindings) gBindings = IONewZero(Binding, NativeAdrenoVmMaxObjects);\n'
+                  '    if (!gBindings) {IODeleteData(mappings_, Mapping, NativeAdrenoVmMaxObjects); mappings_ = nullptr; return kIOReturnNoMemory;}\n')]:
+    if board.count(old) != 1:
+        sys.exit('kits/droidvm/DroidVMGpu.cpp: the binding table changed')
+    board = board.replace(old, new)
+staged_board = scope['staged'].parent / 'DroidVMGpu.cpp'
+staged_board.write_text(board)
+# Bring-up: memory pinned outside the pool, in bytes live: [0] imported (the owners' pages, wired while the GPU maps them), [1] allocated
+# outside the pool. The logged lines show them beside the pool's use.
+memory = scope.get('staged_memory', adreno / 'NativeAdrenoMemory.cpp').read_text()
+for old, new in [('extern "C" {volatile uint32_t native_adreno_pool_stats[8];}',
+                  'extern "C" {volatile uint32_t native_adreno_pool_stats[8];volatile uint64_t native_adreno_pinned_bytes[2];}'),
+                 ('    prepared_=true;bytes_=bytes;\n    status=kIOReturnUnsupported;\n',
+                  '    prepared_=true;bytes_=bytes;\n    native_adreno_pinned_bytes[0]=native_adreno_pinned_bytes[0]+bytes;\n    status=kIOReturnUnsupported;\n'),
+                 ('            IOReturn status=imported_->complete();\n            if(status!=kIOReturnSuccess) {quarantined_=true;return status;}\n            prepared_=false;\n',
+                  '            IOReturn status=imported_->complete();\n            if(status!=kIOReturnSuccess) {quarantined_=true;return status;}\n            prepared_=false;\n'
+                  '            native_adreno_pinned_bytes[0]=native_adreno_pinned_bytes[0]-bytes_;\n'),
+                 ('            if(status!=kIOReturnSuccess) {quarantined_=true;return status;}\n            prepared_=false;\n        }\n        native_adreno_trace_stage=33;\n',
+                  '            if(status!=kIOReturnSuccess) {quarantined_=true;return status;}\n            prepared_=false;\n'
+                  '            native_adreno_pinned_bytes[1]=native_adreno_pinned_bytes[1]-bytes_;\n        }\n        native_adreno_trace_stage=33;\n'),
+                 ('    prepared_=true;bytes_=bytes;mapping_=descriptor_->getBytesNoCopy();\n',
+                  '    prepared_=true;bytes_=bytes;mapping_=descriptor_->getBytesNoCopy();\n'
+                  '    native_adreno_pinned_bytes[1]=native_adreno_pinned_bytes[1]+bytes;\n')]:
+    if memory.count(old) != 1:
+        sys.exit('NativeAdrenoMemory.cpp: the pinned-memory accounting no longer applies: ' + old[:60])
+    memory = memory.replace(old, new)
+staged_memory = scope['staged'].parent / 'NativeAdrenoMemory.cpp'
+staged_memory.write_text(memory)
+publish = publish.replace('extern "C" volatile uint32_t native_adreno_pool_stats[8];   // [3] pool MiB used, [4] its peak\n',
+                          'extern "C" volatile uint32_t native_adreno_pool_stats[8];   // [3] pool MiB used, [4] its peak\n'
+                          'extern "C" volatile uint64_t native_adreno_pinned_bytes[2];   // imported, outside the pool (NativeAdrenoMemory.cpp)\n')
+publish = publish.replace('pool %u MiB used\\n",', 'pool %u MiB used, pinned %llu+%llu MiB\\n",')
+publish = publish.replace(',native_adreno_pool_stats[3]);', ',native_adreno_pool_stats[3],native_adreno_pinned_bytes[0]>>20,native_adreno_pinned_bytes[1]>>20);')
+closed = '                record->closes=record->closes+1;record->slot=0xff;\n'
+if publish.count(closed) != 1:
+    sys.exit(f'{scope["staged"]}: the close record changed')
+publish = publish.replace(closed, closed + '                IOLog("droidvm-gpu: %s closed, pool %u MiB used, pinned %llu+%llu MiB\\n",name_,native_adreno_pool_stats[3],'
+                          'native_adreno_pinned_bytes[0]>>20,native_adreno_pinned_bytes[1]>>20);\n')
 scope['staged'].write_text(publish)
-sources = [adreno / 'NativeAdrenoSubmit.cpp', scope.get('staged_memory', adreno / 'NativeAdrenoMemory.cpp'), adreno / 'NativeAdrenoCpu.cpp',
-           scope.get('staged_client', adreno / 'NativeAdrenoUserClient.cpp'), scope['staged'], SRC / 'kits/droidvm/DroidVMGpu.cpp', SRC / 'kits/AdrenoPM4/AdrenoPM4.c',
+sources = [adreno / 'NativeAdrenoSubmit.cpp', staged_memory, adreno / 'NativeAdrenoCpu.cpp',
+           scope.get('staged_client', adreno / 'NativeAdrenoUserClient.cpp'), scope['staged'], staged_board, SRC / 'kits/AdrenoPM4/AdrenoPM4.c',
            ROOT / 'overlay/kext/DroidVMGpuKext.cpp', ROOT / 'overlay/kext/NativeKextGlue.cpp']
 # IOKit/graphics (AGXAccelerator's IOAccelerator) from the macOS SDK's Kernel.framework: toolchains/sdks/MacOSX26.1.sdk.tar.xz, extracted
 GRAPHICS = ROOT / 'out/x12377/inc-gfx'

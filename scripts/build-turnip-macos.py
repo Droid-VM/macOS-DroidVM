@@ -77,9 +77,74 @@ with log.open('w') as stream:
 if args.configure_only:
     print(f'configured {OUT}')
     sys.exit(0)
+# Bring-up logging, applied to the recorded source for the build and taken back out after it (the recorded patches stay what
+# validate_recorded_patches checks): WindowServer's command stream allocation failed with nothing logged, then wrote through its null
+# pointer (tu_cs_reserve_space's callers ignore its result).
+VULKAN = SOURCE / 'src/freedreno/vulkan'
+LOCAL_EDITS = [
+    ('tu_cs.cc', '''      if (!new_bos)
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+''', '''      if (!new_bos) {
+         mesa_loge("tu_cs_add_bo: %s: BO array of %u failed", cs->name, new_capacity);
+         return VK_ERROR_OUT_OF_HOST_MEMORY;
+      }
+'''),
+    ('tu_cs.cc', '''                     cs->name);
+   if (result != VK_SUCCESS) {
+      return result;
+   }
+
+   result = tu_bo_map(cs->device, new_bo, NULL);
+   if (result != VK_SUCCESS) {
+      tu_bo_finish(cs->device, new_bo);
+''', '''                     cs->name);
+   if (result != VK_SUCCESS) {
+      mesa_loge("tu_cs_add_bo: %s: %u bytes failed (%d)", cs->name, size * (uint32_t)sizeof(uint32_t), result);
+      return result;
+   }
+
+   result = tu_bo_map(cs->device, new_bo, NULL);
+   if (result != VK_SUCCESS) {
+      mesa_loge("tu_cs_add_bo: %s: map of %u bytes failed (%d)", cs->name, size * (uint32_t)sizeof(uint32_t), result);
+      tu_bo_finish(cs->device, new_bo);
+'''),
+    ('tu_knl_darwin.cc', '''   mtx_unlock(&dev->vma_mutex);
+   return *iova ? VK_SUCCESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+''', '''   mtx_unlock(&dev->vma_mutex);
+   if (!*iova)
+      mesa_loge("NativeAdreno: no GPU address for %" PRIu64 " bytes (flags %#x, window %#" PRIx64 "+%#" PRIx64 ")", size,
+                (unsigned)flags, dev->physical_device->va_start, dev->physical_device->va_size);
+   return *iova ? VK_SUCCESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+'''),
+    ('tu_knl_darwin.cc', '''   VkResult result = darwin_reap_locked(dev, retire);
+   pthread_mutex_unlock(&retire->lock);
+   return result;
+''', '''   VkResult result = darwin_reap_locked(dev, retire);
+   pthread_mutex_unlock(&retire->lock);
+   if (result != VK_SUCCESS)
+      mesa_loge("NativeAdreno: retired BO collection failed (%d)", result);
+   return result;
+'''),
+]
+
+
+def local_edits(apply):
+    for name, old, new in LOCAL_EDITS:
+        path = VULKAN / name
+        text = path.read_text()
+        before, after = (old, new) if apply else (new, old)
+        if text.count(before) != 1:
+            raise SystemExit(f'{path}: a local edit no longer applies')
+        path.write_text(text.replace(before, after))
+
+
 log = OUT.parent / 'mesa-tu-build.log'
-with log.open('w') as stream:
-    result = subprocess.run(['ninja', '-C', str(OUT), '-j16'], env=env, stdout=stream, stderr=subprocess.STDOUT)
+local_edits(True)
+try:
+    with log.open('w') as stream:
+        result = subprocess.run(['ninja', '-C', str(OUT), '-j16'], env=env, stdout=stream, stderr=subprocess.STDOUT)
+finally:
+    local_edits(False)
 if result.returncode:
     raise SystemExit(f'build failed; see {log}\n' + '\n'.join(
         l for l in log.read_text().splitlines() if ': error:' in l or 'fatal error:' in l or l.startswith('FAILED:'))[:3000])
