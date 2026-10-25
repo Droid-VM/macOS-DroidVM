@@ -3,11 +3,15 @@
 searches for <MetalPluginName>.bundle; /Library is a link into the Data volume's .data, make-macos-systemos.sh), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
 make-owner-trust-bundle.py).
 
-    stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] BUNDLE...        [MACOS_TAG=27.0.1]
+    stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] BUNDLE...        [MACOS_TAG=27.0.1]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
 (Language Chooser waits for bluetoothd, which the board disables, in IOBluetoothHostController's first use).
+--log-stream adds a launchd job running `log show --last boot` then `log stream` with --predicate PREDICATE: the unified log's messages (os_log,
+which no daemon writes to stderr) since boot on its stdout, which stderr-log=1 puts in the kernel's log. --log-debug writes
+/Library/Preferences/Logging/Subsystems/SUBSYSTEM.plist (what `log config` writes) so the log keeps SUBSYSTEM's info and debug
+messages from boot on.
 
 Output: out/metal/stage/{scratch-data.img,kernel.macho.trustcache}; boot with MACOS_DATA_SEED / MACOS_TRUSTCACHE set to them
 (scripts/droidvm-app.py). The Data volume is volatile (NativeRamBlock), so the seed is what the guest sees on every boot. Needs sudo
@@ -16,6 +20,7 @@ import argparse
 import hashlib
 import os
 import plistlib
+import shlex
 import struct
 import subprocess
 import sys
@@ -34,6 +39,8 @@ LC_CODE_SIGNATURE = 0x1d
 GPU_BUNDLES = '.data/Library/GPUBundles'
 PROBE_DIR = '.data/usr/local/libexec'                  # /usr/local is a link into .data as well
 PROBE_JOB = '.data/Library/LaunchDaemons/org.droidvm.metal-probe.plist'
+LOG_JOB = '.data/Library/LaunchDaemons/org.droidvm.log-stream.plist'
+LOG_PREFS = '.data/Library/Preferences/Logging/Subsystems'   # only --log-debug writes there
 SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
 
 
@@ -82,6 +89,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--probe', type=Path)
     parser.add_argument('--setup-done', action='store_true')
+    parser.add_argument('--log-stream', metavar='PREDICATE')
+    parser.add_argument('--log-debug', metavar='SUBSYSTEM', action='append', default=[])
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
     bundles = [b.resolve() for b in args.bundles]
@@ -128,6 +137,27 @@ def main():
                     subprocess.run(['sudo', 'tee', str(job)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(job)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(job)], check=True)
+                log_job = mount / LOG_JOB
+                subprocess.run(['sudo', 'rm', '-f', str(log_job)], check=True)
+                if args.log_stream:
+                    subprocess.run(['sudo', 'mkdir', '-p', str(log_job.parent)], check=True)
+                    plist = plistlib.dumps({'Label': 'org.droidvm.log-stream', 'RunAtLoad': True,
+                                            'ProgramArguments': ['/bin/sh', '-c', 'log show --last boot --info --debug --style compact --predicate {0}; '
+                                                'exec log stream --level debug --style compact --predicate {0}'.format(shlex.quote(args.log_stream))]},
+                                           fmt=plistlib.FMT_XML)
+                    subprocess.run(['sudo', 'tee', str(log_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(log_job)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(log_job)], check=True)
+                log_prefs = mount / LOG_PREFS
+                subprocess.run(['sudo', 'rm', '-rf', str(log_prefs)], check=True)
+                if args.log_debug:
+                    subprocess.run(['sudo', 'mkdir', '-p', str(log_prefs)], check=True)
+                    prefs = plistlib.dumps({'DEFAULT-OPTIONS': {'Level': {'Enable': 'Debug', 'Persist': 'Debug'}}}, fmt=plistlib.FMT_XML)
+                    for sub in args.log_debug:
+                        path = log_prefs / (sub + '.plist')
+                        subprocess.run(['sudo', 'tee', str(path)], input=prefs, stdout=subprocess.DEVNULL, check=True)
+                        subprocess.run(['sudo', 'chmod', '644', str(path)], check=True)
+                    subprocess.run(['sudo', 'chown', '-R', '0:0', str(log_prefs)], check=True)
                 if args.setup_done:
                     marker = mount / SETUP_DONE
                     subprocess.run(['sudo', 'mkdir', '-p', str(marker.parent)], check=True)
