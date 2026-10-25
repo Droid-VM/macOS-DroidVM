@@ -166,7 +166,11 @@ def main():
     lines += bodies['IOMobileFramebuffer'] + ['};', '']
     lines += ['class IOMobileFramebufferLegacy : public IOMobileFramebuffer {', '    OSDeclareAbstractStructors(IOMobileFramebufferLegacy)', 'public:']
     lines += [f'    struct {name};' for name in nested]
-    lines += bodies['IOMobileFramebufferLegacy']
+    # inside the class a nested type hides the global one of its name (SwapInfoBlob): spell the global one ::Name, else the mangled
+    # name and with it the slot's PAC diversity change
+    shadowed = [name for name in nested if name in types]
+    lines += [re.sub(r'(?<![\w:])(' + '|'.join(shadowed) + r')\b', r'::\1', line) if shadowed else line
+              for line in bodies['IOMobileFramebufferLegacy']]
     lines += [f'    uint8_t iomfbLegacyState[{sizes["IOMobileFramebufferLegacy"]:#x} - sizeof(IOService)];   // the instance size of its MetaClass',
               '};', '',
               f'static_assert(sizeof(IOMobileFramebufferLegacy) == {sizes["IOMobileFramebufferLegacy"]:#x}, "IOMobileFramebufferLegacy instance size");',

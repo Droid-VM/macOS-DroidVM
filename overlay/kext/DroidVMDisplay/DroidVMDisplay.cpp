@@ -18,6 +18,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOUserClient.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <libkern/c++/OSArray.h>
@@ -33,6 +34,8 @@ static constexpr size_t kSwapQueueFirst = 6040;    // TAILQ head of the pending 
 static constexpr size_t kSwapQueueLast = 6048;     // its tqh_last
 static constexpr size_t kDisplayWidth = 6400;      // display_width() / display_height() (set_digital_out_mode block 0x...d6a60)
 static constexpr size_t kDisplayHeight = 6404;
+static constexpr size_t kSystemPowerState = 6428;  // u32: setPowerState's state (do_power_state_change_action_gated, request type 0)
+static constexpr size_t kAPIPowerState = 6432;     // u32: setAPIPowerState's state (power_state_change_interrupt, request type 1)
 static constexpr size_t kSwapInfoHeld = 6902;      // u16: swap info notifications are held (notify_swap_done_gated 0x...d9430)
 static constexpr size_t kSwapInfoTime = 264;       // the swap info's time (notify_swap_done_gated 0x...d93f0)
 // IOMobileFramebuffer (instance 144): set before power management in AppleParavirtDisplay's start_hardware block (0x...d8e90)
@@ -69,7 +72,8 @@ uint64_t ioSurfaceBaseOffset(const IOSurface *) __asm("__ZNK9IOSurface13getBaseO
 uint32_t ioSurfacePixelFormat(const IOSurface *) __asm("__ZNK9IOSurface14getPixelFormatEv");
 IOMemoryDescriptor *ioSurfaceMemory(const IOSurface *) __asm("__ZNK9IOSurface19getMemoryDescriptorEv");
 // IOAVVideoTimingData: per axis (horizontal, vertical) 32 bytes of which total +4, active +8, sync width +12, back porch +16,
-// front porch +20, sync rate +24 (IOAVVideoTimingElement's getters; the element keeps the data at +32).
+// front porch +20, sync rate +24, sync polarity +28, then the pixel clock at +68 (IOAVVideoTimingElement's getters; the element keeps
+// the data at +32).
 OSObject *ioavTimingWithData(const void *data, uint32_t standardType, uint32_t timingStandard)
     __asm("__ZN22IOAVVideoTimingElement8withDataEPK19IOAVVideoTimingData16IOAVStandardType23IOAVVideoTimingStandard");
 void ioavTimingSetColorElements(OSObject *, OSArray *) __asm("__ZN22IOAVVideoTimingElement16setColorElementsEP7OSArray");
@@ -78,6 +82,24 @@ OSObject *ioavColorWithCapabilities(uint32_t standardType, uint32_t depth, uint3
                                     const OSSet *)
     __asm("__ZN21IOAVVideoColorElement16withCapabilitiesE16IOAVStandardTypej22IOAVVideoPixelEncoding26IOAVVideoColorDynamicRange"
           "18IOAVVideoColorEOTF20IOAVVideoColorimetrybPK12OSDictionaryS7_S7_PK5OSSet");
+
+// macOS 27's IOMobileFramebuffer.framework submits a 1760-byte swap record (kern_SwapEnd: IOMobileFramebufferUserClient selector 5)
+// and the 26.5 family of the collection checks for 1416 bytes. The two agree up to 0x51e; 27 has 16 more bytes there (its per-layer
+// fields at 0x52e and 0x544 are 26.5's 0x51e and 0x534) and its other additions at the end, which the legacy family has no use for.
+static constexpr uint32_t kSwapSubmitSelector = 5, kSwapRecord27 = 1760, kSwapRecord265 = 1416;
+static constexpr uint32_t kSwapRecordSplit = 0x51e, kSwapRecordInserted = 16;
+extern const char iomfbUserClientMetaClass[] __asm("__ZN29IOMobileFramebufferUserClient10gMetaClassE");
+extern "C" void virt_set_external_method_hook(void (*)(IOUserClient *, IOExternalMethodArguments *));   // xnu-m IOUserClient.cpp
+
+static void convertSwapRecord(IOUserClient *client, IOExternalMethodArguments *args)
+{
+    if (args->selector != kSwapSubmitSelector || args->structureInputSize != kSwapRecord27 ||
+        !client->metaCast(reinterpret_cast<const OSMetaClass *>(iomfbUserClientMetaClass)))
+        return;
+    auto *record = const_cast<uint8_t *>(static_cast<const uint8_t *>(args->structureInput));   // the MIG request's inband buffer
+    memmove(record + kSwapRecordSplit, record + kSwapRecordSplit + kSwapRecordInserted, kSwapRecord265 - kSwapRecordSplit);
+    args->structureInputSize = kSwapRecord265;
+}
 
 class AppleParavirtGPU : public IOService {
     OSDeclareDefaultStructors(AppleParavirtGPU)
@@ -123,9 +145,10 @@ public:
     IOReturn executeFactoryConfigurations_gated() override;
     IOReturn set_frame_info_notification_state_gated(IOMFBNotifyRequest *, bool) override;
     IOReturn do_swap_info_notify_gated(IOMFBNotifyRequest *, const SwapInfoBlob *) override;
-    IOReturn notify_swap_done_gated(unsigned int, SwapInfoBlob *, unsigned int *, unsigned int) override;
+    IOReturn notify_swap_done_gated(unsigned int, ::SwapInfoBlob *, unsigned int *, unsigned int) override;
     IOReturn notify_crc_ready_gated(unsigned int) override;
     bool are_timings_enabled() const override;
+    IOReturn do_power_state_change_gated() override;
 
 private:
     static constexpr uint32_t kRefreshHz = 60;
@@ -147,12 +170,17 @@ private:
 
     PE_Video fVideo;
     IOMemoryMap *fScanoutMap;
+    uint8_t *fHalfToByte;     // 'RGhA' surfaces: each half-float channel's 8-bit value, clamped to [0, 1]
+    uint16_t *fRow;           // one 'RGhA' row
+    uint64_t fRowBytes;
     uint8_t *fScanout;
     IOTimerEventSource *fVBL;
     DisplayColorRemapMode fColorRemapMode;
     uint32_t fSurfaceFormat;
+    bool fDisplayOn;
     uint64_t fFrames;
-    uint64_t fTicks, fDropped, fReported;   // swap_begin_gated runs, swaps dropped, fFrames + fDropped at the last report
+    uint64_t fTicks, fDropped, fReported;   // swap_begin_gated runs, swaps dropped, fSubmitted + fFrames + fDropped + fStalled at the last report
+    uint64_t fSubmitted, fStalled;          // swaps verified, VBL ticks with a queued swap clean_queue_gated did not hand over
     SwapInfo fSwapInfo[kSwapInfoRing];   // held while kSwapInfoHeld is set, sent in order afterwards
     unsigned fSwapInfoRead, fSwapInfoWrite;
 };
@@ -193,13 +221,21 @@ bool DroidVMDisplay::start(IOService *provider)
         OSSafeReleaseNULL(fScanoutMap);
         return false;
     }
+    virt_set_external_method_hook(convertSwapRecord);
     IOLog("DroidVMDisplay: started, display %ux%u\n", display_width(), display_height());
     return true;
 }
 
 void DroidVMDisplay::stop(IOService *provider)
 {
+    virt_set_external_method_hook(nullptr);
     IOMobileFramebufferLegacy::stop(provider);
+    if (fHalfToByte)
+        IOFree(fHalfToByte, 65536);
+    if (fRow)
+        IOFree(fRow, fRowBytes);
+    fHalfToByte = nullptr;
+    fRow = nullptr;
     OSSafeReleaseNULL(fScanoutMap);
     fScanout = nullptr;
 }
@@ -220,6 +256,10 @@ bool DroidVMDisplay::start_hardware()
     PMinit();
     getPlatform()->PMRegisterDevice(getProvider(), this);   // the provider is no power-managed AppleARMIODevice here
     registerPowerDriver(this, gPowerStates, 2);
+    // The panel is always there: report it plugged in (the digital out state IOMobileFramebufferGetDigitalOutState answers), as
+    // AppleParavirtDisplay does when the host reports its display. Unplugged (0), WindowServer kept this display disabled and composited
+    // a virtual one as the main display ("get_hotplug_state - not active").
+    hotPlug_notify(1);
     IOLog("DroidVMDisplay: hardware started\n");
     return true;
 }
@@ -276,11 +316,27 @@ IOReturn DroidVMDisplay::swap_begin_gated()
             fDropped++;
         }
     }
-    if (++fTicks % 625 == 0 && fFrames + fDropped != fReported) {   // about every 10 s while swaps arrive
-        fReported = fFrames + fDropped;
-        IOLog("DroidVMDisplay: %llu swaps shown, %llu dropped\n", fFrames, fDropped);
+    if (at<IOMFBSwapIORequest *>(this, kSwapQueueFirst))
+        fStalled++;
+    if (++fTicks % 625 == 0 && fSubmitted + fFrames + fDropped + fStalled != fReported) {   // about every 10 s while swaps arrive
+        fReported = fSubmitted + fFrames + fDropped + fStalled;
+        IOLog("DroidVMDisplay: %llu swaps submitted, %llu shown, %llu dropped, %llu ticks stalled (current %p)\n", fSubmitted, fFrames,
+              fDropped, fStalled, at<IOMFBSwapIORequest *>(this, kCurrentSwap));
     }
     return fVBL->setTimeoutMS(16);
+}
+
+// AppleParavirtDisplay::do_power_state_change_gated: the display is on while both the system and WindowServer (setAPIPowerState)
+// want it on; each change goes to WindowServer as a power state notification, which CoreAnimation waits for before it swaps.
+IOReturn DroidVMDisplay::do_power_state_change_gated()
+{
+    bool on = at<uint32_t>(this, kSystemPowerState) && at<uint32_t>(this, kAPIPowerState);
+    if (on == fDisplayOn)
+        return kIOReturnSuccess;
+    fDisplayOn = on;
+    IOLog("DroidVMDisplay: display %s\n", on ? "on" : "off");
+    powerstate_notify(true, on);
+    return kIOReturnSuccess;
 }
 
 // AppleParavirtDisplay::program_hardware_gated (its slot 473): show the swap, then complete it. There is no cursor plane (no
@@ -294,26 +350,73 @@ void DroidVMDisplay::program_hardware_gated()
     swap_complete_gated();
 }
 
+static constexpr uint32_t kFormatBGRA = 'BGRA', kFormatRGhA = 'RGhA';   // 8-bit BGRA, 16-bit half-float RGBA
+
+// A half float's value in [0, 1] as a byte, in integer arithmetic (no floating point in the kernel).
+static uint8_t halfToByte(uint16_t half)
+{
+    unsigned exponent = (half >> 10) & 31, mantissa = half & 1023;
+    if (half & 0x8000 || (exponent == 31 && mantissa))   // negative or NaN
+        return 0;
+    if (exponent >= 15)                                  // 1.0 and above
+        return 255;
+    uint32_t scaled = (exponent ? 1024 + mantissa : mantissa) * 255;   // value * 255 = scaled * 2^(exponent - 25), subnormals 2^-24
+    unsigned shift = exponent ? 25 - exponent : 24;
+    return static_cast<uint8_t>((scaled + (1u << (shift - 1))) >> shift);
+}
+
 void DroidVMDisplay::copySurface(IOSurface *surface)
 {
     uint64_t width = ioSurfaceWidth(surface), height = ioSurfaceHeight(surface), rowBytes = ioSurfaceBytesPerRow(surface);
     uint64_t base = ioSurfaceBaseOffset(surface);
     uint32_t format = ioSurfacePixelFormat(surface);
     IOMemoryDescriptor *memory = ioSurfaceMemory(surface);
+    if (!fFrames)   // WindowServer's first frame: the verbose boot console stops drawing over the framebuffer (it goes to serial)
+        PE_initialize_console(nullptr, kPEDisableScreen);
     if (format != fSurfaceFormat || !fFrames) {
         IOLog("DroidVMDisplay: surface %llux%llu row %llu offset %llu format %#x memory %p\n", width, height, rowBytes, base, format, memory);
         fSurfaceFormat = format;
     }
     fFrames++;
-    if (!memory || !fScanout || rowBytes < width * 4)
+    uint64_t pixelBytes = format == kFormatRGhA ? 8 : 4;
+    if (!memory || !fScanout || rowBytes < width * pixelBytes || (format != kFormatBGRA && format != kFormatRGhA))
         return;
     uint64_t copyWidth = width < fVideo.v_width ? width : fVideo.v_width;
     uint64_t copyHeight = height < fVideo.v_height ? height : fVideo.v_height;
+    if (format == kFormatRGhA && !fHalfToByte) {
+        fHalfToByte = static_cast<uint8_t *>(IOMalloc(65536));
+        fRowBytes = fVideo.v_width * 8;
+        fRow = static_cast<uint16_t *>(IOMalloc(fRowBytes));
+        if (!fHalfToByte || !fRow)
+            return;
+        for (uint32_t half = 0; half < 65536; half++)
+            fHalfToByte[half] = halfToByte(static_cast<uint16_t>(half));
+    }
     if (memory->prepare() != kIOReturnSuccess)
         return;
-    for (uint64_t y = 0; y < copyHeight; y++)
-        memory->readBytes(base + y * rowBytes, fScanout + y * fVideo.v_rowBytes, copyWidth * 4);
+    uint64_t lit = 0, raw = 0, center = 0;
+    for (uint64_t y = 0; y < copyHeight; y++) {
+        uint8_t *line = fScanout + y * fVideo.v_rowBytes;
+        if (format == kFormatBGRA) {
+            memory->readBytes(base + y * rowBytes, line, copyWidth * 4);
+            continue;
+        }
+        memory->readBytes(base + y * rowBytes, fRow, copyWidth * 8);
+        auto *pixels = reinterpret_cast<uint32_t *>(line);
+        for (uint64_t x = 0; x < copyWidth; x++) {
+            const uint16_t *rgba = fRow + x * 4;
+            pixels[x] = 0xff000000u | fHalfToByte[rgba[0]] << 16 | fHalfToByte[rgba[1]] << 8 | fHalfToByte[rgba[2]];
+            if (fFrames <= 8) {   // bring-up: what the first frames hold
+                lit += (pixels[x] & 0xffffff) != 0;
+                raw += (rgba[0] | rgba[1] | rgba[2] | rgba[3]) != 0;
+                if (y == copyHeight / 2 && x == copyWidth / 2)
+                    center = static_cast<uint64_t>(rgba[3]) << 48 | static_cast<uint64_t>(rgba[2]) << 32 | rgba[1] << 16 | rgba[0];
+            }
+        }
+    }
     memory->complete();
+    if (format == kFormatRGhA && fFrames <= 8)
+        IOLog("DroidVMDisplay: frame %llu: %llu pixels lit, %llu nonzero, centre %#llx\n", fFrames, lit, raw, center);
 }
 
 static bool appendNumber(OSDictionary *dictionary, const char *key, uint64_t value, unsigned bits = 32)
@@ -359,11 +462,23 @@ bool DroidVMDisplay::createDisplayAttributes()
     OSDictionary *scalingLimits = OSDictionary::withCapacity(2);
     OSArray *colors = OSArray::withCapacity(1), *timings = OSArray::withCapacity(1), *timingColors = OSArray::withCapacity(1);
     OSObject *color = ioavColorWithCapabilities(2, 8, 0, 0, 0, 16, false, nullptr, nullptr, nullptr, nullptr);
+    // CVT reduced blanking as IOAVFamily's sCVTTimingData has it (1280x800@60: 1440x823, 71 MHz). Sync rates are 16.16 fixed point
+    // (IOAVVideoTimingGetSyncRateRounded); the table leaves the horizontal one 0.
     uint8_t timingData[80] = {};
-    at<uint32_t>(timingData, 8) = width;                 // horizontal active
-    at<uint32_t>(timingData, 24) = kRefreshHz * height;  // horizontal sync rate (lines per second)
-    at<uint32_t>(timingData, 40) = height;               // vertical active
-    at<uint32_t>(timingData, 56) = kRefreshHz;           // vertical sync rate
+    uint32_t hTotal = width + 160, vTotal = height + 23;
+    at<uint32_t>(timingData, 4) = hTotal;
+    at<uint32_t>(timingData, 8) = width;
+    at<uint32_t>(timingData, 12) = 32;                   // horizontal sync width, back porch, front porch
+    at<uint32_t>(timingData, 16) = 80;
+    at<uint32_t>(timingData, 20) = 48;
+    at<uint32_t>(timingData, 28) = 1;                    // horizontal sync polarity (positive)
+    at<uint32_t>(timingData, 36) = vTotal;
+    at<uint32_t>(timingData, 40) = height;
+    at<uint32_t>(timingData, 44) = 6;                    // vertical sync width, back porch, front porch
+    at<uint32_t>(timingData, 48) = 14;
+    at<uint32_t>(timingData, 52) = 3;
+    at<uint32_t>(timingData, 56) = kRefreshHz << 16;
+    at<uint32_t>(timingData, 68) = hTotal * vTotal * kRefreshHz;   // pixel clock in Hz
     OSObject *timing = ioavTimingWithData(timingData, 2, 4);
     do {
         if (!attributes || !product || !chromaticity || !whitePoint || !transport || !sourceLimits || !scalingLimits || !colors ||
@@ -450,7 +565,12 @@ IOReturn DroidVMDisplay::get_dot_pitch(unsigned int *pitch)
 
 // AppleParavirtDisplay's hooks with nothing to do on a CPU-copied scanout: the swap and its layers need no mapping, there is no
 // gamma or color hardware (the family's defaults are unsupported, AppleParavirtDisplay accepts them).
-IOReturn DroidVMDisplay::verify_swap(IOMFBSwapIORequest *) {return 1;}   // AppleParavirtDisplay returns 1 (IOMobileFramebufferLegacy: 0)
+IOReturn DroidVMDisplay::verify_swap(IOMFBSwapIORequest *)   // AppleParavirtDisplay returns 1 (IOMobileFramebufferLegacy: 0)
+{
+    if (!fSubmitted++)
+        IOLog("DroidVMDisplay: first swap submitted\n");
+    return 1;
+}
 IOReturn DroidVMDisplay::swap_layer_map(IOMFBSwapIORequest *, unsigned int) {return kIOReturnSuccess;}
 IOReturn DroidVMDisplay::surface_layer_map(IOMFB::AP::DisplayedData *, unsigned int, IOSurface *) {return kIOReturnSuccess;}
 IOReturn DroidVMDisplay::surface_layer_unmap(IOMFB::AP::DisplayedData *, unsigned int) {return kIOReturnSuccess;}
@@ -484,7 +604,7 @@ IOReturn DroidVMDisplay::set_frame_info_notification_state_gated(IOMFBNotifyRequ
 
 // AppleParavirtDisplay::notify_swap_done_gated: the family calls it as the current swap completes; the swap info goes to the
 // clients (swap_info_notify_dispatch_gated, which calls do_swap_info_notify_gated per request) unless notifications are held.
-IOReturn DroidVMDisplay::notify_swap_done_gated(unsigned int swapID, SwapInfoBlob *, unsigned int *, unsigned int)
+IOReturn DroidVMDisplay::notify_swap_done_gated(unsigned int swapID, ::SwapInfoBlob *, unsigned int *, unsigned int)
 {
     IOMFBSwapIORequest *swap = at<IOMFBSwapIORequest *>(this, kCurrentSwap);
     if (at<uint32_t>(swap, kSwapDropReasons))

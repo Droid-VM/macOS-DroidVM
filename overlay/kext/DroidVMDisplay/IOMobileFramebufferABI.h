@@ -322,7 +322,7 @@ public:
     virtual IOReturn resize_default_fb_surface_gated();                                                                            // 449 0xafba
     virtual IOReturn deallocate_default_fb_surface_gated();                                                                        // 450 0xc7d6
     virtual bool finfo_support_io_shared_queue();                                                                                  // 451 0xd3c1
-    virtual IOReturn notify_swap_done_gated(unsigned int, SwapInfoBlob*, unsigned int*, unsigned int) = 0;                         // 452 0x13ff
+    virtual IOReturn notify_swap_done_gated(unsigned int, ::SwapInfoBlob*, unsigned int*, unsigned int) = 0;                         // 452 0x13ff
     virtual IOReturn notify_crc_ready_gated(unsigned int) = 0;                                                                     // 453 0x0122
     virtual IOReturn reprogramDisplayWithDummySwap_gated(IOMFBSwapRequestIntent, IOMFBSwapRec*);                                   // 454 0x1cda
     virtual IOReturn abort_swap_gated(IOMFBSwapIORequest*, IOMFBSwapIORequestHeadName*, IOMFBSwapCompletionState);                 // 455 0x8edb
