@@ -5,7 +5,9 @@
 // the metal2vulkan runtime on Turnip, beside this executable, on NativeAdreno's user client), one device per process. The iOS plugin's
 // render-server machinery (status stream, display hand-off, pipeline packs) is not here. Reports go to stderr (the kernel's stderr-log=1).
 #import <Foundation/Foundation.h>
+#include <CommonCrypto/CommonDigest.h>
 #include <IOKit/IOKitLib.h>
+#include <atomic>
 #include <dlfcn.h>
 #include <objc/runtime.h>
 #include <stdio.h>
@@ -127,6 +129,48 @@ static BOOL setBothGPUPriorities(id self, SEL, NSUInteger priority, NSUInteger b
     return YES;
 }
 
+// IOGPUMetalCommandBuffer's userDictionary: a mutable dictionary per command buffer, which MPS keeps its per-buffer state in. The stub's
+// nil lost it: MPSCore made an array for the buffer, stored it in nil, released it and then added to it (WindowServer's desktop window
+// effects, a pointer authentication failure in objc_msgSend once logged in).
+static char kUserDictionaryKey;
+static id userDictionary(id self, SEL)
+{
+    @synchronized(self) {
+        NSMutableDictionary *dictionary = objc_getAssociatedObject(self, &kUserDictionaryKey);
+        if (!dictionary) {
+            dictionary = [NSMutableDictionary dictionary];
+            objc_setAssociatedObject(self, &kUserDictionaryKey, dictionary, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return dictionary;
+    }
+}
+
+// The device's GPU core count, which MPSCore's MPSDevice::GetMPSDevice reads for every Apple GPU family: without it MPS has no device,
+// MPSCommandBufferImageCache's init returns nil and MPSAutoCache reads through it (WindowServer's desktop window effects after login).
+// The bridge has no answer for it; an Adreno's shader processors are counted as eight cores, which only sizes MPS's kernel choices.
+static NSUInteger gpuCoreCount(id, SEL) { return 8; }
+
+// _MTLFunction's bitCodeHash, a 32-byte digest: Metal's stitched-library path hashes each function's (createStitchingScriptHash), and the
+// frontend's function had none, so the runtime's doesNotRecognizeSelector: threw (iconservicesagent crashed on every launch, and its
+// relaunches used up its GPU opens). The digest names the function object: its name and a serial no other function in the process has.
+static char kBitCodeHashKey;
+static const void *bitCodeHash(id self, SEL)
+{
+    @synchronized(self) {
+        NSData *hash = objc_getAssociatedObject(self, &kBitCodeHashKey);
+        if (!hash) {
+            static std::atomic<uint64_t> serial;
+            NSString *text = [NSString stringWithFormat:@"%@#%llu", [self valueForKey:@"name"], (unsigned long long)++serial];
+            NSData *bytes = [text dataUsingEncoding:NSUTF8StringEncoding];
+            NSMutableData *digest = [NSMutableData dataWithLength:CC_SHA256_DIGEST_LENGTH];
+            CC_SHA256(bytes.bytes, (CC_LONG)bytes.length, (unsigned char *)digest.mutableBytes);
+            hash = digest;
+            objc_setAssociatedObject(self, &kBitCodeHashKey, hash, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return hash.bytes;
+    }
+}
+
 struct MethodSpec {
     const char *name;
     IMP imp;
@@ -174,6 +218,7 @@ static void addIOGPUMethods(id device)
         {"recommendedMaxWorkingSetSize", (IMP)workingSetSize, "Q16@0:8", false},
         {"sharedMemorySize", (IMP)workingSetSize, "Q16@0:8", false},
         {"currentAllocatedSize", (IMP)zero, "Q16@0:8", false},
+        {"gpuCoreCount", (IMP)gpuCoreCount, "Q16@0:8", false},
     };
     Class cls = object_getClass(device);
     addMethods(cls, deviceMethods, sizeof deviceMethods / sizeof *deviceMethods);
@@ -197,6 +242,35 @@ static void addIOGPUMethods(id device)
     for (const char *name : resources)
         if (Class resource = objc_getClass(name))
             addMethods(resource, resourceMethods, sizeof resourceMethods / sizeof *resourceMethods);
+    static const MethodSpec commandBufferMethods[] = {
+        {"userDictionary", (IMP)userDictionary, "@16@0:8", true},
+    };
+    static const MethodSpec functionMethods[] = {
+        {"bitCodeHash", (IMP)bitCodeHash, "^v16@0:8", false},
+    };
+    if (Class function = objc_getClass("NBFunction"))
+        addMethods(function, functionMethods, sizeof functionMethods / sizeof *functionMethods);
+    if (Class commandBuffer = objc_getClass("NBCommandBuffer"))
+        addMethods(commandBuffer, commandBufferMethods, sizeof commandBufferMethods / sizeof *commandBufferMethods);
+    // The frontend's classes declare no Metal protocols, and clients check them: MPSCommandBufferImageCache's init returns nil for a
+    // command buffer that does not conform to MTLCommandBuffer, and MPSAutoCache reads through it (WindowServer after login).
+    static const char *const conformances[][2] = {
+        {"NBBuffer", "MTLBuffer"}, {"NBTexture", "MTLTexture"}, {"NBLibrary", "MTLLibrary"}, {"NBFunction", "MTLFunction"},
+        {"NBComputePipeline", "MTLComputePipelineState"}, {"NBRenderPipeline", "MTLRenderPipelineState"},
+        {"NBSampler", "MTLSamplerState"}, {"NBDepthStencil", "MTLDepthStencilState"}, {"NBEvent", "MTLEvent"},
+        {"NBSharedEvent", "MTLSharedEvent"}, {"NBFence", "MTLFence"}, {"NBQueue", "MTLCommandQueue"},
+        {"NBCommandBuffer", "MTLCommandBuffer"}, {"NBEncoder", "MTLCommandEncoder"}, {"NBComputeEncoder", "MTLComputeCommandEncoder"},
+        {"NBRenderEncoder", "MTLRenderCommandEncoder"}, {"NBBlitEncoder", "MTLBlitCommandEncoder"}, {"NBHeap", "MTLHeap"},
+        {"NBBinaryArchive", "MTLBinaryArchive"},
+    };
+    for (const auto &conformance : conformances) {
+        Class cls = objc_getClass(conformance[0]);
+        Protocol *protocol = objc_getProtocol(conformance[1]);
+        if (cls && protocol)
+            class_addProtocol(cls, protocol);
+        else
+            fprintf(stderr, "NativeAdrenoMetal: %s: no %s for %s\n", getprogname(), conformance[1], conformance[0]);
+    }
     if (Class object = objc_getClass("NBObject"))
         class_addMethod(object_getClass(object), @selector(resolveInstanceMethod:), (IMP)resolveStub, "B24@0:8:16");
 }

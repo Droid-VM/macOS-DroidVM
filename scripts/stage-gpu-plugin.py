@@ -8,6 +8,7 @@ make-owner-trust-bundle.py).
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
+(and a managed SkipSetupItems, so a new user's first login skips Setup Assistant's per-user panes)
 (Language Chooser waits for bluetoothd, which the board disables, in IOBluetoothHostController's first use).
 --log-stream adds a launchd job running `log show --last boot` then `log stream` with --predicate PREDICATE: the unified log's messages (os_log,
 which no daemon writes to stderr) since boot on its stdout, which stderr-log=1 puts in the kernel's log. --log-debug writes
@@ -54,6 +55,12 @@ LOG_PREFS = '.data/Library/Preferences/Logging/Subsystems'   # only --log-debug 
 TOP_JOB = '.data/Library/LaunchDaemons/org.droidvm.top.plist'
 RUN_JOB = '.data/Library/LaunchDaemons/org.droidvm.run.{}.plist'
 SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
+# A new user's first login runs Setup Assistant again (its per-user panes); the managed preference skips them.
+SETUP_SKIP = '.data/Library/Managed Preferences/com.apple.SetupAssistant.managed.plist'
+SETUP_SKIP_ITEMS = ['Accessibility', 'AdditionalPrivacySettings', 'Appearance', 'AppleID', 'AppStore', 'Biometric', 'Diagnostics',
+                    'DisplayTone', 'EnableLockdownMode', 'FileVault', 'iCloudDiagnostics', 'iCloudStorage', 'Intelligence', 'Location',
+                    'OSShowcase', 'Privacy', 'Restore', 'Safety', 'ScreenTime', 'Siri', 'SoftwareUpdate', 'TermsOfAddress', 'TextSize',
+                    'TOS', 'TouchIDPrompt', 'UnlockWithWatch', 'Wallpaper', 'Welcome']
 LAUNCHD_DISABLED = 'db/com.apple.xpc.launchd/disabled.plist'
 DSLOCAL = 'db/dslocal/nodes/Default'
 
@@ -235,6 +242,12 @@ def main():
                     marker = mount / SETUP_DONE
                     subprocess.run(['sudo', 'mkdir', '-p', str(marker.parent)], check=True)
                     subprocess.run(['sudo', 'install', '-o', '0', '-g', '0', '-m', '444', '/dev/null', str(marker)], check=True)
+                    skip = mount / SETUP_SKIP
+                    subprocess.run(['sudo', 'mkdir', '-p', str(skip.parent)], check=True)
+                    subprocess.run(['sudo', 'tee', str(skip)], input=plistlib.dumps({'SkipSetupItems': SETUP_SKIP_ITEMS}, fmt=plistlib.FMT_XML),
+                                   stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(skip)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(skip)], check=True)
                 subprocess.run(['sync'], check=True)
             finally:
                 subprocess.run(['sudo', 'umount', str(mount)], check=True)
