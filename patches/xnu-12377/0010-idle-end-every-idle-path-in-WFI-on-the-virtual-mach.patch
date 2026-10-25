@@ -1,0 +1,195 @@
+From 6136ce7f19d104e2a97876aef023f71173583cb4 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sun, 25 Oct 2026 13:28:49 -0400
+Subject: [PATCH] idle: end every idle path in WFI on the virtual machine
+ boards, and report the idle loop's branches from pc-sample
+
+Gunyah traps WFI (the vCPU blocks and the host gets the physical core back) but runs WFE in the guest. The idle loop polls with
+WFE: with a zero cpu_idle_latency cpu_proximate_timer() holds on almost every idle entry, and wfe_to_deadline_or_interrupt(~0ULL)
+has no deadline, only the ISR check, to leave. Eight vCPUs therefore spun at 100% on the host while the guest reported 87% idle.
+idle_wfe_poll (off for ARM64_BOARD_CONFIG_BCM2837, boot-arg idle-wfe=1 to restore) skips both WFE paths so the idle ends in WFI.
+
+pc-sample now also reports how the idle loop leaves (idle_disallowed, WFE recommendation, proximate timer, WFI), which of the two
+idle_disallowed reasons held, and how long each WFI actually blocked: a WFI that returns at once is a vCPU the hypervisor does not
+block. That is how the real cause was found: SIGPdisabled was never cleared, because XNU clears it only when a core takes its
+first IPI and the CPU driver's self-IPI was off by default (ArmCpu: every core sends itself SGI 0 from initCPU).
+---
+ osfmk/arm64/cpu.c              | 55 ++++++++++++++++++++++++++++++----
+ osfmk/arm64/machine_routines.c |  3 +-
+ osfmk/kern/exception.c         | 19 ++++++++++++
+ 3 files changed, 70 insertions(+), 7 deletions(-)
+
+diff --git a/osfmk/arm64/cpu.c b/osfmk/arm64/cpu.c
+index ef2cc64..d10d7a1 100644
+--- a/osfmk/arm64/cpu.c
++++ b/osfmk/arm64/cpu.c
+@@ -151,6 +151,27 @@ static uint32_t idle_proximate_timer_wfe = 1;
+ static uint32_t idle_proximate_io_wfe_masked = 0;
+ #endif
+ 
++/*
++ * Virtual machine boards: Gunyah traps WFI (the vCPU blocks and the host gets the physical core back) but runs WFE in the
++ * guest. WFE polling in the idle loop therefore spins at 100% on the host while the guest reports itself idle: with a zero
++ * cpu_idle_latency cpu_proximate_timer() holds on almost every idle entry and wfe_to_deadline_or_interrupt(~0ULL) has no
++ * deadline, only the ISR check, to leave. End every idle path in WFI on these boards; idle-wfe=1 restores the polling for
++ * an A/B on hardware that traps WFE.
++ */
++#if defined(ARM64_BOARD_CONFIG_BCM2837)
++#define IDLE_WFE_POLL_DEFAULT 0
++#else
++#define IDLE_WFE_POLL_DEFAULT 1
++#endif
++uint32_t idle_wfe_poll = IDLE_WFE_POLL_DEFAULT;
++
++/* bring-up (pc-sample): the idle loop's WFI and its blocking time, summed over all CPUs */
++uint64_t virt_idle_entries, virt_wfi_entries, virt_wfi_ticks;
++/* bring-up (pc-sample): how each cpu_idle() entry leaves - 0 disallowed, 1 WFE-recommendation, 2 proximate timer, 3 WFI */
++uint64_t virt_idle_exit[4];
++/* bring-up (pc-sample): which of the two idle_disallowed reasons held - 0 idle_enable false, 1 SIGPdisabled */
++uint64_t virt_idle_disallowed[2];
++
+ #if __ARM_GLOBAL_SLEEP_BIT__
+ volatile boolean_t arm64_stall_sleep = TRUE;
+ #endif
+@@ -487,11 +508,14 @@ cpu_idle(void)
+ 
+ 	if (__improbable((!idle_enable))) {
+ 		idle_disallowed = true;
++		os_atomic_inc(&virt_idle_disallowed[0], relaxed);
+ 	} else if (__improbable(cpu_data_ptr->cpu_signal & SIGPdisabled)) {
+ 		idle_disallowed = true;
++		os_atomic_inc(&virt_idle_disallowed[1], relaxed);
+ 	}
+ 
+ 	if (__improbable(idle_disallowed)) {
++		os_atomic_inc(&virt_idle_exit[0], relaxed);
+ 		Idle_load_context();
+ 	}
+ 
+@@ -526,7 +550,7 @@ cpu_idle(void)
+ 		processor->next_idle_short_wfe_deadline = UINT64_MAX;
+ 	}
+ 
+-	if (wfe_timeout != 0) {
++	if (wfe_timeout != 0 && idle_wfe_poll) {
+ 		uint64_t wfe_deadline = ctime_for_deadline + wfe_timeout;
+ 		/* Poll issuing event-bounded WFEs until an interrupt
+ 		 * arrives or the WFE recommendation expires
+@@ -541,12 +565,13 @@ cpu_idle(void)
+ 			 * reevaluate scheduler rebalance.
+ 			 * Back to machine_idle()
+ 			 */
++			os_atomic_inc(&virt_idle_exit[1], relaxed);
+ 			Idle_load_context();
+ 		}
+ 	}
+ 
+ 	if (__improbable(cpu_proximate_timer())) {
+-		if (idle_proximate_timer_wfe == 1) {
++		if (idle_wfe_poll && idle_proximate_timer_wfe == 1) {
+ 			/* Poll issuing WFEs until the expected
+ 			 * timer FIQ arrives.
+ 			 */
+@@ -555,8 +580,12 @@ cpu_idle(void)
+ 			KDBG(CPUPM_IDLE_TIMER_WFE | DBG_FUNC_END, ipending, cpu_data_ptr->wfe_count, ~0ULL);
+ 			assert(ipending == true);
+ 		}
+-		/* Back to machine_idle() */
+-		Idle_load_context();
++		if (idle_wfe_poll) {
++			/* Back to machine_idle() */
++			os_atomic_inc(&virt_idle_exit[2], relaxed);
++			Idle_load_context();
++		}
++		/* else: the timer is the reason to idle, and WFI waits for it (and for any interrupt) blocked */
+ 	}
+ 
+ 	lastPop = cpu_data_ptr->rtcPop;
+@@ -608,11 +637,21 @@ cpu_idle(void)
+ 		typhoon_prepare_for_wfi();
+ #endif
+ 		__builtin_arm_dsb(DSB_SY);
++		{
++			/* bring-up (pc-sample): how long WFI actually blocks and how often the idle loop reaches it. A WFI that returns
++			 * at once on a vCPU that reports itself idle means the hypervisor does not block the vCPU in it. */
++			extern uint64_t virt_idle_entries, virt_wfi_ticks, virt_wfi_entries;
++			uint64_t before = mach_absolute_time();
++			os_atomic_inc(&virt_wfi_entries, relaxed);
++			os_atomic_inc(&virt_idle_entries, relaxed);
++			os_atomic_inc(&virt_idle_exit[3], relaxed);
+ #if HAS_RETENTION_STATE
+-		arm64_retention_wfi();
++			arm64_retention_wfi();
+ #else
+-		__builtin_arm_wfi();
++			__builtin_arm_wfi();
+ #endif
++			os_atomic_add(&virt_wfi_ticks, mach_absolute_time() - before, relaxed);
++		}
+ 
+ #if defined(APPLETYPHOON)
+ 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
+@@ -1204,6 +1243,10 @@ cpu_machine_idle_init(boolean_t from_boot)
+ 			idle_proximate_io_wfe_unmasked = ((wfe_mode & 4) == 4);
+ 		}
+ #endif
++		uint32_t idle_wfe = 0;
++		if (PE_parse_boot_argn("idle-wfe", &idle_wfe, sizeof(idle_wfe))) {
++			idle_wfe_poll = idle_wfe != 0;
++		}
+ 
+ 		// bits 7..0 give the wfi type
+ 		switch (wfi & 0xff) {
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 20d564f..bf85a10 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -333,13 +333,14 @@ ml_cpu_signal_retract(unsigned int cpu_mpidr __unused)
+ }
+ 
+ extern uint32_t idle_proximate_io_wfe_unmasked;
++extern uint32_t idle_wfe_poll;   /* osfmk/arm64/cpu.c: WFE polling in the idle loop (off on the virtual machine boards) */
+ 
+ #define CPUPM_IDLE_WFE 0x5310300
+ static bool
+ wfe_process_recommendation(void)
+ {
+ 	bool ipending = false;
+-	if (__probable(idle_proximate_io_wfe_unmasked == 1)) {
++	if (__probable(idle_proximate_io_wfe_unmasked == 1) && idle_wfe_poll) {
+ 		/* Check for an active perf. controller generated
+ 		 * WFE recommendation for this cluster.
+ 		 */
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index aa18433..6de7c03 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -600,6 +600,25 @@ virt_pc_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
+ 	printf(")\n");
+ 	printf("pc-sample: last past queue head: func 0x%llx soft %lld hard %lld (ticks from now)\n", virt_timer_past_head[0],
+ 	    (long long)virt_timer_past_head[1], (long long)virt_timer_past_head[2]);
++	{
++		/* the idle loop's WFI: entries and the time they actually blocked (0 ticks each = the vCPU is not blocked in WFI) */
++		extern uint64_t virt_idle_entries, virt_wfi_entries, virt_wfi_ticks, virt_idle_exit[4];
++		uint64_t entries = virt_wfi_entries, ticks = virt_wfi_ticks;
++		printf("pc-sample: idle loop %llu entries, %llu WFI, %llu ticks blocked (%llu per WFI)\n",
++		    (unsigned long long)virt_idle_entries, (unsigned long long)entries, (unsigned long long)ticks,
++		    (unsigned long long)(entries ? ticks / entries : 0));
++		printf("pc-sample: idle exits: disallowed %llu wfe-rec %llu prox-timer %llu wfi %llu\n",
++		    (unsigned long long)virt_idle_exit[0], (unsigned long long)virt_idle_exit[1],
++		    (unsigned long long)virt_idle_exit[2], (unsigned long long)virt_idle_exit[3]);
++		extern uint64_t virt_idle_disallowed[2];
++		printf("pc-sample: idle disallowed: idle_enable false %llu, SIGPdisabled %llu\n",
++		    (unsigned long long)virt_idle_disallowed[0], (unsigned long long)virt_idle_disallowed[1]);
++		virt_idle_disallowed[0] = virt_idle_disallowed[1] = 0;
++		virt_idle_entries = virt_wfi_entries = virt_wfi_ticks = 0;
++		for (unsigned int i = 0; i < 4; i++) {
++			virt_idle_exit[i] = 0;
++		}
++	}
+ 	/* the short waits' stacks: their tasks are named with the sampled ones */
+ 	struct virt_wait_stack waits[VIRT_WAIT_STACKS];
+ 	spl_t s = splsched();
+-- 
+2.53.0
+

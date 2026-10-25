@@ -1,0 +1,23 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -31,7 +31,7 @@
+ volatile uint32_t armcpu_gic_boot[8];
+ volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];   // per logical core: architectural timer interrupts and SGI 0 taken
+ static bool gSpiIpi = false;                // boot-arg armcpu-spi-ipi=1: IPIs are software-pended SPIs 1008+core routed to that core (ICC_SGI1R_EL1 generates nothing on this board)
+-static bool gSelfIpi = false;               // boot-arg armcpu-self-ipi=1: every core sends itself SGI 0 from initCPU
++static bool gSelfIpi = true;                // every core sends itself SGI 0 from initCPU: XNU clears SIGPdisabled only when the core takes its first IPI, and until then cpu_idle() returns at once and the core spins at 100% (armcpu-self-ipi=0 disables)
+ volatile uint32_t armcpu_irq_phase = 0,armcpu_irq_id = 1023;
+ volatile uint32_t armcpu_quiesce_calls = 0,armcpu_halt_calls = 0;
+ // Secondary-CPU bring-up evidence (sheng-smp=1). Step values: 1 nub started, 2 registered, 3 start thread running,
+@@ -361,9 +361,9 @@
+   unsigned skip = 0;
+   PE_parse_boot_argn ("armcpu-skip-gic", &skip, sizeof (skip));
+   skipGic = skip != 0;
+-  unsigned selfIpi = 0;
++  unsigned selfIpi = 1;
+   PE_parse_boot_argn ("armcpu-self-ipi", &selfIpi, sizeof (selfIpi));
+-  gSelfIpi = selfIpi == 1;
++  gSelfIpi = selfIpi != 0;
+   unsigned spiIpi = 0;
+   PE_parse_boot_argn ("armcpu-spi-ipi", &spiIpi, sizeof (spiIpi));
+   gSpiIpi = spiIpi == 1;

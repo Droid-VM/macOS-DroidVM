@@ -1,0 +1,44 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -400,10 +400,17 @@
+   info.log_id = logicalId;
+   info.cluster_id = static_cast<uint32_t> (ml_get_cluster_number (physical));
+   info.cluster_type = ml_get_boot_cluster_type ();
++  // XNU 12377 calls processor_boot() inside ml_processor_register(). Its
++  // scheduler can unmask IRQ before this call returns, so the per-CPU target
++  // must exist before registration (sleh_irq calls it without a null check).
++  setCPUNumber (info.log_id);
++  if (!skipGic) {
++    ml_install_interrupt_handler (this, static_cast<int> (logicalId), this,
++        reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
++  }
+   perfmon_interrupt_handler_func pmi = nullptr;
+   kern_return_t status = ml_processor_register (&info, &machProcessor, &ipi_handler, &pmi);
+   if (status != KERN_SUCCESS) { panic ("ArmCpu: CPU %u registration failed: %d", logicalId, status); }
+-  setCPUNumber (info.log_id);
+   armcpu_registered = 1;
+   unsigned smp = 0;
+   PE_parse_boot_argn ("sheng-smp", &smp, sizeof (smp));
+@@ -418,12 +425,21 @@
+     panic ("ArmCpu: CPU interrupt controller allocation failed");
+   }
+   controller->registerCPUInterruptController ();
++  // enableCPUInterrupt publishes the shared wrapper before its vector is
++  // registered. Keep the direct GIC dispatcher installed across that window,
++  // as on secondary cores; do not expose an empty wrapper to a live timer.
++  boolean_t interruptsEnabled = ml_set_interrupts_enabled (FALSE);
+   controller->enableCPUInterrupt (this);
++  if (!skipGic) {
++    ml_install_interrupt_handler (this, static_cast<int> (logicalId), this,
++        reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
++  }
++  ml_set_interrupts_enabled (interruptsEnabled);
+   if (controller->registerInterrupt (provider, logicalId, this, &ArmCpu::dispatch, nullptr) != kIOReturnSuccess) {
+     panic ("ArmCpu: CPU IRQ action registration failed");
+   }
+   gController = controller;
+-  initCPU (true);
++  // processor_boot() already invoked initCPU(true) through cpu_start().
+   registerService ();
+   __atomic_store_n (&gBootRegistered, 1U, __ATOMIC_RELEASE);
+   drainPending ();
