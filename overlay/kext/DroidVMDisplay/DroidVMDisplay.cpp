@@ -36,6 +36,8 @@ static constexpr size_t kDisplayWidth = 6400;      // display_width() / display_
 static constexpr size_t kDisplayHeight = 6404;
 static constexpr size_t kSystemPowerState = 6428;  // u32: setPowerState's state (do_power_state_change_action_gated, request type 0)
 static constexpr size_t kAPIPowerState = 6432;     // u32: setAPIPowerState's state (power_state_change_interrupt, request type 1)
+static constexpr size_t kHardwarePowered = 6436;   // u32: the display is powered ("PowerStates-Cntr" in swap_wait_gated's report); with
+                                                   // kHardwareStarted set, swap_wait fails kIOReturnOffline while it is 0 (0x...2d1e4)
 static constexpr size_t kSwapInfoHeld = 6902;      // u16: swap info notifications are held (notify_swap_done_gated 0x...d9430)
 static constexpr size_t kSwapInfoTime = 264;       // the swap info's time (notify_swap_done_gated 0x...d93f0)
 // IOMobileFramebuffer (instance 144): set before power management in AppleParavirtDisplay's start_hardware block (0x...d8e90)
@@ -127,6 +129,7 @@ public:
     bool start_hardware() override;
     IOReturn stop_hardware_gated() override;
     IOReturn swap_begin_gated() override;
+    IOReturn swap_wait(IOMobileFramebufferUserClient *, unsigned int, unsigned int, unsigned int) override;
     IOReturn verify_swap(IOMFBSwapIORequest *) override;
     IOReturn swap_layer_map(IOMFBSwapIORequest *, unsigned int) override;
     IOReturn surface_layer_map(IOMFB::AP::DisplayedData *, unsigned int, IOSurface *) override;
@@ -180,6 +183,7 @@ private:
     bool fDisplayOn;
     uint64_t fFrames;
     uint64_t fTicks, fDropped, fReported;   // swap_begin_gated runs, swaps dropped, fSubmitted + fFrames + fDropped + fStalled at the last report
+    uint64_t fWaitFailures;                 // diagnostic: swap_wait calls that failed (WindowServer's display readiness)
     uint64_t fSubmitted, fStalled;          // swaps verified, VBL ticks with a queued swap clean_queue_gated did not hand over
     SwapInfo fSwapInfo[kSwapInfoRing];   // held while kSwapInfoHeld is set, sent in order afterwards
     unsigned fSwapInfoRead, fSwapInfoWrite;
@@ -326,6 +330,19 @@ IOReturn DroidVMDisplay::swap_begin_gated()
     return fVBL->setTimeoutMS(16);
 }
 
+// Diagnostic: CoreAnimation asks swap_wait, without blocking, whether its last swaps are done before it composes the next frame
+// (IOMFBDisplay::can_update_); after three swaps WindowServer found the display unready for good.
+IOReturn DroidVMDisplay::swap_wait(IOMobileFramebufferUserClient *client, unsigned int swapID, unsigned int options, unsigned int timeout)
+{
+    IOReturn result = IOMobileFramebufferLegacy::swap_wait(client, swapID, options, timeout);
+    if (result != kIOReturnSuccess && (++fWaitFailures <= 20 || fWaitFailures % 1000 == 0))
+        IOLog("DroidVMDisplay: swap_wait(%u, 0x%x, %u) = 0x%x (%llu failures): +6412 %u power %u/%u +6436 %u +140 0x%x current %p queue %p\n",
+              swapID, options, timeout, result, fWaitFailures, at<uint32_t>(this, 6412), at<uint32_t>(this, kSystemPowerState),
+              at<uint32_t>(this, kAPIPowerState), at<uint32_t>(this, kHardwarePowered), at<uint8_t>(this, kHardwareStarted),
+              at<IOMFBSwapIORequest *>(this, kCurrentSwap), at<IOMFBSwapIORequest *>(this, kSwapQueueFirst));
+    return result;
+}
+
 // AppleParavirtDisplay::do_power_state_change_gated: the display is on while both the system and WindowServer (setAPIPowerState)
 // want it on; each change goes to WindowServer as a power state notification, which CoreAnimation waits for before it swaps.
 IOReturn DroidVMDisplay::do_power_state_change_gated()
@@ -334,6 +351,7 @@ IOReturn DroidVMDisplay::do_power_state_change_gated()
     if (on == fDisplayOn)
         return kIOReturnSuccess;
     fDisplayOn = on;
+    at<uint32_t>(this, kHardwarePowered) = on;
     IOLog("DroidVMDisplay: display %s\n", on ? "on" : "off");
     powerstate_notify(true, on);
     return kIOReturnSuccess;
@@ -395,6 +413,7 @@ void DroidVMDisplay::copySurface(IOSurface *surface)
     if (memory->prepare() != kIOReturnSuccess)
         return;
     uint64_t lit = 0, raw = 0, center = 0;
+    bool sample = fFrames <= 8 || fFrames % 50 == 0;   // bring-up: what the first frames hold, then every 50th
     for (uint64_t y = 0; y < copyHeight; y++) {
         uint8_t *line = fScanout + y * fVideo.v_rowBytes;
         if (format == kFormatBGRA) {
@@ -406,7 +425,7 @@ void DroidVMDisplay::copySurface(IOSurface *surface)
         for (uint64_t x = 0; x < copyWidth; x++) {
             const uint16_t *rgba = fRow + x * 4;
             pixels[x] = 0xff000000u | fHalfToByte[rgba[0]] << 16 | fHalfToByte[rgba[1]] << 8 | fHalfToByte[rgba[2]];
-            if (fFrames <= 8) {   // bring-up: what the first frames hold
+            if (sample) {
                 lit += (pixels[x] & 0xffffff) != 0;
                 raw += (rgba[0] | rgba[1] | rgba[2] | rgba[3]) != 0;
                 if (y == copyHeight / 2 && x == copyWidth / 2)
@@ -415,7 +434,7 @@ void DroidVMDisplay::copySurface(IOSurface *surface)
         }
     }
     memory->complete();
-    if (format == kFormatRGhA && fFrames <= 8)
+    if (format == kFormatRGhA && sample)
         IOLog("DroidVMDisplay: frame %llu: %llu pixels lit, %llu nonzero, centre %#llx\n", fFrames, lit, raw, center);
 }
 
