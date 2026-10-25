@@ -182,6 +182,7 @@ private:
     uint32_t fSurfaceFormat;
     bool fDisplayOn;
     uint64_t fFrames;
+    uint64_t fLastLit, fLastCenter;   // bring-up: lit pixels and centre pixel of the last frame shown
     uint64_t fTicks, fDropped, fReported;   // swap_begin_gated runs, swaps dropped, fSubmitted + fFrames + fDropped + fStalled at the last report
     uint64_t fWaitFailures;                 // diagnostic: swap_wait calls that failed (WindowServer's display readiness)
     uint64_t fSubmitted, fStalled;          // swaps verified, VBL ticks with a queued swap clean_queue_gated did not hand over
@@ -324,8 +325,8 @@ IOReturn DroidVMDisplay::swap_begin_gated()
         fStalled++;
     if (++fTicks % 625 == 0 && fSubmitted + fFrames + fDropped + fStalled != fReported) {   // about every 10 s while swaps arrive
         fReported = fSubmitted + fFrames + fDropped + fStalled;
-        IOLog("DroidVMDisplay: %llu swaps submitted, %llu shown, %llu dropped, %llu ticks stalled (current %p)\n", fSubmitted, fFrames,
-              fDropped, fStalled, at<IOMFBSwapIORequest *>(this, kCurrentSwap));
+        IOLog("DroidVMDisplay: %llu swaps submitted, %llu shown, %llu dropped, %llu ticks stalled (current %p), last frame %llu lit centre %#llx\n",
+              fSubmitted, fFrames, fDropped, fStalled, at<IOMFBSwapIORequest *>(this, kCurrentSwap), fLastLit, fLastCenter);
     }
     return fVBL->setTimeoutMS(16);
 }
@@ -413,7 +414,7 @@ void DroidVMDisplay::copySurface(IOSurface *surface)
     if (memory->prepare() != kIOReturnSuccess)
         return;
     uint64_t lit = 0, raw = 0, center = 0;
-    bool sample = fFrames <= 8 || fFrames % 50 == 0;   // bring-up: what the first frames hold, then every 50th
+    bool sample = true;   // bring-up: the first frames and every 50th are logged, the last one goes into the periodic report
     for (uint64_t y = 0; y < copyHeight; y++) {
         uint8_t *line = fScanout + y * fVideo.v_rowBytes;
         if (format == kFormatBGRA) {
@@ -434,7 +435,9 @@ void DroidVMDisplay::copySurface(IOSurface *surface)
         }
     }
     memory->complete();
-    if (format == kFormatRGhA && sample)
+    fLastLit = lit;
+    fLastCenter = center;
+    if (format == kFormatRGhA && (fFrames <= 8 || fFrames % 50 == 0))
         IOLog("DroidVMDisplay: frame %llu: %llu pixels lit, %llu nonzero, centre %#llx\n", fFrames, lit, raw, center);
 }
 
