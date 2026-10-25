@@ -9,6 +9,7 @@ NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json overlay/kext/NativeAES.json 
 [ "${MACOS_IOFB:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMFramebuffer.json"   # fallback display (IOBootFramebuffer); the route is IOMFB
 [ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/ARMPlatformStandIn.json overlay/kext/DroidVMDisplay.json"   # the IOMFB display; register/prepare with it too (ADT node)
 [ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMEthernet.json"   # en0 for the TimeSync clock ID: WindowServer waits on clocksyncd without one
+[ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMInput.json"   # the app's touch screen, tablet, mouse, keyboard (virtio-input on /arm-io/pcie) as HID devices
 [ "${MACOS_GPU:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMGpu.json"   # build first: scripts/build-droidvm-gpu.py
 K=out/x12377/kernel12377e-osx-kc.macho; KC=out/x12377/kc12377e-m2.bin
 llvm-nm -n --defined-only $K > out/rig/kc12377e-m2.nm

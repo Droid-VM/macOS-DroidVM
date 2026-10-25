@@ -149,6 +149,14 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False):
         # "paravirtualizedgraphics,gpu" (as vma2's), whose nub DroidVMDisplay's AppleParavirtGPU matches (overlay/kext/DroidVMDisplay.json).
         if os.environ.get('MACOS_DISPLAY') == '1':
             text = text.replace(marker, "              node('display', [('compatible', b'paravirtualizedgraphics,gpu\\0')]),\n" + marker)
+        # The PCI host (crosvm's --input devices are virtio-pci functions): /arm-io/pcie, the FDT's ECAM window, where DroidVMInput
+        # finds the app's touch screen, tablet, mouse and keyboard (overlay/kext/DroidVMInput.json).
+        assert text.count('    vm = describe(parse_fdt(args.fdt.read_bytes()))') == 1
+        text = text.replace('    vm = describe(parse_fdt(args.fdt.read_bytes()))',
+                            '    fdt_nodes = parse_fdt(args.fdt.read_bytes())\n    vm = describe(fdt_nodes)')
+        text = text.replace(marker, "              *[node('pcie', [('compatible', b'pci-host-ecam-generic\\0'), ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)),"
+                                    " ('dma-coherent', b'')]) for address, size in [reg_pairs(props['reg'])[0] for props in fdt_nodes.values()"
+                                    " if b'pci-host-ecam-generic' in props.get('compatible', b'')]],\n" + marker)
         tool.write_text(text)
     subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',

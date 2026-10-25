@@ -574,7 +574,8 @@ def check_vtable(kc, linked, kept_sites, spec, shift, old_off):
         ours = own_sites.get(own_va + 16 + slot * 8)
         if ours is None or ours == theirs:
             if ours is None:
-                print(f'  vtable slot {slot}: not filled in the driver\'s vtable')
+                names = [n for n, kind, sect, desc, value in kc.symbols(kc.macho(spec['base_kext'])) if theirs is not None and value + shift == theirs]
+                print(f'  vtable slot {slot}: not filled in the driver\'s vtable (the base class has {theirs and hex(theirs)} {names})')
                 bad += 1
             continue
         if not in_driver(ours):
