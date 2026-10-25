@@ -3,7 +3,8 @@
 searches for <MetalPluginName>.bundle; /Library is a link into the Data volume's .data, make-macos-systemos.sh), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
 make-owner-trust-bundle.py).
 
-    stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] BUNDLE...        [MACOS_TAG=27.0.1]
+    stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
+                        [--disable-job LABEL]... BUNDLE...        [MACOS_TAG=27.0.1]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
@@ -12,6 +13,11 @@ make-owner-trust-bundle.py).
 which no daemon writes to stderr) since boot on its stdout, which stderr-log=1 puts in the kernel's log. --log-debug writes
 /Library/Preferences/Logging/Subsystems/SUBSYSTEM.plist (what `log config` writes) so the log keeps SUBSYSTEM's info and debug
 messages from boot on.
+--top adds a launchd job printing, a minute after it starts, the largest zones (zprint) and vm_stat, then `top` (the 15 busiest
+processes) every SECONDS, all on its stdout, so in the kernel's log too.
+--disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
+this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
+throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit).
 
 Output: out/metal/stage/{scratch-data.img,kernel.macho.trustcache}; boot with MACOS_DATA_SEED / MACOS_TRUSTCACHE set to them
 (scripts/droidvm-app.py). The Data volume is volatile (NativeRamBlock), so the seed is what the guest sees on every boot. Needs sudo
@@ -41,7 +47,9 @@ PROBE_DIR = '.data/usr/local/libexec'                  # /usr/local is a link in
 PROBE_JOB = '.data/Library/LaunchDaemons/org.droidvm.metal-probe.plist'
 LOG_JOB = '.data/Library/LaunchDaemons/org.droidvm.log-stream.plist'
 LOG_PREFS = '.data/Library/Preferences/Logging/Subsystems'   # only --log-debug writes there
+TOP_JOB = '.data/Library/LaunchDaemons/org.droidvm.top.plist'
 SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
+LAUNCHD_DISABLED = 'db/com.apple.xpc.launchd/disabled.plist'
 
 
 def cdhash(path):
@@ -91,6 +99,8 @@ def main():
     parser.add_argument('--setup-done', action='store_true')
     parser.add_argument('--log-stream', metavar='PREDICATE')
     parser.add_argument('--log-debug', metavar='SUBSYSTEM', action='append', default=[])
+    parser.add_argument('--top', metavar='SECONDS', type=int)
+    parser.add_argument('--disable-job', metavar='LABEL', action='append', default=[])
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
     bundles = [b.resolve() for b in args.bundles]
@@ -148,6 +158,26 @@ def main():
                     subprocess.run(['sudo', 'tee', str(log_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(log_job)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(log_job)], check=True)
+                top_job = mount / TOP_JOB
+                subprocess.run(['sudo', 'rm', '-f', str(top_job)], check=True)
+                if args.top:
+                    subprocess.run(['sudo', 'mkdir', '-p', str(top_job.parent)], check=True)
+                    plist = plistlib.dumps({'Label': 'org.droidvm.top', 'RunAtLoad': True,
+                                            'ProgramArguments': ['/bin/sh', '-c', 'sleep 60; zprint -s -t | head -40; vm_stat; exec top -l 0 -s {} '
+                                                                 '-o cpu -n 15 -stats pid,command,cpu,time,threads,state'.format(args.top)]},
+                                           fmt=plistlib.FMT_XML)
+                    subprocess.run(['sudo', 'tee', str(top_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(top_job)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(top_job)], check=True)
+                disabled = mount / LAUNCHD_DISABLED   # the seed's own overrides are kept (each run starts from the artifact seed)
+                if args.disable_job:
+                    subprocess.run(['sudo', 'mkdir', '-p', str(disabled.parent)], check=True)
+                    seed = subprocess.run(['sudo', 'cat', str(disabled)], capture_output=True).stdout
+                    plist = plistlib.dumps({**(plistlib.loads(seed) if seed else {}), **{label: True for label in args.disable_job}},
+                                           fmt=plistlib.FMT_XML)
+                    subprocess.run(['sudo', 'tee', str(disabled)], input=plist, stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(disabled)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(disabled)], check=True)
                 log_prefs = mount / LOG_PREFS
                 subprocess.run(['sudo', 'rm', '-rf', str(log_prefs)], check=True)
                 if args.log_debug:
