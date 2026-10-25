@@ -47,7 +47,8 @@ static constexpr size_t kSwapLayers = 824;         // bit 0: main surface, bit 1
 static constexpr size_t kSwapDropReasons = 844;    // programmed when nothing but bit 3 is set, else dropped (swap_begin_gated 0x...dbac0)
 static constexpr size_t kSwapInfoA = 752;         // swap info words 3 and 4 (notify_swap_done_gated 0x...d93f4)
 static constexpr size_t kSwapInfoB = 816;
-static constexpr size_t kSwapMainSurface = 2752;
+static constexpr size_t kSwapMainSurface = 2752;   // layer i's surface at + 8 * i
+static constexpr unsigned kSwapLayerCount = 4;
 static constexpr size_t kSwapNext = 3192;          // TAILQ entry of the queue
 static constexpr size_t kSwapPrev = 3200;
 // IOMFBNotifyRequest
@@ -182,6 +183,7 @@ private:
     uint32_t fSurfaceFormat;
     bool fDisplayOn;
     uint64_t fFrames;
+    uint64_t fLayerShape;             // bring-up: the layers of the last swap, logged when they change
     uint64_t fLastLit, fLastCenter;   // bring-up: lit pixels and centre pixel of the last frame shown
     uint64_t fTicks, fDropped, fReported;   // swap_begin_gated runs, swaps dropped, fSubmitted + fFrames + fDropped + fStalled at the last report
     uint64_t fWaitFailures;                 // diagnostic: swap_wait calls that failed (WindowServer's display readiness)
@@ -363,8 +365,34 @@ IOReturn DroidVMDisplay::do_power_state_change_gated()
 void DroidVMDisplay::program_hardware_gated()
 {
     IOMFBSwapIORequest *swap = at<IOMFBSwapIORequest *>(this, kCurrentSwap);
-    IOSurface *surface = at<IOSurface *>(swap, kSwapMainSurface);
-    if ((at<uint8_t>(swap, kSwapLayers) & 1) && surface)
+    // Layer i's surface follows the main one (AppleParavirtDisplay: bit 1, the cursor, at main + 8). After the login transition
+    // WindowServer swaps a 128x128 BGRA cursor where the main surface is: the screen is the largest surface of the swap, smaller
+    // ones are not drawn over it (the screen keeps its last full frame).
+    uint8_t layers = at<uint8_t>(swap, kSwapLayers);
+    IOSurface *surface = nullptr;
+    uint64_t area = 0, shape = layers;
+    for (unsigned layer = 0; layer < kSwapLayerCount; layer++) {
+        IOSurface *candidate = (layers >> layer & 1) ? at<IOSurface *>(swap, kSwapMainSurface + 8 * layer) : nullptr;
+        if (!candidate)
+            continue;
+        uint64_t width = ioSurfaceWidth(candidate), height = ioSurfaceHeight(candidate);
+        shape = shape * 31 + width * 65537 + height;
+        if (width * height > area) {
+            area = width * height;
+            surface = candidate;
+        }
+    }
+    if (shape != fLayerShape) {   // bring-up: each new combination of layers
+        fLayerShape = shape;
+        IOLog("DroidVMDisplay: swap layers %#x:", layers);
+        for (unsigned layer = 0; layer < kSwapLayerCount; layer++) {
+            IOSurface *candidate = (layers >> layer & 1) ? at<IOSurface *>(swap, kSwapMainSurface + 8 * layer) : nullptr;
+            if (candidate)
+                IOLog(" %u: %llux%llu %#x", layer, ioSurfaceWidth(candidate), ioSurfaceHeight(candidate), ioSurfacePixelFormat(candidate));
+        }
+        IOLog("\n");
+    }
+    if (surface && area * 4 >= static_cast<uint64_t>(fVideo.v_width) * fVideo.v_height)   // a quarter of the screen at least
         copySurface(surface);
     swap_complete_gated();
 }

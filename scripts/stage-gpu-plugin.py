@@ -4,7 +4,7 @@ searches for <MetalPluginName>.bundle; /Library is a link into the Data volume's
 make-owner-trust-bundle.py).
 
     stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
-                        [--disable-job LABEL]... BUNDLE...        [MACOS_TAG=27.0.1]
+                        [--disable-job LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.0.1]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
@@ -15,6 +15,10 @@ which no daemon writes to stderr) since boot on its stdout, which stderr-log=1 p
 messages from boot on.
 --top adds a launchd job printing, a minute after it starts, the largest zones (zprint) and vm_stat, then `top` (the 15 busiest
 processes) every SECONDS, all on its stdout, so in the kernel's log too.
+--run SECONDS COMMAND adds a launchd job running COMMAND (sh -c) SECONDS after it starts, its output in the kernel's log as --top's
+(e.g. `--run 330 'sample SecurityAgent 2 -file /dev/stdout'` for a hung process's stacks).
+--user adds a local administrator (uid 501, staff, admin; SALTED-SHA512-PBKDF2 shadow hash) to the Data volume's directory
+(/var/db/dslocal): the setup assistant that would create one is skipped. loginwindow creates its home on the first login.
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
 throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit).
@@ -48,8 +52,34 @@ PROBE_JOB = '.data/Library/LaunchDaemons/org.droidvm.metal-probe.plist'
 LOG_JOB = '.data/Library/LaunchDaemons/org.droidvm.log-stream.plist'
 LOG_PREFS = '.data/Library/Preferences/Logging/Subsystems'   # only --log-debug writes there
 TOP_JOB = '.data/Library/LaunchDaemons/org.droidvm.top.plist'
+RUN_JOB = '.data/Library/LaunchDaemons/org.droidvm.run.{}.plist'
 SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
 LAUNCHD_DISABLED = 'db/com.apple.xpc.launchd/disabled.plist'
+DSLOCAL = 'db/dslocal/nodes/Default'
+
+
+def add_user(dslocal, name, password, uid=501):
+    """A local administrator as System Settings writes one: the user record and its admin and staff memberships."""
+    def write(path, record):
+        subprocess.run(['sudo', 'tee', str(path)], input=plistlib.dumps(record, fmt=plistlib.FMT_BINARY), stdout=subprocess.DEVNULL,
+                       check=True)
+        subprocess.run(['sudo', 'chown', '0:0', str(path)], check=True)
+        subprocess.run(['sudo', 'chmod', '600', str(path)], check=True)
+
+    salt, iterations = os.urandom(32), 50000
+    entropy = hashlib.pbkdf2_hmac('sha512', password.encode(), salt, iterations, 128)
+    shadow = plistlib.dumps({'SALTED-SHA512-PBKDF2': {'entropy': entropy, 'iterations': iterations, 'salt': salt}}, fmt=plistlib.FMT_BINARY)
+    guid = str(uuid.uuid4()).upper()
+    write(dslocal / 'users' / (name + '.plist'), {
+        'name': [name], 'realname': [name], 'uid': [str(uid)], 'gid': ['20'], 'home': ['/Users/' + name], 'shell': ['/bin/zsh'],
+        'generateduid': [guid], 'passwd': ['********'], 'authentication_authority': [';ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>'],
+        'ShadowHashData': [shadow], '_writers_passwd': [name], '_writers_realname': [name], '_writers_hint': [name]})
+    for group in ('admin', 'staff'):
+        path = dslocal / 'groups' / (group + '.plist')
+        record = plistlib.loads(subprocess.run(['sudo', 'cat', str(path)], capture_output=True, check=True).stdout)
+        record['users'] = [u for u in record.get('users', []) if u != name] + [name]
+        record['groupmembers'] = [g for g in record.get('groupmembers', []) if g != guid] + [guid]
+        write(path, record)
 
 
 def cdhash(path):
@@ -100,7 +130,9 @@ def main():
     parser.add_argument('--log-stream', metavar='PREDICATE')
     parser.add_argument('--log-debug', metavar='SUBSYSTEM', action='append', default=[])
     parser.add_argument('--top', metavar='SECONDS', type=int)
+    parser.add_argument('--run', metavar=('SECONDS', 'COMMAND'), nargs=2, action='append', default=[])
     parser.add_argument('--disable-job', metavar='LABEL', action='append', default=[])
+    parser.add_argument('--user', metavar='NAME:PASSWORD')
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
     bundles = [b.resolve() for b in args.bundles]
@@ -169,6 +201,15 @@ def main():
                     subprocess.run(['sudo', 'tee', str(top_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(top_job)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(top_job)], check=True)
+                subprocess.run(['sudo', 'sh', '-c', 'rm -f ' + str(mount / RUN_JOB.format('*'))], check=True)
+                for index, (seconds, command) in enumerate(args.run):
+                    run_job = mount / RUN_JOB.format(index)
+                    subprocess.run(['sudo', 'mkdir', '-p', str(run_job.parent)], check=True)
+                    plist = plistlib.dumps({'Label': f'org.droidvm.run.{index}', 'RunAtLoad': True,
+                                            'ProgramArguments': ['/bin/sh', '-c', f'sleep {int(seconds)}; {command}']}, fmt=plistlib.FMT_XML)
+                    subprocess.run(['sudo', 'tee', str(run_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(run_job)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(run_job)], check=True)
                 disabled = mount / LAUNCHD_DISABLED   # the seed's own overrides are kept (each run starts from the artifact seed)
                 if args.disable_job:
                     subprocess.run(['sudo', 'mkdir', '-p', str(disabled.parent)], check=True)
@@ -188,6 +229,8 @@ def main():
                         subprocess.run(['sudo', 'tee', str(path)], input=prefs, stdout=subprocess.DEVNULL, check=True)
                         subprocess.run(['sudo', 'chmod', '644', str(path)], check=True)
                     subprocess.run(['sudo', 'chown', '-R', '0:0', str(log_prefs)], check=True)
+                if args.user:
+                    add_user(mount / DSLOCAL, *args.user.split(':', 1))
                 if args.setup_done:
                     marker = mount / SETUP_DONE
                     subprocess.run(['sudo', 'mkdir', '-p', str(marker.parent)], check=True)

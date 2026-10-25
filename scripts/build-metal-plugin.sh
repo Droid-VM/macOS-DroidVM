@@ -39,6 +39,19 @@ for old, new in [
      ' if(_surface){view.surface=(IOSurfaceRef)CFRetain(_surface);[view countUse];}\n'),
     (' texture.surface=(IOSurfaceRef)CFRetain(surface);return (id<MTLTexture>)texture;\n',
      ' texture.surface=(IOSurfaceRef)CFRetain(surface);[texture countUse];return (id<MTLTexture>)texture;\n'),
+    # A texture the heap has no room for is made on the device instead. Core Animation sizes a heap from heapTextureSizeAndAlign...:
+    # SecurityAgent's user list (with a user account) asked a 128 KiB heap holding 65 KiB for a 235x89 texture the runtime placed in
+    # more than the rest, and its login UI never showed (WindowServer kept the black transition frames).
+    (' if(!handle){NBLOG(@"native-metal: heap texture refused: %@",lastError());return nil;}\n',
+     ' if(!handle){uint64_t answer[2]={0,0};nmb_device_heap_texture_size_and_align(gDevice,&descriptor,answer);\n'
+     '  NBLOG(@"native-metal: heap texture answered size %llu align %llu, heap %llu used %llu; %lux%lu format %lu mips %lu usage %lx '
+     'offset %llx: %@; made on the device",answer[0],answer[1],nmb_heap_size(_handle),nmb_heap_used_size(_handle),(unsigned long)d.width,'
+     '(unsigned long)d.height,(unsigned long)d.pixelFormat,(unsigned long)d.mipmapLevelCount,(unsigned long)d.usage,(unsigned long long)offset,'
+     'lastError());\n'
+     '  handle=nmb_texture_new(gDevice,&descriptor);if(!handle){NBLOG(@"native-metal: texture refused: %@",lastError());return nil;}}\n'),
+    (' NBHeap *heap=[NBHeap new];heap.handle=handle;',
+     ' NBLOG(@"native-metal: heap %lu bytes type %ld options %lx -> %llu",(unsigned long)d.size,(long)d.type,(unsigned long)d.resourceOptions,'
+     'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
 ]:
     assert s.count(old) == 1, old
     s = s.replace(old, new)
