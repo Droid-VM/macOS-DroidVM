@@ -219,6 +219,9 @@ static void addIOGPUMethods(id device)
         {"sharedMemorySize", (IMP)workingSetSize, "Q16@0:8", false},
         {"currentAllocatedSize", (IMP)zero, "Q16@0:8", false},
         {"gpuCoreCount", (IMP)gpuCoreCount, "Q16@0:8", false},
+        // _MTLGetMTLCompilerLLVMVersionForDevice reads it for a stitched library (Core Image's DAG programs): below 8 it takes the
+        // default compiler version 0x7d17; unanswered, iconservicesagent threw and crashed on every launch
+        {"featureProfile", (IMP)zero, "Q16@0:8", false},
     };
     Class cls = object_getClass(device);
     addMethods(cls, deviceMethods, sizeof deviceMethods / sizeof *deviceMethods);
