@@ -157,6 +157,13 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False):
         text = text.replace(marker, "              *[node('pcie', [('compatible', b'pci-host-ecam-generic\\0'), ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)),"
                                     " ('dma-coherent', b'')]) for address, size in [reg_pairs(props['reg'])[0] for props in fdt_nodes.values()"
                                     " if b'pci-host-ecam-generic' in props.get('compatible', b'')]],\n" + marker)
+        # The Data volume persists in the data store (NativeRamBlock with DroidVMDataStore), so /chosen does not say ephemeral-storage:
+        # with hw.ephemeral_storage set, usermanagerd skips its persona manager (os_variant_uses_ephemeral_storage) and then fails the
+        # assertion _gPersonaManager != nil on loginwindow's persona login, and loginwindow never launches Dock, Finder and SystemUIServer.
+        marker = "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk) else []),"
+        assert text.count(marker) == 1
+        text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
+                                    " and args.data_store_mmio is None else []),")
         tool.write_text(text)
     subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
