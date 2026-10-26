@@ -27,18 +27,18 @@ python3 - $U/NativeBridgeMetalFrontend.mm $O/frontend.mm <<'PY'
 import sys
 s = open(sys.argv[1]).read()
 for old, new in [
-    ('@property(nonatomic) NSUInteger heapOffset;\n@end\n@implementation NBBuffer',
+    ('@property(nonatomic) NSUInteger heapOffset;\n@end\n// A no-copy import keeps its pages',
      '@property(nonatomic) NSUInteger heapOffset;\n@property(nonatomic) BOOL counted;   // its surface counted in use (countUse)\n'
      '- (void)countUse;\n@end\n'
      '// The render server counts the surfaces it textures in use while the textures live (countUse).\n'
-     'static const bool gCountsSurfaceUse=!strcmp(getprogname(),"WindowServer");\n@implementation NBBuffer'),
+     'static const bool gCountsSurfaceUse=!strcmp(getprogname(),"WindowServer");\n// A no-copy import keeps its pages'),
     ('- (void)dealloc {nmb_texture_release(_handle);if(_surface)CFRelease(_surface);}\n',
      '- (void)dealloc {nmb_texture_release(_handle);if(_surface){if(_counted)IOSurfaceDecrementUseCount(_surface);CFRelease(_surface);}}\n'
      '- (void)countUse {if(_surface && !_counted && gCountsSurfaceUse){IOSurfaceIncrementUseCount(_surface);_counted=YES;}}\n'),
     (' if(_surface)view.surface=(IOSurfaceRef)CFRetain(_surface);\n',
      ' if(_surface){view.surface=(IOSurfaceRef)CFRetain(_surface);[view countUse];}\n'),
-    (' texture.surface=(IOSurfaceRef)CFRetain(surface);return (id<MTLTexture>)texture;\n',
-     ' texture.surface=(IOSurfaceRef)CFRetain(surface);[texture countUse];return (id<MTLTexture>)texture;\n'),
+    ('texture.surface=(IOSurfaceRef)CFRetain(surface);return (id<MTLTexture>)texture;\n',
+     'texture.surface=(IOSurfaceRef)CFRetain(surface);[texture countUse];return (id<MTLTexture>)texture;\n'),
     # A texture the heap has no room for is made on the device instead. Core Animation sizes a heap from heapTextureSizeAndAlign...:
     # SecurityAgent's user list (with a user account) asked a 128 KiB heap holding 65 KiB for a 235x89 texture the runtime placed in
     # more than the rest, and its login UI never showed (WindowServer kept the black transition frames).
@@ -52,6 +52,27 @@ for old, new in [
     (' NBHeap *heap=[NBHeap new];heap.handle=handle;',
      ' NBLOG(@"native-metal: heap %lu bytes type %ld options %lx -> %llu",(unsigned long)d.size,(long)d.type,(unsigned long)d.resourceOptions,'
      'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
+    # Core Animation makes a texture of each window's surface at every frame and drops it when the frame completes, so the weak import
+    # table lost the import between frames: each frame imported every surface again and freed the last import (Turnip allocate and
+    # free, kernel calls), most of the render server's busy samples in a window drag. Imports used in the last second stay held.
+    ('static NBBuffer *surfaceBuffer(IOSurfaceRef surface,void *base,size_t bytes) {\n',
+     '#include <map>\n#include <tuple>\n'
+     'struct HeldImport {NBBuffer *buffer;uint64_t usedUs;};\n'
+     'static std::map<std::tuple<uint64_t,uint64_t,uint64_t>,HeldImport> gHeldImports;   // under gSurfaceImportLock\n'
+     'static void holdImport(uint64_t identity,uint64_t address,uint64_t bytes,NBBuffer *buffer) {\n'
+     ' const uint64_t now=nowUs();gHeldImports[{identity,address,bytes}]={buffer,now};\n'
+     ' for(auto it=gHeldImports.begin();it!=gHeldImports.end();)it=now-it->second.usedUs>1000000?gHeldImports.erase(it):std::next(it);\n'
+     ' while(gHeldImports.size()>64) {\n'
+     '  auto oldest=gHeldImports.begin();\n'
+     '  for(auto it=gHeldImports.begin();it!=gHeldImports.end();++it)if(it->second.usedUs<oldest->second.usedUs)oldest=it;\n'
+     '  gHeldImports.erase(oldest);\n'
+     ' }\n'
+     '}\n'
+     'static NBBuffer *surfaceBuffer(IOSurfaceRef surface,void *base,size_t bytes) {\n'),
+    (' if(buffer)return buffer;\n',
+     ' if(buffer){holdImport(value.identity,value.address,value.bytes,buffer);return buffer;}\n'),
+    ('  [gSurfaceImports setObject:buffer forKey:key];\n }\n return buffer;\n',
+     '  [gSurfaceImports setObject:buffer forKey:key];\n  holdImport(value.identity,value.address,value.bytes,buffer);\n }\n return buffer;\n'),
 ]:
     assert s.count(old) == 1, old
     s = s.replace(old, new)
