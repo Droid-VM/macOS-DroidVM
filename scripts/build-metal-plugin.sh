@@ -87,6 +87,28 @@ for old, new in [
 ]:
     assert s.count(old) == 1, old
     s = s.replace(old, new)
+# NMB_FRAME_ROWS=1 (diagnostics, research/debug-2026-10-27): WindowServer's telemetry table every 20 s without NATIVE_METAL_TIMING in
+# its launchd job, and each K row (a commit) with its GPU time (GPUEndTime - GPUStartTime) and its encoding (command buffer made to commit).
+import os
+if os.environ.get('NMB_FRAME_ROWS') == '1':
+    for old, new in [
+        (' if(!getenv("NATIVE_METAL_TIMING"))return;\n',
+         ' if(!getenv("NATIVE_METAL_TIMING") && strcmp(getprogname(),"WindowServer"))return;\n'),
+        ('struct CommitRecord {uint64_t committedUs=0,callbackUs=0,ageUs=0;',
+         'struct CommitRecord {uint64_t committedUs=0,callbackUs=0,ageUs=0,gpuUs=0;'),
+        (' {\n  const uint64_t took=nowUs()-commandBuffer.committedUs;\n',
+         ' {\n  const uint64_t took=nowUs()-commandBuffer.committedUs;\n'
+         '  const double gpuSeconds=[commandBuffer GPUEndTime]-[commandBuffer GPUStartTime];\n'),
+        ('  if(r.index==commandBuffer.commitIndex) {\n   r.callbackUs=took;\n',
+         '  if(r.index==commandBuffer.commitIndex) {\n   r.callbackUs=took;r.gpuUs=gpuSeconds>0?(uint64_t)(gpuSeconds*1e6):0;\n'),
+        ('   row("K%u t=%llu.%03llus rp%u dr%u kpx%llu cs%u bl%u ctc=%lluus",',
+         '   row("K%u t=%llu.%03llus rp%u dr%u kpx%llu cs%u bl%u ctc=%lluus gpu=%lluus enc=%lluus",'),
+        ('(unsigned long long)(r.work.pixels>>10),r.work.dispatches,r.work.blits,(unsigned long long)r.callbackUs);',
+         '(unsigned long long)(r.work.pixels>>10),r.work.dispatches,r.work.blits,(unsigned long long)r.callbackUs,(unsigned long long)r.gpuUs,'
+         '(unsigned long long)r.ageUs);'),
+    ]:
+        assert s.count(old) == 1, old
+        s = s.replace(old, new)
 open(sys.argv[2], 'w').write(s)
 PY
 "${CXX[@]}" $O/frontend.mm -o $O/frontend.o
