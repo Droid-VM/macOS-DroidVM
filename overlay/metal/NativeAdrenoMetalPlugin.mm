@@ -74,6 +74,9 @@ static NSUInteger textureBufferAlignment(id self, SEL, NSUInteger format)
 {
     return ((NSUInteger (*)(id, SEL, NSUInteger))objc_msgSend)(self, sel_registerName("minimumLinearTextureAlignmentForPixelFormat:"), format);
 }
+// NativeMetal's shader priming (PrimeShaders.h) is not run on this board; the frontend's telemetry reads its progress.
+extern "C" {volatile uint32_t native_prime_compiling, native_prime_libraries_done, native_prime_libraries_total, native_prime_made,
+    native_prime_rate;}
 // Unified memory: two thirds of RAM, as Metal recommends on Apple GPUs.
 static uint64_t workingSetSize(id, SEL) { return NSProcessInfo.processInfo.physicalMemory / 3 * 2; }
 

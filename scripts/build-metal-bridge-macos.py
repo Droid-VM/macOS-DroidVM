@@ -7,6 +7,7 @@ tier 3 (nightly, -Zbuild-std), through configs/arm64e-apple-darwin.json (below).
 
 Source: sources/UniXNU/.cache/gpu-reference/metal2vulkan at the pin of scripts/data/gpu-metal-vulkan-inputs.json; its recorded patches
 are applied here if they are not yet. Output: out/metal/bridge/libnative_metal_bridge.a"""
+import hashlib
 import json
 import os
 import shutil
@@ -32,10 +33,32 @@ PATCHES = sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch')
 pin = json.loads((UNIXNU / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:
     raise SystemExit(f'{SOURCE} is not at the pinned translator commit {pin}')
-for patch in PATCHES:
-    if subprocess.run(['git', '-C', str(SOURCE), 'apply', '--reverse', '--check', str(patch)], capture_output=True).returncode:
+
+
+def tree(*steps):
+    """The tree SOURCE's HEAD makes after the git commands STEPS, in a scratch index."""
+    index = OUT / 'patch-index'
+    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    try:
+        for step in [['read-tree', 'HEAD'], *steps]:
+            subprocess.run(['git', '-C', str(SOURCE), *step], env=env, check=True, stdout=subprocess.DEVNULL)
+        return subprocess.check_output(['git', '-C', str(SOURCE), 'write-tree'], env=env, text=True).strip()
+    finally:
+        index.unlink(missing_ok=True)
+
+
+# The source is the pin with every patch, or it is reset and patched again: a later patch may change what an earlier one wrote
+# (NativeMetal's 0010 to 0012), so whether each patch is in cannot be told one at a time.
+OUT.mkdir(parents=True, exist_ok=True)
+if tree(['add', '-A']) != tree(*[['apply', '--cached', str(patch)] for patch in PATCHES]):
+    subprocess.run(['git', '-C', str(SOURCE), 'checkout', '--', '.'], check=True)
+    subprocess.run(['git', '-C', str(SOURCE), 'clean', '-fdq'], check=True)
+    for patch in PATCHES:
         subprocess.run(['git', '-C', str(SOURCE), 'apply', str(patch)], check=True)
 OUT.mkdir(parents=True, exist_ok=True)
+# The translator source the runtime is built from (its pin and the patches applied), which keys the shader cache: NativeMetal's
+# shader priming keeps what it finished while this stays the same (nmb_runtime_build, PrimeShaders.h).
+runtime_id = hashlib.sha256((pin + '\n' + ''.join(patch.read_text() for patch in PATCHES)).encode()).hexdigest()[:32]
 # the runtime's example library and function-constant fixture, assembled to AIR for the bridge's self-tests
 air, fc_air = OUT / 'runtime_examples.air', OUT / 'function_constant.air'
 fixtures = SOURCE / 'crates/metal2vulkan-validation/fixtures/public'
@@ -55,7 +78,7 @@ manifest.write_text('\n'.join([
     '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
 ]))
 key = TRIPLE.replace('-', '_')
-env = dict(os.environ, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
+env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
            **{f'CC_{key}': str(LLVM / 'clang'), f'CXX_{key}': str(LLVM / 'clang++'), f'AR_{key}': str(LLVM / 'llvm-ar'),
               f'CFLAGS_{key}': f'-isysroot {SDK}', f'CXXFLAGS_{key}': f'-isysroot {SDK}'})
 target_dir = OUT / 'target'

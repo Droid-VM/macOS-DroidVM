@@ -92,7 +92,7 @@ PY
 "${CXX[@]}" $O/frontend.mm -o $O/frontend.o
 python3 scripts/apple-ld.py -bundle -dead_strip -o $B/MacOS/NativeAdrenoMetal $O/plugin.o $O/frontend.o out/metal/bridge/libnative_metal_bridge.a \
   -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation -framework IOGPU \
-  -lobjc -lc++ -lSystem -liconv 2>&1 | grep -v "was built for newer" || true
+  -lobjc -lc++ -lSystem -liconv 2>&1 | { grep -v "was built for newer" || true; }   # a failed link fails the build (pipefail)
 cp out/metal/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib $B/MacOS/
 python3 - "$B/Info.plist" <<'EOF'
 import plistlib, sys
