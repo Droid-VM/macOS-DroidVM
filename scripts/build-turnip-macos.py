@@ -125,6 +125,17 @@ LOCAL_EDITS = [
       mesa_loge("NativeAdreno: retired BO collection failed (%d)", result);
    return result;
 '''),
+    # An image over host allocations (VK_EXT_external_memory_host) binds at an offset of the allocation like any image: only an image
+    # for export or import of a buffer object asks its own allocation. metal2vulkan's textures over IOSurfaces and no-copy buffers (each
+    # imported as one host allocation) were refused their linear images for asking one, and became shadows copied in before each pass
+    # and out after it: about 5 ms of GPU time per frame of a window drag.
+    ('tu_image.cc', '''         req->requiresDedicatedAllocation =
+            image->vk.external_handle_types != 0;
+''', '''         req->requiresDedicatedAllocation =
+            (image->vk.external_handle_types &
+             ~(VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT |
+               VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT)) != 0;
+'''),
 ]
 
 
