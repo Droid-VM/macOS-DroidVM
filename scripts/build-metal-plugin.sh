@@ -52,6 +52,17 @@ for old, new in [
     (' NBHeap *heap=[NBHeap new];heap.handle=handle;',
      ' NBLOG(@"native-metal: heap %lu bytes type %ld options %lx -> %llu",(unsigned long)d.size,(long)d.type,(unsigned long)d.resourceOptions,'
      'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
+    # The runtime converts a two-plane YCbCr texture on the CPU at every encoder that uses it (planes copied to staging, then a
+    # dispatch): WindowServer's 4096x2160 wallpaper frames (YCBCR8_444_2P) took the 4 GiB guest into jetsam. Above 1 Mpx it is
+    # refused, and the server draws the wallpaper its other way; the small backdrop samples (512x512) are made.
+    (' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),',
+     ' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n'
+     ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024){\n'
+     '  static std::atomic<unsigned> refusals;   // the server asks again at every frame\n'
+     '  if(refusals++<4)NBLOG(@"native-metal: surface texture refused: %lux%lu YCbCr format %lu converts on the CPU",(unsigned long)d.width,'
+     '(unsigned long)d.height,(unsigned long)d.pixelFormat);\n'
+     '  return nil;}\n'
+     ' const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),'),
     # Core Animation makes a texture of each window's surface at every frame and drops it when the frame completes, so the weak import
     # table lost the import between frames: each frame imported every surface again and freed the last import (Turnip allocate and
     # free, kernel calls), most of the render server's busy samples in a window drag. Imports used in the last second stay held.

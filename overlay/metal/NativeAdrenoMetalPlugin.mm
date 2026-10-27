@@ -10,9 +10,11 @@
 #include <atomic>
 #include <dlfcn.h>
 #include <objc/runtime.h>
+#include <objc/message.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 #include "NativeBridgeMetalFrontend.h"
 #include "bridge/NativeMetalObjects.h"
@@ -66,6 +68,12 @@ static void nothing(id, SEL) {}
 static void nothingWith(id, SEL, uint64_t) {}
 static BOOL amplificationCount(id, SEL, NSUInteger count) { return count == 1; }
 static uint64_t commandBufferArgumentsSize(id, SEL) { return 48; }   // IOGPU's
+// A texture over a buffer (IconRendering's symbol images) starts where a linear texture may: Turnip's texel-buffer alignment, which the
+// frontend answers for the linear one; unanswered, iconservicesagent threw and no icon was drawn.
+static NSUInteger textureBufferAlignment(id self, SEL, NSUInteger format)
+{
+    return ((NSUInteger (*)(id, SEL, NSUInteger))objc_msgSend)(self, sel_registerName("minimumLinearTextureAlignmentForPixelFormat:"), format);
+}
 // Unified memory: two thirds of RAM, as Metal recommends on Apple GPUs.
 static uint64_t workingSetSize(id, SEL) { return NSProcessInfo.processInfo.physicalMemory / 3 * 2; }
 
@@ -222,6 +230,7 @@ static void addIOGPUMethods(id device)
         // _MTLGetMTLCompilerLLVMVersionForDevice reads it for a stitched library (Core Image's DAG programs): below 8 it takes the
         // default compiler version 0x7d17; unanswered, iconservicesagent threw and crashed on every launch
         {"featureProfile", (IMP)zero, "Q16@0:8", false},
+        {"minimumTextureBufferAlignmentForPixelFormat:", (IMP)textureBufferAlignment, "Q24@0:8Q16", false},
     };
     Class cls = object_getClass(device);
     addMethods(cls, deviceMethods, sizeof deviceMethods / sizeof *deviceMethods);
@@ -297,21 +306,23 @@ static id deviceForPort(io_service_t port)
         setenv("TU_DARWIN_SERVICE", "AGXAccelerator", 1);
         // The frontend's refusals (a texture it does not make, with the reason) on stderr too, where stderr-log=1 shows them.
         setenv("NMB_LOG_STDERR", "1", 1);
-        // Every process's device takes its memory from the one DroidVMGpu pool (droidvm-gpu-pool-mib, 512 MiB): the runtime's 64 MiB
-        // blocks, one per pool a process uses and more kept in reserve, left WindowServer none for its memoryless targets.
-        setenv("M2V_BLOCK_MIB", "8", 0);
         // The display takes plain rows: no Apple framebuffer or IOSurface compression, which this GPU does not write.
         setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
         CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
         CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
-        // The runtime needs a writable shader-cache directory: the user cache or temp directory, else /private/var/tmp.
-        char candidates[3][512] = {};
+        // The runtime needs a writable shader-cache directory: the user cache directory, the process's own folder in it (a platform
+        // sandbox lets a service write only there), the temp directory, else /private/var/tmp.
+        char candidates[4][512] = {};
         if (!confstr(_CS_DARWIN_USER_CACHE_DIR, candidates[0], sizeof candidates[0] - 16))
             candidates[0][0] = 0;
-        if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[1], sizeof candidates[1] - 16))
-            candidates[1][0] = 0;
-        strlcpy(candidates[2], "/private/var/tmp/", sizeof candidates[2]);
-        for (unsigned i = 0; i < 3 && !device; i++) {
+        if (NSString *bundle = NSBundle.mainBundle.bundleIdentifier; candidates[0][0] && bundle.length) {
+            snprintf(candidates[1], sizeof candidates[1] - 16, "%s%s/", candidates[0], bundle.UTF8String);
+            mkdir(candidates[1], 0700);
+        }
+        if (!confstr(_CS_DARWIN_USER_TEMP_DIR, candidates[2], sizeof candidates[2] - 16))
+            candidates[2][0] = 0;
+        strlcpy(candidates[3], "/private/var/tmp/", sizeof candidates[3]);
+        for (unsigned i = 0; i < 4 && !device; i++) {
             if (!candidates[i][0])
                 continue;
             strlcat(candidates[i], "m2v", sizeof candidates[i]);
@@ -323,6 +334,10 @@ static id deviceForPort(io_service_t port)
             } @catch (NSException *exception) {
                 fprintf(stderr, "NativeAdrenoMetal: %s: %s\n", getprogname(), exception.reason.UTF8String);
                 device = nil;
+            }
+            if (!device) {   // the reason past the path, which the kernel's log line would cut off
+                const char *error = nmb_last_error(), *kind = error ? strstr(error, "kind") : nullptr;
+                fprintf(stderr, "NativeAdrenoMetal: %s: %s refused: %.160s\n", getprogname(), candidates[i], kind ? kind : error ? error : "");
             }
         }
         if (device) {
@@ -350,3 +365,15 @@ static id deviceForPort(io_service_t port)
     return deviceForPort(port);
 }
 @end
+
+// The kernel boot argument ca-triple-buffer=1 sets WindowServer's CA_FORCE_TRIPLE_BUFFERED_LATENCY (QuartzCore's debug option 198,
+// read by IOMFBDisplay::can_update_): CoreAnimation then renders a frame ahead (a frame of presentation latency) instead of starting
+// each frame only after the last one's buffer came back, which it otherwise does whenever a frame took longer than a refresh. A window
+// drag of the heavy window went from 56-60 to 61-67 frames a second (kc253).
+__attribute__((constructor)) static void tripleBufferFromBootArgs() {
+ char args[1024]={};size_t size=sizeof(args)-1;
+ if(strcmp(getprogname(),"WindowServer") || sysctlbyname("kern.bootargs",args,&size,nullptr,0) || !strstr(args,"ca-triple-buffer=1"))return;
+ auto setOption=reinterpret_cast<void(*)(unsigned,bool)>(dlsym(RTLD_DEFAULT,"CASetDebugOption"));
+ if(setOption)setOption(198,true);
+ fprintf(stderr,"NativeAdrenoMetal: CA_FORCE_TRIPLE_BUFFERED_LATENCY %s\n",setOption?"set":"not found");
+}

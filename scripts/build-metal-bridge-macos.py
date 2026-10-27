@@ -25,7 +25,9 @@ TRIPLE = 'arm64e-apple-darwin'
 # pacibsp/retab, signed static function pointers) for cfg(target_abi = "pauthtest") only, so this is the built-in target with that ABI;
 # init-fini off: dyld signs Mach-O initializers itself.
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
-PATCHES = sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch'))
+# NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan: a sandbox-optional shader cache,
+# sRGB extended-range blends, llvm.bitreverse, growing memory blocks, patch(quad, 0)), in the order its build-native-metal-bridge.py applies.
+PATCHES = sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch')) + sorted((UNIXNU / 'patches/metal2vulkan').glob('*.patch'))
 
 pin = json.loads((UNIXNU / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:
