@@ -4,11 +4,12 @@ searches for <MetalPluginName>.bundle; /Library is a link into the Data volume's
 make-owner-trust-bundle.py).
 
     stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
-                        [--disable-job LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.0.1]
+                        [--disable-job LABEL]... [--disable-agent LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.0.1]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
-(and a managed SkipSetupItems, so a new user's first login skips Setup Assistant's per-user panes)
+(and a managed SkipSetupItems, so a new user's first login skips Setup Assistant's per-user panes, and DroidVMInput's keyboard type, so
+Keyboard Setup Assistant does not ask for it)
 (Language Chooser waits for bluetoothd, which the board disables, in IOBluetoothHostController's first use).
 --log-stream adds a launchd job running `log show --last boot` then `log stream` with --predicate PREDICATE: the unified log's messages (os_log,
 which no daemon writes to stderr) since boot on its stdout, which stderr-log=1 puts in the kernel's log. --log-debug writes
@@ -19,10 +20,15 @@ processes) every SECONDS, all on its stdout, so in the kernel's log too.
 --run SECONDS COMMAND adds a launchd job running COMMAND (sh -c) SECONDS after it starts, its output in the kernel's log as --top's
 (e.g. `--run 330 'sample SecurityAgent 2 -file /dev/stdout'` for a hung process's stacks).
 --user adds a local administrator (uid 501, staff, admin; SALTED-SHA512-PBKDF2 shadow hash) to the Data volume's directory
-(/var/db/dslocal): the setup assistant that would create one is skipped. loginwindow creates its home on the first login.
+(/var/db/dslocal): the setup assistant that would create one is skipped. A boot job makes its home before the first login, with .skipbuddy
+(no MiniBuddy, which would keep loginwindow from launching the Dock and Finder).
+--data-size-mib makes the Data volume's container that large (the seed's is 1 GiB, which the first login's caches fill to 91%).
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
 throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit).
+--disable-agent writes LABEL to uid 501's overrides (disabled.501.plist, what `launchctl disable gui/501/LABEL` writes): a user agent
+the board has no use for (Siri, Photos, iCloud, Find My...), whose first-login burst left the 4 GiB guest to jetsam, which killed idle
+daemons that launchd relaunched on their next message, thousands of times.
 
 Output: out/metal/stage/{scratch-data.img,kernel.macho.trustcache}; boot with MACOS_DATA_SEED / MACOS_TRUSTCACHE set to them
 (scripts/droidvm-app.py). The Data volume is volatile (NativeRamBlock), so the seed is what the guest sees on every boot. Needs sudo
@@ -57,11 +63,25 @@ RUN_JOB = '.data/Library/LaunchDaemons/org.droidvm.run.{}.plist'
 SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
 # A new user's first login runs Setup Assistant again (its per-user panes); the managed preference skips them.
 SETUP_SKIP = '.data/Library/Managed Preferences/com.apple.SetupAssistant.managed.plist'
+# Keyboard Setup Assistant asks to identify any keyboard whose type is not known: DroidVMInput (virtio vendor 0x1af4, product 0x1052) is
+# an ANSI one (keyboard type 40), keyed "product-vendor-0".
+KEYBOARD_TYPE = '.data/Library/Preferences/com.apple.keyboardtype.plist'
+# --reduce-transparency: Accessibility's Reduce transparency as a managed preference (the computer's, and --user's), which holds before
+# the user's home exists. Not shown to change a window drag yet: kc254 drew the same 53 passes a frame as kc253 (22% fewer draws).
+MANAGED_PREFS = '.data/Library/Managed Preferences'
+# --user's home: loginwindow would make it on the first login, and then the new account runs Setup Assistant's MiniBuddy (MiniLauncherPlugin
+# sets MiniBuddyLaunch), which with every pane skipped never finishes, so loginwindow never launches the workspace (Dock, Finder,
+# SystemUIServer). A home with .skipbuddy in it before that login skips MiniBuddy. createhomedir copies the user template but cannot
+# give it to the user: /Users is a symbolic link here (a firmlink on a Mac) and it opens the copies without following links (ELOOP).
+USER_HOME_JOB = '.data/Library/LaunchDaemons/org.droidvm.user-home.plist'
 SETUP_SKIP_ITEMS = ['Accessibility', 'AdditionalPrivacySettings', 'Appearance', 'AppleID', 'AppStore', 'Biometric', 'Diagnostics',
                     'DisplayTone', 'EnableLockdownMode', 'FileVault', 'iCloudDiagnostics', 'iCloudStorage', 'Intelligence', 'Location',
                     'OSShowcase', 'Privacy', 'Restore', 'Safety', 'ScreenTime', 'Siri', 'SoftwareUpdate', 'TermsOfAddress', 'TextSize',
                     'TOS', 'TouchIDPrompt', 'UnlockWithWatch', 'Wallpaper', 'Welcome']
 LAUNCHD_DISABLED = 'db/com.apple.xpc.launchd/disabled.plist'
+# MobileGestalt's answers are cached on the Data volume: an ADT change (vmm-present, artwork-display-gamut) reaches IsVirtualDevice
+# or HasExtendedColorDisplay only once the cache is gone, so it is removed from every seed.
+MOBILEGESTALT_CACHE = 'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist'
 DSLOCAL = 'db/dslocal/nodes/Default'
 
 
@@ -87,6 +107,35 @@ def add_user(dslocal, name, password, uid=501):
         record['users'] = [u for u in record.get('users', []) if u != name] + [name]
         record['groupmembers'] = [g for g in record.get('groupmembers', []) if g != guid] + [guid]
         write(path, record)
+
+
+def grow_volume(raw, size, scratch):
+    """The seed's Data volume in a new container of SIZE bytes (Linux cannot resize APFS): mkapfs as make-macos-data-seed.sh makes it,
+    the same label and UUID, then the old volume's tree copied over as that script fills it (rsync -aH)."""
+    uuid_line = next(line for line in (ROOT / 'scripts/make-macos-data-seed.sh').read_text().splitlines() if line.startswith('VOLUME_UUID='))
+    volume_uuid = uuid_line.split(':-', 1)[1].split('}', 1)[0]
+    grown = scratch / 'seed-grown.raw'
+    with grown.open('wb') as handle:
+        handle.truncate(size)
+    subprocess.run([str(ROOT / 'sources/apfsprogs/mkapfs/mkapfs'), '-L', 'Data', '-u', volume_uuid, str(grown)], check=True,
+                   stdout=subprocess.DEVNULL)
+    mounts = {}
+    try:
+        for name, image, mode in (('old', raw, 'ro'), ('new', grown, 'readwrite')):
+            point = scratch / f'mount-{name}'
+            point.mkdir()
+            loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', str(image)], text=True).strip()
+            mounts[name] = (point, loop)
+            subprocess.run(['sudo', 'mount', '-t', 'apfs', '-o', mode, loop, str(point)], check=True)
+        subprocess.run(['sudo', 'rsync', '-aH', '--numeric-ids', f'{mounts["old"][0]}/', f'{mounts["new"][0]}/'], check=True)
+        subprocess.run(['sync'], check=True)
+    finally:
+        for point, loop in mounts.values():
+            subprocess.run(['sudo', 'umount', str(point)])
+            subprocess.run(['sudo', 'losetup', '-d', loop])
+    raw.unlink()
+    print(f'Data volume grown to {size >> 20} MiB')
+    return grown
 
 
 def cdhash(path):
@@ -139,7 +188,10 @@ def main():
     parser.add_argument('--top', metavar='SECONDS', type=int)
     parser.add_argument('--run', metavar=('SECONDS', 'COMMAND'), nargs=2, action='append', default=[])
     parser.add_argument('--disable-job', metavar='LABEL', action='append', default=[])
+    parser.add_argument('--disable-agent', metavar='LABEL', action='append', default=[])
     parser.add_argument('--user', metavar='NAME:PASSWORD')
+    parser.add_argument('--data-size-mib', type=int)
+    parser.add_argument('--reduce-transparency', action='store_true')
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
     bundles = [b.resolve() for b in args.bundles]
@@ -165,6 +217,8 @@ def main():
         mount.mkdir()
         if subprocess.run(['grep', '-q', '^apfs ', '/proc/modules']).returncode:
             subprocess.run(['sudo', 'insmod', str(ROOT / 'sources/linux-apfs-rw/apfs.ko')], check=True)
+        if args.data_size_mib and args.data_size_mib << 20 > logical:
+            raw = grow_volume(raw, args.data_size_mib << 20, Path(scratch))
         loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', str(raw)], text=True).strip()
         try:
             subprocess.run(['sudo', 'mount', '-t', 'apfs', '-o', 'readwrite', loop, str(mount)], check=True)
@@ -217,15 +271,19 @@ def main():
                     subprocess.run(['sudo', 'tee', str(run_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(run_job)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(run_job)], check=True)
-                disabled = mount / LAUNCHD_DISABLED   # the seed's own overrides are kept (each run starts from the artifact seed)
-                if args.disable_job:
+                # The seed's own overrides are kept (each run starts from the artifact seed).
+                for disabled, labels in ((mount / LAUNCHD_DISABLED, args.disable_job),
+                                         (mount / LAUNCHD_DISABLED.replace('.plist', '.501.plist'), args.disable_agent)):
+                    if not labels:
+                        continue
                     subprocess.run(['sudo', 'mkdir', '-p', str(disabled.parent)], check=True)
                     seed = subprocess.run(['sudo', 'cat', str(disabled)], capture_output=True).stdout
-                    plist = plistlib.dumps({**(plistlib.loads(seed) if seed else {}), **{label: True for label in args.disable_job}},
+                    plist = plistlib.dumps({**(plistlib.loads(seed) if seed else {}), **{label: True for label in labels}},
                                            fmt=plistlib.FMT_XML)
                     subprocess.run(['sudo', 'tee', str(disabled)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(disabled)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(disabled)], check=True)
+                subprocess.run(['sudo', 'rm', '-f', str(mount / MOBILEGESTALT_CACHE)], check=True)
                 log_prefs = mount / LOG_PREFS
                 subprocess.run(['sudo', 'rm', '-rf', str(log_prefs)], check=True)
                 if args.log_debug:
@@ -236,8 +294,19 @@ def main():
                         subprocess.run(['sudo', 'tee', str(path)], input=prefs, stdout=subprocess.DEVNULL, check=True)
                         subprocess.run(['sudo', 'chmod', '644', str(path)], check=True)
                     subprocess.run(['sudo', 'chown', '-R', '0:0', str(log_prefs)], check=True)
+                home_job = mount / USER_HOME_JOB
+                subprocess.run(['sudo', 'rm', '-f', str(home_job)], check=True)
                 if args.user:
+                    name = args.user.split(':', 1)[0]
                     add_user(mount / DSLOCAL, *args.user.split(':', 1))
+                    home = '/Users/' + name
+                    plist = plistlib.dumps({'Label': 'org.droidvm.user-home', 'RunAtLoad': True, 'ProgramArguments': ['/bin/sh', '-c',
+                        f'until id {name}; do sleep 5; done; [ -d {home} ] && exit 0; createhomedir -c -u {name} 2>/dev/null; '
+                        f'touch {home}/.skipbuddy; chown -R {name}:staff {home}; ls -la {home}']}, fmt=plistlib.FMT_XML)
+                    subprocess.run(['sudo', 'mkdir', '-p', str(home_job.parent)], check=True)
+                    subprocess.run(['sudo', 'tee', str(home_job)], input=plist, stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(home_job)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(home_job)], check=True)
                 if args.setup_done:
                     marker = mount / SETUP_DONE
                     subprocess.run(['sudo', 'mkdir', '-p', str(marker.parent)], check=True)
@@ -248,6 +317,22 @@ def main():
                                    stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(skip)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(skip)], check=True)
+                    keyboard = mount / KEYBOARD_TYPE
+                    subprocess.run(['sudo', 'mkdir', '-p', str(keyboard.parent)], check=True)
+                    subprocess.run(['sudo', 'tee', str(keyboard)], input=plistlib.dumps({'keyboardtype': {'4178-6900-0': 40}}, fmt=plistlib.FMT_XML),
+                                   stdout=subprocess.DEVNULL, check=True)
+                    subprocess.run(['sudo', 'chown', '0:0', str(keyboard)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(keyboard)], check=True)
+                if args.reduce_transparency:
+                    managed = mount / MANAGED_PREFS
+                    folders = [managed] + ([managed / args.user.split(':', 1)[0]] if args.user else [])
+                    for folder in folders:
+                        path = folder / 'com.apple.universalaccess.plist'
+                        subprocess.run(['sudo', 'mkdir', '-p', str(folder)], check=True)
+                        subprocess.run(['sudo', 'tee', str(path)], input=plistlib.dumps({'reduceTransparency': True}, fmt=plistlib.FMT_XML),
+                                       stdout=subprocess.DEVNULL, check=True)
+                        subprocess.run(['sudo', 'chown', '0:0', str(path)], check=True)
+                        subprocess.run(['sudo', 'chmod', '644', str(path)], check=True)
                 subprocess.run(['sync'], check=True)
             finally:
                 subprocess.run(['sudo', 'umount', str(mount)], check=True)
