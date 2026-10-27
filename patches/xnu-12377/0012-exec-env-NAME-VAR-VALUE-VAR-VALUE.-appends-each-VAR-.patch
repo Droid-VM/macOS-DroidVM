@@ -1,0 +1,69 @@
+From b5fc7f341d8ff9cd7714b27e2da17a888effebfe Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Tue, 27 Oct 2026 12:07:31 -0400
+Subject: [PATCH] exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each VAR=VALUE
+ to the environment of every executable whose file name is NAME, at exec (a
+ variable for one system daemon, whose launchd job lives on the read-only
+ system volume: launchctl setenv does not reach WindowServer). Verified:
+ exec-env=WindowServer:MallocZeroOnFree=0,MallocDebugReport=stderr,MallocReportConfig=1
+ makes WindowServer report Enable Xzone Malloc 0 (zero-on-free bincompat),
+ other processes unchanged
+
+---
+ bsd/kern/kern_exec.c | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 8345155..af28273 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -6921,6 +6921,46 @@ exec_extract_strings(struct image_params *imgp)
+ 		imgp->ip_envc++;
+ 	}
+ 
++	/*
++	 * UniXNU virt boards: exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each VAR=VALUE to the
++	 * environment of every executable whose file name is NAME (an A/B test's variable for one
++	 * system daemon, whose launchd job lives on the read-only system volume).
++	 */
++	{
++		static char exec_env[256];
++		static int exec_env_state; /* 0 unread, 1 none, 2 read */
++		if (exec_env_state == 0) {
++			exec_env_state = PE_parse_boot_arg_str("exec-env", exec_env, sizeof(exec_env)) ? 2 : 1;
++		}
++		const char *colon = exec_env_state == 2 ? strchr(exec_env, ':') : NULL;
++		const char *path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
++		const char *base = strrchr(path, '/');
++		base = base ? base + 1 : path;
++		if (colon && strlen(base) == (size_t)(colon - exec_env) &&
++		    strncmp(base, exec_env, colon - exec_env) == 0) {
++			for (const char *item = colon + 1; *item != '\0';) {
++				const char *end = strchr(item, ',');
++				size_t len = end ? (size_t)(end - item) : strlen(item);
++				char assignment[128];
++				if (len > 0 && len < sizeof(assignment)) {
++					memcpy(assignment, item, len);
++					assignment[len] = '\0';
++					error = exec_add_user_string(imgp, CAST_USER_ADDR_T(assignment), UIO_SYSSPACE, TRUE);
++					if (error) {
++						goto bad;
++					}
++					if (imgp->ip_argspace < new_ptr_size) {
++						error = E2BIG;
++						goto bad;
++					}
++					imgp->ip_argspace -= new_ptr_size;
++					imgp->ip_envc++;
++				}
++				item += len + (end ? 1 : 0);
++			}
++		}
++	}
++
+ 	/* Save space for envv[] NULL terminator */
+ 	if (imgp->ip_argspace < new_ptr_size) {
+ 		error = E2BIG;
+-- 
+2.53.0
+
