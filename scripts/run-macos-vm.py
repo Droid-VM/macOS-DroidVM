@@ -196,6 +196,26 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                                     "              *[node('virtio-gpu', [('compatible', b'droidvm,virtio-gpu\\0'),"
                                     " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b'')])"
                                     " for address, size in vm['virtio_mmio'] if address == args.virtio_gpu_mmio]]),")
+        # The CPU clusters (the kernel's BCM2837 board is AMP, sched_amp): each cpu's cluster-type is 'P' where the FDT's
+        # capacity-dmips-mhz is the highest of the CPUs started (crosvm --cpu-capacity, from the app's topology), else 'E'; all 'P'
+        # when they are equal or absent. The AMP kernel panics on a CPU without one; MACOS_AMP=0 leaves them out for an older kernel,
+        # which would read 'P' as a second cluster it does not have. MACOS_CPU_TYPES=EEEEEEPP sets them by CPU instead (a test).
+        types = os.environ.get('MACOS_CPU_TYPES', '')
+        if os.environ.get('MACOS_AMP', '1') == '1' and types:
+            assert set(types) <= {'E', 'P'}
+            marker = "('device_type', b'cpu\\0'), ('compatible', b'arm,armv8\\0'),"
+            assert text.count(marker) == 1
+            text = text.replace(marker, marker + f" ('cluster-type', {types!r}[index].encode() + b'\\0'),")
+        elif os.environ.get('MACOS_AMP', '1') == '1':
+            marker = "    cpus = [node('cpu%d' % index,"
+            assert text.count(marker) == 1
+            text = text.replace(marker, "    capacity = {cells(props['reg'])[0]: cells(props['capacity-dmips-mhz'])[0] for path, props in fdt_nodes.items()\n"
+                                        "                if path.startswith('/cpus/') and props.get('device_type') == b'cpu\\0' and 'capacity-dmips-mhz' in props}\n"
+                                        "    top = max((capacity.get(reg, 0) for reg in cpu_regs), default=0)\n" + marker)
+            marker = "('device_type', b'cpu\\0'), ('compatible', b'arm,armv8\\0'),"
+            assert text.count(marker) == 1
+            text = text.replace(marker, "('device_type', b'cpu\\0'), ('compatible', b'arm,armv8\\0'),"
+                                        " ('cluster-type', b'P\\0' if capacity.get(reg, top) == top else b'E\\0'),")
         tool.write_text(text)
     subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
