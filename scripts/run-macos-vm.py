@@ -111,17 +111,28 @@ def kernel_args(extra):
     return line
 
 
-def last_virtio_mmio(tool, fdt):
+def last_virtio_mmio(tool, fdt, skip=0):
+    """skip: how many windows from the end to pass over (1: --droidvm-gpu when --virtio-mmio-gpu follows it)."""
     spec = importlib.util.spec_from_file_location('make_droidvm_adt', tool)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    base = max(base for base, _ in module.describe(module.parse_fdt(Path(fdt).read_bytes()))['virtio_mmio'])
+    base = sorted(base for base, _ in module.describe(module.parse_fdt(Path(fdt).read_bytes()))['virtio_mmio'])[-1 - skip]
     if base <= 0x0a002000:
         raise SystemExit(f'{fdt} has no virtio-mmio window after the data store: prepare again with --droidvm-gpu in the VM')
     return base
 
 
-def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False):
+def fdt_pool_bytes(fdt):
+    """The bytes of the top of RAM crosvm keeps for its droidvm,pool regions (the drm2kgsl host pool of --gpu ...,context-types=drm):
+    the ADT's DRAM ends below them."""
+    spec = importlib.util.spec_from_file_location('make_droidvm_adt', ADT_TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return sum(size for props in module.parse_fdt(Path(fdt).read_bytes()).values() if b'droidvm,pool' in props.get('compatible', b'')
+               for _, size in module.reg_pairs(props['reg']))
+
+
+def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, virtio_gpu=False):
     """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight).
     gpu: crosvm --droidvm-gpu is on; its window is the FDT's last virtio-mmio one (it follows the disks) and becomes /arm-io/gpu."""
     tool = ADT_TOOL
@@ -164,6 +175,27 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False):
         assert text.count(marker) == 1
         text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
                                     " and args.data_store_mmio is None else []),")
+        # MACOS_VMM_PRESENT=0: /defaults without vmm-present, so kern.hv_vmm_present is 0. MobileGestalt answers IsVirtualDevice from it,
+        # and Core Animation on a virtual device keeps a half-float 'RGhA' framebuffer (IOMFBDisplay::framebuffer_pixel_format returns
+        # before its 'BGRA' choice) and takes the VM's display paths (CursorPlane).
+        if os.environ.get('MACOS_VMM_PRESENT', '1') == '0':
+            marker = "('vmm-present', struct.pack('<I', 1)),"
+            assert text.count(marker) == 1
+            text = text.replace(marker, '')
+        # virtio_gpu (crosvm --virtio-mmio-gpu, the last virtio-mmio window): /arm-io/virtio-gpu, the display's scanout device
+        # (DroidVMDisplay); like the upstream tool's --virtio-gpu-mmio, it is not one of the generic virtio-mmio nodes.
+        marker = "    parser.add_argument('--display-gamut',"
+        assert text.count(marker) == 1
+        text = text.replace(marker, "    parser.add_argument('--virtio-gpu-mmio', type=lambda value: int(value, 0), default=None)\n" + marker)
+        marker = "if window[0] not in (args.data_store_mmio, args.gpu_mmio) and window[0] not in input_bases]"
+        assert text.count(marker) == 1
+        text = text.replace(marker, "if window[0] not in (args.data_store_mmio, args.gpu_mmio, args.virtio_gpu_mmio) and window[0] not in input_bases]")
+        marker = "                for address, size in gpu]]),"
+        assert text.count(marker) == 1
+        text = text.replace(marker, "                for address, size in gpu],\n"
+                                    "              *[node('virtio-gpu', [('compatible', b'droidvm,virtio-gpu\\0'),"
+                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b'')])"
+                                    " for address, size in vm['virtio_mmio'] if address == args.virtio_gpu_mmio]]),")
         tool.write_text(text)
     subprocess.run(['python3', str(tool), '--fdt', str(fdt), '--dram-size', dram_size,
                     '--dram-base', '0x80600000', '--owned-memory-size', '0x30000000',
@@ -171,7 +203,12 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False):
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
                     '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
-                    *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt))] if gpu else []),
+                    *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt, 1 if virtio_gpu else 0))] if gpu else []),
+                    *(['--virtio-gpu-mmio', hex(last_virtio_mmio(tool, fdt))] if virtio_gpu else []),
+                    # MACOS_GAMUT=sRGB: /product artwork-display-gamut sRGB. With the panel's P3, MobileGestalt's
+                    # HasExtendedColorDisplay makes Core Animation compose into wide-color framebuffers ('b3a8'); the display copies
+                    # 8-bit 'BGRA' best (scripts/stage-gpu-plugin.py removes the MobileGestalt cache that would keep the old answer).
+                    '--display-gamut', os.environ.get('MACOS_GAMUT', 'P3'),
                     '--output', str(output)], check=True)
 
 

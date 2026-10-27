@@ -43,9 +43,18 @@ ios = load(ROOT.parent / 'ios/tools/droidvm-app.py', 'ios_droidvm_app')
 run = load(ROOT / 'scripts/run-macos-vm.py', 'run_macos_vm')
 
 FOLDER = run.FOLDER
-VM_NAME = 'macOS 14.6.1 (DroidVM)'
+VM_NAME = 'macOS 27 (DroidVM)'
 VM_ID = str(uuid.uuid5(uuid.NAMESPACE_DNS, 'macos-14.6.1.droidvm.macos'))
-MEM_MB = int(os.environ.get('MACOS_MEM_MB') or 3072)   # MACOS_MEM_MB: the host's hugepage pool may not supply more (STARTING)
+# MACOS_CPUS: vCPUs. Gunyah's idle vCPUs stay runnable on the host (WFI does not return), so eight of them on the eight cores left
+# the host's GPU proxy, display blit and SurfaceFlinger competing with them, and WindowServer's vCPU was descheduled for whole
+# frames (the guest's timers ran up to 0.5 s late during a window drag).
+CPUS = int(os.environ.get('MACOS_CPUS') or 8)
+# MACOS_CPU_PIN=1: droidvmd's default affinity, vCPU i on host core i. Pinned, a vCPU waited whenever a host thread (SurfaceFlinger,
+# the display commit, another app's burst) had its core, though others were idle: with eight vCPUs a window drag stalled 50-450 ms
+# about six times in ten seconds (none with six, whose two big cores stayed free). Each vCPU may run on any host core instead.
+HOST_CORES = int(os.environ.get('MACOS_HOST_CORES') or 8)
+CPU_AFFINITY = '' if os.environ.get('MACOS_CPU_PIN') == '1' else ':'.join(f'{i}=0-{HOST_CORES - 1}' for i in range(CPUS))
+MEM_MB = int(os.environ.get('MACOS_MEM_MB') or 5120)   # MACOS_MEM_MB: the host's hugepage pool may not supply more (STARTING)
 OUT = ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
@@ -53,6 +62,12 @@ DTB = FOLDER + '/generated.dtb'
 # prepare again (the ADT must list the device), then boot. The guest side is DroidVMGpu with its CP_MEM_WRITE self-test only.
 GPU = os.environ.get('MACOS_GPU') == '1'
 GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1']
+# MACOS_VIRTIO_GPU=1: the display is crosvm's virtio-gpu on virtio-mmio (--virtio-mmio-gpu, the last virtio-mmio window) instead of
+# simplefb. The daemon builds its --gpu (virglrenderer, context-types=drm, udmabuf) and the gpu-0 screen's display service from the
+# gpu_* fields and screens; the guest scans out IOSurface pages as guest-handle blobs, which the host blits (zero copy in the guest).
+VIRTIO_GPU = os.environ.get('MACOS_VIRTIO_GPU') == '1'
+REFRESH_HZ = int(os.environ.get('MACOS_REFRESH_HZ') or 120)
+FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
 REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000', 'mac-sandbox-skip-exec=1']   # see TODO.md: without them launchd cannot get far
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
 # vCPU the busy host did not run for that long while holding one panicked the guest at launchd's spawn storms; 40 times is 10 s
@@ -72,11 +87,21 @@ ios.fix_owner = fix_owner
 def template(persistent):
     """The iOS VM definition with the macOS particulars: eight vCPUs, boot disk as --block, no GPU/input mmio devices."""
     vm = ORIGINAL_VM_CONFIG(persistent)
-    vm.update({'cpu_count': 8, 'disks': [],
+    vm.update({'cpu_count': CPUS, 'cpu_affinity': CPU_AFFINITY, 'disks': [],
                'extra_options': ['--block', BOOT + ',lock=false', '--dump-device-tree-blob', DTB,
                                  '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
-                                 '--virtio-mmio-block', run.STORE + ',lock=false', *(['--droidvm-gpu'] if GPU else [])]})
+                                 '--virtio-mmio-block', run.STORE + ',lock=false', *(['--droidvm-gpu'] if GPU else []),
+                                 *(['--virtio-mmio-gpu'] if VIRTIO_GPU else [])]})
+    if VIRTIO_GPU:
+        vm.update({'gpu_backend': 'gpu_virglrenderer', 'gpu_mode': 'native', 'gpu_api': 'drm2kgsl'})
+        # The app's edk2 drives the virtio-gpu (and on MMIO hangs with its queue size 0); this one has no driver for it, so the
+        # bootloader keeps the simplefb GOP it wants (edk2-gunyah VIRTIO_GPU_ENABLE=FALSE; see FIRMWARE).
+        vm['boot'] = dict(vm['boot'], uefi=dict(vm['boot']['uefi'], firmware=FIRMWARE))
+        vm['screens'] = {'gpu-0': dict(vm['screens']['gpu-0'], enabled=True, exporter='native', transport_cap='gpu',
+                                       width=1280, height=800, refresh_rate=REFRESH_HZ),
+                         # simplefb stays (edk2's GOP, DarwinBoot and the boot console draw there) but is not shown
+                         'simplefb': dict(vm['screens']['simplefb'], exporter='none')}
     return vm
 
 
@@ -103,7 +128,8 @@ def boot_disk(args):
     fdt = OUT / 'generated.dtb'
     adb('pull', DTB, str(fdt), timeout=60)
     adt = OUT / 'kernel.macho.adt'
-    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000), '47554e5941480001', adt, cpu_regs=None, gpu=GPU)   # every vCPU the app gives the VM
+    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000 - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None, gpu=GPU,
+                 virtio_gpu=VIRTIO_GPU)   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + (GPU_ARGS if GPU else []) + args.kernel_arg)
     local = OUT / 'boot'
