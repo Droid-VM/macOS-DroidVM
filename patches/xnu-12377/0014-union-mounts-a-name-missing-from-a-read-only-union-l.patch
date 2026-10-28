@@ -1,0 +1,41 @@
+From a360f135be6d44c9dd93b958ae291a0bafb2b4cd Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Wed, 28 Oct 2026 15:12:25 -0400
+Subject: [PATCH] union mounts: a name missing from a read-only union layer is
+ looked up in the covered layer for a create too (the layer's lookup answered
+ EJUSTRETURN: it would let the name be created but cannot). With the owner
+ chain's SystemOS volume over the OS volume at /, mkdir("/dev") failed with
+ EROFS instead of EEXIST, so xpcproxy's mkpath_np of kernelmanagerd's
+ StandardErrorPath directory (/dev/console) failed and kernelmanagerd never
+ ran; iconservicesagent's volume icons ask it for the kext bundle
+ (KextManagerCreateURLForBundleIdentifier) and waited forever, and with them
+ the Dock, which fetches its first icons synchronously on a fresh Data volume
+ and never showed. Verified: kernelmanagerd runs (KextLog: kernelmanagerd is
+ active) and the Dock shows after login
+
+---
+ bsd/vfs/vfs_lookup.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/bsd/vfs/vfs_lookup.c b/bsd/vfs/vfs_lookup.c
+index 66db98b..fc7e7e5 100644
+--- a/bsd/vfs/vfs_lookup.c
++++ b/bsd/vfs/vfs_lookup.c
+@@ -1698,7 +1698,13 @@ unionlookup:
+ 	if (error) {
+ lookup_error:
+ #if CONFIG_UNION_MOUNTS
+-		if ((error == ENOENT) &&
++		/*
++		 * A name missing from a read-only union layer is looked up in the covered one for a create too (EJUSTRETURN: the
++		 * layer would let it be created but cannot): the owner chain's SystemOS volume over the OS volume at "/" otherwise
++		 * fails mkdir("/dev") with EROFS instead of EEXIST, and xpcproxy's mkpath_np of a job's StandardErrorPath
++		 * directory (kernelmanagerd's /dev/console) with it, so kernelmanagerd never runs.
++		 */
++		if ((error == ENOENT || (error == EJUSTRETURN && dp->v_mount != NULL && vfs_isrdonly(dp->v_mount))) &&
+ 		    (dp->v_mount != NULL) &&
+ 		    (dp->v_mount->mnt_flag & MNT_UNION) &&
+ 		    !(ndp->ni_flag & NAMEI_NOUNION)) {
+-- 
+2.53.0
+
