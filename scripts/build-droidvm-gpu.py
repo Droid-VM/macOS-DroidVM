@@ -160,6 +160,50 @@ for old, new in [('Binding gBindings[NativeAdrenoVmMaxObjects];\n', 'Binding *gB
     if board.count(old) != 1:
         sys.exit('kits/droidvm/DroidVMGpu.cpp: the binding table changed')
     board = board.replace(old, new)
+# The mapping table's lookups: a submission looked each IB's buffer up (describe) and held each distinct one (find), every lookup a scan of
+# the 8192 slots, then walked all of them for the write-combine and cache upkeep (two or three submissions a WindowServer frame). The walks
+# stop at the highest slot used (map() raises it), and a handle's lookup tries the slot it was last found in first: 11 us less a
+# submission in a window drag (kc282/kc283).
+LOOP = '    for (size_t i = 0; i < NativeAdrenoVmMaxObjects; ++i) {\n'
+if board.count(LOOP) != 5:
+    sys.exit('kits/droidvm/DroidVMGpu.cpp: the mapping walks changed')
+board = board.replace(LOOP, '    for (size_t i = 0; i < gMappingEnd; ++i) {\n')
+for old, new in [('Binding *gBindings;   // NativeAdrenoVm::attach allocates it\n',
+                  'Binding *gBindings;   // NativeAdrenoVm::attach allocates it\n'
+                  'size_t gMappingEnd;   // slots past it were never used since attach\n'
+                  'uint16_t gHandleSlots[4096];   // by handle: the slot it was last found in (a hint, checked)\n'),
+                 ('    capacity_ = max_spans;\n', '    capacity_ = max_spans;\n    gMappingEnd = 0;\n'),
+                 ('    if (!handle || !mappings_) return nullptr;\n'
+                  '    for (size_t i = 0; i < NativeAdrenoVmMaxObjects; ++i)\n'
+                  '        if (mappings_[i].memory && mappings_[i].handle == handle) return &mappings_[i];\n',
+                  '    if (!handle || !mappings_) return nullptr;\n'
+                  '    uint16_t &hint = gHandleSlots[handle % 4096];\n'
+                  '    if (hint < gMappingEnd && mappings_[hint].memory && mappings_[hint].handle == handle) return &mappings_[hint];\n'
+                  '    for (size_t i = 0; i < gMappingEnd; ++i)\n'
+                  '        if (mappings_[i].memory && mappings_[i].handle == handle) {\n'
+                  '            hint = static_cast<uint16_t>(i);\n'
+                  '            return &mappings_[i];\n'
+                  '        }\n'),
+                 ('    *handle = mappings_[index].handle;\n',
+                  '    *handle = mappings_[index].handle;\n'
+                  '    if (index >= gMappingEnd) gMappingEnd = index + 1;\n'
+                  '    gHandleSlots[*handle % 4096] = static_cast<uint16_t>(index);\n'),
+                 ('    for (size_t m = 0; mappings_ && m < NativeAdrenoVmMaxObjects; ++m)\n'
+                  '        if (mappings_[m].memory && mappings_[m].handle == handle) {\n'
+                  '            *iova = mappings_[m].iova;\n'
+                  '            *bytes = mappings_[m].memory->bytes();\n'
+                  '            *permissions = mappings_[m].permissions;\n'
+                  '            return kIOReturnSuccess;\n'
+                  '        }\n',
+                  '    if (const Mapping *m = const_cast<NativeAdrenoVm *>(this)->find(handle)) {\n'
+                  '        *iova = m->iova;\n'
+                  '        *bytes = m->memory->bytes();\n'
+                  '        *permissions = m->permissions;\n'
+                  '        return kIOReturnSuccess;\n'
+                  '    }\n')]:
+    if board.count(old) != 1:
+        sys.exit('kits/droidvm/DroidVMGpu.cpp: the mapping lookups changed: ' + old[:60])
+    board = board.replace(old, new)
 staged_board = scope['staged'].parent / 'DroidVMGpu.cpp'
 staged_board.write_text(board)
 # Bring-up: memory pinned outside the pool, in bytes live: [0] imported (the owners' pages, wired while the GPU maps them), [1] allocated
