@@ -9,6 +9,7 @@
 #include <IOKit/IOKitLib.h>
 #include <atomic>
 #include <dlfcn.h>
+#include <mach/mach_time.h>
 #include <objc/runtime.h>
 #include <objc/message.h>
 #include <stdio.h>
@@ -379,4 +380,45 @@ __attribute__((constructor)) static void tripleBufferFromBootArgs() {
  auto setOption=reinterpret_cast<void(*)(unsigned,bool)>(dlsym(RTLD_DEFAULT,"CASetDebugOption"));
  if(setOption)setOption(198,true);
  fprintf(stderr,"NativeAdrenoMetal: CA_FORCE_TRIPLE_BUFFERED_LATENCY %s\n",setOption?"set":"not found");
+}
+
+// The kernel boot argument ca-free-wakeup=1: SkyLight starts each WindowServer update at -[CAWindowServerDisplay nextWakeupTime], which
+// QuartzCore's IOMFBServer::next_wakeup_time puts on the refresh grid (the last VBL plus a frame): an update that took 13 ms is
+// followed by one at 16.7 ms. This answers the earlier of that and max(now, the last update's start + a refresh), the start being the
+// last -beginExternalUpdate:usingSoftwareRenderer:; DroidVMDisplay shows a swap when it comes, not at a VBL. Without an update in the
+// last second the grid's answer stands. The refresh is droidvm-display-hz's (120 by default). A heavy window drag went from 60 frames
+// a second (updates 16.6 ms apart, kc283) to 96 (10.4 ms, kc282), its input to GPU end from 18.7 to 14.7 ms (medians).
+static std::atomic<uint64_t> gUpdateBegan{0};
+static double hostSeconds(uint64_t t) {
+ static mach_timebase_info_data_t base;if(!base.denom)mach_timebase_info(&base);
+ return (double)t*base.numer/base.denom/1e9;
+}
+__attribute__((constructor)) static void freeWakeupFromBootArgs() {
+ char args[1024]={};size_t size=sizeof(args)-1;
+ if(strcmp(getprogname(),"WindowServer") || sysctlbyname("kern.bootargs",args,&size,nullptr,0) || !strstr(args,"ca-free-wakeup=1"))return;
+ const char *hz=strstr(args,"droidvm-display-hz=");
+ const double refresh=1.0/(hz && atoi(hz+19)>=30 && atoi(hz+19)<=240?atoi(hz+19):120);
+ Class display=objc_getClass("CAWindowServerDisplay");
+ static SEL wakeSel=sel_registerName("nextWakeupTime"),beginSel=sel_registerName("beginExternalUpdate:usingSoftwareRenderer:");
+ Method wake=display?class_getInstanceMethod(display,wakeSel):nullptr,begin=display?class_getInstanceMethod(display,beginSel):nullptr;
+ if(!wake || !begin || method_getTypeEncoding(wake)[0]!='d' || method_getNumberOfArguments(begin)!=4) {
+  fprintf(stderr,"NativeAdrenoMetal: free wakeup: CAWindowServerDisplay lacks %s\n",!wake?"nextWakeupTime":"beginExternalUpdate:usingSoftwareRenderer:");
+  return;
+ }
+ static auto wakeGrid=reinterpret_cast<double(*)(id,SEL)>(method_getImplementation(wake));
+ static auto beginOriginal=reinterpret_cast<uint64_t(*)(id,SEL,void *,uint64_t)>(method_getImplementation(begin));
+ method_setImplementation(begin,imp_implementationWithBlock(^uint64_t(id self,void *update,uint64_t software) {
+  gUpdateBegan.store(mach_absolute_time(),std::memory_order_relaxed);
+  return beginOriginal(self,beginSel,update,software);
+ }));
+ method_setImplementation(wake,imp_implementationWithBlock(^double(id self) {
+  const double grid=wakeGrid(self,wakeSel);
+  const uint64_t began=gUpdateBegan.load(std::memory_order_relaxed);
+  if(grid<=0 || !began)return grid;
+  const double now=hostSeconds(mach_absolute_time()),start=hostSeconds(began);
+  if(now-start>1.0)return grid;
+  const double earliest=now>start+refresh?now:start+refresh;
+  return earliest<grid?earliest:grid;
+ }));
+ fprintf(stderr,"NativeAdrenoMetal: free wakeup on (%.2f ms)\n",refresh*1e3);
 }
