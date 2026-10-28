@@ -1,0 +1,115 @@
+From bd5eb7a1ab37c110029fc96a6a44355c41babc7f Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Wed, 28 Oct 2026 13:43:06 -0400
+Subject: [PATCH] union-hide-lower: the mount over the root volume's root vnode
+ reports MNT_ROOTFS in statfs, getfsstat and the vfs sysctls, as the one root
+ volume it stands in for (its mnt_flag is unchanged). fseventsd makes its
+ global disk logger only on the volume whose f_flags has MNT_ROOTFS; without
+ one it never finished starting, every FSEvents client's registration timed
+ out after 10 s and was retried, and syspolicyd, so authd, so loginwindow's
+ first-session CleanupPlatformSSOTemporaryUserHomeDirectories waited about 100
+ s. Verified: / reports rootfs, fseventsd takes the fallback log directory of
+ a read-only root, the cleanup takes 54 ms instead of 100 s and SecurityAgent
+ (the login window) starts at 91-109 s instead of about 200 s (kc301 to kc308)
+
+---
+ bsd/vfs/vfs_subr.c     | 25 +++++++++++++++++++++++--
+ bsd/vfs/vfs_syscalls.c |  7 ++++---
+ 2 files changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
+index b57f8cf..456b500 100644
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -4887,6 +4887,8 @@ again:
+ 	return error;
+ }
+ 
++uint32_t virt_union_visflags(mount_t mp);
++
+ /*
+  * Do a sysctl by fsid.
+  */
+@@ -5039,7 +5041,7 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+ 			struct user64_statfs *sfs = &sfsbuf->osfs64;
+ 
+ 			bzero(sfs, sizeof(*sfs));
+-			sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
++			sfs->f_flags = virt_union_visflags(mp);
+ 			sfs->f_type = (short)mp->mnt_vtable->vfc_typenum;
+ 			sfs->f_bsize = (user64_long_t)sp->f_bsize;
+ 			sfs->f_iosize = (user64_long_t)sp->f_iosize;
+@@ -5060,7 +5062,7 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
+ 			long temp;
+ 
+ 			bzero(sfs, sizeof(*sfs));
+-			sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
++			sfs->f_flags = virt_union_visflags(mp);
+ 			sfs->f_type = (short)mp->mnt_vtable->vfc_typenum;
+ 
+ 			/*
+@@ -13535,3 +13537,22 @@ virt_union_top(mount_t mp)
+ 	}
+ 	return top;
+ }
++
++/*
++ * The statfs flags of mp (boot-arg union-hide-lower=1): the mount over the root volume's root vnode stands in for the root volume, so
++ * it reports MNT_ROOTFS too. fseventsd makes its global disk logger only on the volume whose f_flags has it; without one it never
++ * finishes starting, and every FSEvents client (syspolicyd, so authd and loginwindow's first-session cleanup) waits minutes on it.
++ */
++uint32_t
++virt_union_visflags(mount_t mp)
++{
++	uint32_t enabled = 0;
++	uint32_t flags = mp->mnt_flag & MNT_VISFLAGMASK;
++	vnode_t covered = mp->mnt_vnodecovered;
++
++	if (covered != NULLVP && (covered->v_flag & VROOT) && covered->v_mount != NULL && (covered->v_mount->mnt_flag & MNT_ROOTFS) &&
++	    PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) && enabled) {
++		flags |= MNT_ROOTFS;
++	}
++	return flags;
++}
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index a9fa81d..d63b482 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -3720,6 +3720,7 @@ quotactl(__unused proc_t p, __unused struct quotactl_args *uap, __unused int32_t
+ #endif /* QUOTA */
+ 
+ extern mount_t virt_union_top(mount_t mp);
++extern uint32_t virt_union_visflags(mount_t mp);
+ 
+ /*
+  * CoreServices' FSNodeServer_PreWarmVolumeCache registers statfs64("/System/Volumes/Preboot/") as a second volume and aborts when its
+@@ -3853,7 +3854,7 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
+ 	sfs->f_fsid = vsfs->f_fsid;
+ 	sfs->f_owner = vsfs->f_owner;
+ 	sfs->f_type = mp->mnt_vtable->vfc_typenum;
+-	sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
++	sfs->f_flags = virt_union_visflags(mp);
+ 	sfs->f_fssubtype = vsfs->f_fssubtype;
+ 	sfs->f_flags_ext = vfs_getextflags(mp);
+ 	vfs_getfstypename(mp, sfs->f_fstypename, MFSTYPENAMELEN);
+@@ -14595,7 +14596,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
+ 		struct user64_statfs sfs;
+ 		my_size = copy_size = sizeof(sfs);
+ 		bzero(&sfs, my_size);
+-		sfs.f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
++		sfs.f_flags = virt_union_visflags(mp);
+ 		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
+ 		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
+ 		sfs.f_bsize = (user64_long_t)sfsp->f_bsize;
+@@ -14621,7 +14622,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
+ 		my_size = copy_size = sizeof(sfs);
+ 		bzero(&sfs, my_size);
+ 
+-		sfs.f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
++		sfs.f_flags = virt_union_visflags(mp);
+ 		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
+ 		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
+ 
+-- 
+2.53.0
+
