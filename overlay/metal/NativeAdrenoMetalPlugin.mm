@@ -388,10 +388,14 @@ __attribute__((constructor)) static void tripleBufferFromBootArgs() {
 // last -beginExternalUpdate:usingSoftwareRenderer:; DroidVMDisplay shows a swap when it comes, not at a VBL. Without an update in the
 // last second the grid's answer stands. The refresh is droidvm-display-hz's (120 by default). A heavy window drag went from 60 frames
 // a second (updates 16.6 ms apart, kc283) to 96 (10.4 ms, kc282), its input to GPU end from 18.7 to 14.7 ms (medians).
-static std::atomic<uint64_t> gUpdateBegan{0};
+static std::atomic<uint64_t> gUpdateBegan{0},gLastAsk{0};
 static double hostSeconds(uint64_t t) {
  static mach_timebase_info_data_t base;if(!base.denom)mach_timebase_info(&base);
  return (double)t*base.numer/base.denom/1e9;
+}
+static uint64_t hostTicks(double seconds) {
+ static mach_timebase_info_data_t base;if(!base.denom)mach_timebase_info(&base);
+ return (uint64_t)(seconds*1e9*base.denom/base.numer);
 }
 __attribute__((constructor)) static void freeWakeupFromBootArgs() {
  char args[1024]={};size_t size=sizeof(args)-1;
@@ -408,17 +412,28 @@ __attribute__((constructor)) static void freeWakeupFromBootArgs() {
  static auto wakeGrid=reinterpret_cast<double(*)(id,SEL)>(method_getImplementation(wake));
  static auto beginOriginal=reinterpret_cast<uint64_t(*)(id,SEL,void *,uint64_t)>(method_getImplementation(begin));
  method_setImplementation(begin,imp_implementationWithBlock(^uint64_t(id self,void *update,uint64_t software) {
-  gUpdateBegan.store(mach_absolute_time(),std::memory_order_relaxed);
+  // The update's start is SkyLight's last ask before it, where its update callback began (the callback prepares for 0.8 ms before
+  // this, kc290): updates a refresh apart from there are a refresh apart here too.
+  const uint64_t now=mach_absolute_time(),asked=gLastAsk.load(std::memory_order_relaxed);
+  gUpdateBegan.store(asked && now-asked<hostTicks(0.003)?asked:now,std::memory_order_relaxed);
   return beginOriginal(self,beginSel,update,software);
  }));
  method_setImplementation(wake,imp_implementationWithBlock(^double(id self) {
   const double grid=wakeGrid(self,wakeSel);
+  gLastAsk.store(mach_absolute_time(),std::memory_order_relaxed);
   const uint64_t began=gUpdateBegan.load(std::memory_order_relaxed);
   if(grid<=0 || !began)return grid;
   const double now=hostSeconds(mach_absolute_time()),start=hostSeconds(began);
   if(now-start>1.0)return grid;
-  const double earliest=now>start+refresh?now:start+refresh;
-  return earliest<grid?earliest:grid;
+  // SkyLight (WS::Updater::UpdateDisplays) adds its updater delay (0.5 ms) to the answer and updates at once only when the last update
+  // is more than 1.25 frames before that; otherwise it schedules the update for then. Told "now" once a refresh had passed, it put the
+  // update off until 1.25 frames after the last, and updates came 10 ms apart (kc288). Before the due time the answer is the due time
+  // less the delay, when SkyLight's timer fires; from then on it is the least that is 1.25 frames past the last start (and 1 ms over),
+  // so SkyLight updates at once. With "now" plus 1.25 frames, a wakeup with nothing new to draw put the next one 11 ms off, and a
+  // tenth of the updates came 20 ms apart (kc291).
+  const double due=start+refresh-0.0005,ahead=start+1.25*refresh+0.001;
+  if(now<due)return due<grid?due:grid;
+  return now>ahead?now:ahead;
  }));
  fprintf(stderr,"NativeAdrenoMetal: free wakeup on (%.2f ms)\n",refresh*1e3);
 }
