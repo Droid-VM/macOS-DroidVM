@@ -52,6 +52,11 @@ for old, new in [
     (' NBHeap *heap=[NBHeap new];heap.handle=handle;',
      ' NBLOG(@"native-metal: heap %lu bytes type %ld options %lx -> %llu",(unsigned long)d.size,(long)d.type,(unsigned long)d.resourceOptions,'
      'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
+    # The encoding thread (NativeMetal fd9fbe1: the runtime's half of each encoder call on a thread of its own, fed in batches) in
+    # WindowServer as in backboardd, the render server it was made for; /private/var/ngpu/debug/no-encode-thread turns it off.
+    ('                                (isRenderServer() || access("/private/var/ngpu/debug/encode-thread",F_OK)==0);',
+     '                                (isRenderServer() || !strcmp(getprogname(),"WindowServer") ||\n'
+     '                                 access("/private/var/ngpu/debug/encode-thread",F_OK)==0);'),
     # The runtime converts a two-plane YCbCr texture on the CPU at every encoder that uses it (planes copied to staging, then a
     # dispatch): WindowServer's 4096x2160 wallpaper frames (YCBCR8_444_2P) took the 4 GiB guest into jetsam. Above 1 Mpx it is
     # refused, and the server draws the wallpaper its other way; the small backdrop samples (512x512) are made.
