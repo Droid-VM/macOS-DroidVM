@@ -238,7 +238,32 @@ if publish.count(closed) != 1:
 publish = publish.replace(closed, closed + '                IOLog("droidvm-gpu: %s closed, pool %u MiB used, pinned %llu+%llu MiB\\n",name_,native_adreno_pool_stats[3],'
                           'native_adreno_pinned_bytes[0]>>20,native_adreno_pinned_bytes[1]>>20);\n')
 scope['staged'].write_text(publish)
-sources = [adreno / 'NativeAdrenoSubmit.cpp', staged_memory, adreno / 'NativeAdrenoCpu.cpp',
+submit = (adreno / 'NativeAdrenoSubmit.cpp').read_text()
+# A submission released the jobs that had completed by asking the host for each one still in flight whether it had (DroidVMGpu.cpp's
+# observeFence: a DROIDVM_GPU_OP_RETIRED round trip per job). It now releases those the ring has already seen complete (the waits on
+# them, which also release theirs) and asks the host only when every job slot is taken; an unmap still sweeps with the host first
+# (NativeAdrenoUserClient.cpp). In a window drag a submission's kernel call before the ring went from 86 to 8 us, WindowServer's update
+# from 6.2 to 5.2 ms and its input to GPU end from 14.7 to 13.4 ms (medians, kc282/kc283 to kc284).
+for old, new in [('    IOReturn swept=retireCompleted();\n    if(swept)return swept;\n    Job *job=free();\n    if(!job)return kIOReturnBusy;\n',
+                  '    for(auto &done:jobs_)\n'
+                  '        if(done.active && ring_->completedFence()-done.fence<0x80000000u) {\n'
+                  '            const IOReturn status=release(done);\n'
+                  '            if(status)return status;\n'
+                  '            ++stats_.completed;\n'
+                  '        }\n'
+                  '    Job *job=free();\n'
+                  '    if(!job) {\n'
+                  '        const IOReturn swept=retireCompleted();\n'
+                  '        if(swept)return swept;\n'
+                  '        job=free();\n'
+                  '    }\n'
+                  '    if(!job)return kIOReturnBusy;\n')]:
+    if submit.count(old) != 1:
+        sys.exit('NativeAdrenoSubmit.cpp: the submission sweep changed')
+    submit = submit.replace(old, new)
+staged_submit = scope['staged'].parent / 'NativeAdrenoSubmit.cpp'
+staged_submit.write_text(submit)
+sources = [staged_submit, staged_memory, adreno / 'NativeAdrenoCpu.cpp',
            scope.get('staged_client', adreno / 'NativeAdrenoUserClient.cpp'), scope['staged'], staged_board, SRC / 'kits/AdrenoPM4/AdrenoPM4.c',
            ROOT / 'overlay/kext/DroidVMGpuKext.cpp', ROOT / 'overlay/kext/NativeKextGlue.cpp']
 # IOKit/graphics (AGXAccelerator's IOAccelerator) from the macOS SDK's Kernel.framework: toolchains/sdks/MacOSX26.1.sdk.tar.xz, extracted
