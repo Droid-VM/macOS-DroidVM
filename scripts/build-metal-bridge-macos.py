@@ -75,12 +75,17 @@ manifest.write_text('\n'.join([
     # the shader cache's hashes: not UniXNU's "asm" (ARMv8 SHA-256 instructions), which pulls sha2-asm and cc-rs, and cc-rs takes
     # target_abi = "pauthtest" for the Linux pauthtest target
     'sha2 = "0.10"',
+    # the bridge's global allocator (NativeMetalBridge.rs), as Droid-VM/UniXNU's build-adreno-metal-bridge.py pins it
+    'mimalloc = { version = "=0.1.43", default-features = false }',
     '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
 ]))
 key = TRIPLE.replace('-', '_')
 env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
            **{f'CC_{key}': str(LLVM / 'clang'), f'CXX_{key}': str(LLVM / 'clang++'), f'AR_{key}': str(LLVM / 'llvm-ar'),
-              f'CFLAGS_{key}': f'-isysroot {SDK}', f'CXXFLAGS_{key}': f'-isysroot {SDK}'})
+              f'CFLAGS_{key}': f'-target arm64e-apple-macos14.0 -isysroot {SDK} -O2', f'CXXFLAGS_{key}': f'-isysroot {SDK}'},
+           # mimalloc's C goes through cc-rs, which would derive a Linux triple from the target spec's target_abi (pauthtest): its
+           # defaults off, the triple and SDK are CFLAGS' above
+           CRATE_CC_NO_DEFAULTS='1')
 target_dir = OUT / 'target'
 log = OUT / 'build.log'
 with log.open('w') as stream:
@@ -91,4 +96,9 @@ if result.returncode:
     raise SystemExit(log.read_text()[-6000:])
 library = OUT / 'libnative_metal_bridge.a'
 shutil.copyfile(target_dir / TRIPLE / 'release/libnative_metal_bridge.a', library)
+# mimalloc's C (libmimalloc-sys) is not bundled into the static library: the plugin links it beside (build-metal-plugin.sh)
+mimalloc = sorted((target_dir / TRIPLE / 'release/build').glob('libmimalloc-sys*/**/libmimalloc.a'), key=lambda path: path.stat().st_mtime)
+if not mimalloc:
+    raise SystemExit('no libmimalloc.a in the build')
+shutil.copyfile(mimalloc[-1], OUT / 'libmimalloc.a')
 print(f'{library}: {library.stat().st_size} bytes (translator {pin[:12]})')
