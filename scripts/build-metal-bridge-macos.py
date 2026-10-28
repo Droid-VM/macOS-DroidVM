@@ -77,7 +77,9 @@ manifest.write_text('\n'.join([
     'sha2 = "0.10"',
     # the bridge's global allocator (NativeMetalBridge.rs), as Droid-VM/UniXNU's build-adreno-metal-bridge.py pins it
     'mimalloc = { version = "=0.1.43", default-features = false }',
-    '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
+    # WindowServer's update thread spends much of a frame in the runtime's small functions across the translator's crates: one
+    # optimisation unit with link-time optimisation inlines them across crate boundaries (as build-adreno-metal-bridge.py)
+    '[profile.release]', 'panic = "unwind"', 'debug = 1', 'lto = "fat"', 'codegen-units = 1', '',
 ]))
 key = TRIPLE.replace('-', '_')
 env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
