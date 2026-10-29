@@ -67,8 +67,8 @@ adreno = scope['ADRENO']
 # macOS on top of the staged edits: the render server is WindowServer (iOS's is backboardd), which takes the large window of slot 0 and
 # is not capped; 24 connections instead of six (after login WindowServer, loginwindow, SecurityAgent, the menu bar, wallpaper,
 # notification and control centre agents, the input menu, the cursor service, the video decoder, Siri and the icon agent each keep one;
-# with twelve the later ones failed to open the GPU), the added windows following the others at 256 MiB each, 6.75 GiB of the VBO's
-# 128 GiB; and
+# with twelve the later ones failed to open the GPU), each other window 1 GiB, 24 GiB of the VBO's 64 GiB (at 256 MiB the icon agent's
+# CoreImage textures ran out of addresses and System Settings showed blank icons); and
 # 32 opens per process name per boot instead of 8, since the login UI processes are relaunched with each WindowServer.
 publish = scope['staged'].read_text()
 for name in ('name_', 'opener'):
@@ -90,7 +90,7 @@ if publish.count(cap) != 1 or publish.count(windows) != 1:
 publish = publish.replace(cap, '(limit && limit<32?limit:32)')
 publish = publish.replace(windows, 'enum : unsigned {NativeAdrenoMaxClients=24};\n'
                           'static const struct {uint64_t start,bytes;} kClientWindows[NativeAdrenoMaxClients]={\n'
-                          '    {0x20000000ull,0x40000000ull},' + ','.join('{%#xull,0x10000000ull}' % (0x60000000 + i * 0x10000000)
+                          '    {0x20000000ull,0x40000000ull},' + ','.join('{%#xull,0x40000000ull}' % (0x60000000 + i * 0x40000000)
                                                                     for i in range(23)) + '};')
 # Bring-up: a failed call names the process, the method, the status and the window's peak, and a connection's window peak is logged
 # each 64 MiB it grows (WindowServer's command stream allocation failed after twenty minutes logged in, with nothing logged).
