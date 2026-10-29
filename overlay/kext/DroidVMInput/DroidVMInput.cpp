@@ -5,8 +5,12 @@
 // becomes an IOHIDDevice with the report descriptor of QEMU's USB devices, which IOHIDFamily's event drivers turn into keyboard
 // and pointer events:
 //   - a keyboard: the boot keyboard report (modifiers and six keys), Linux key codes translated to HID usages;
-//   - a multi-touch screen or an absolute pointer: the tablet report (absolute X/Y 0..32767, three buttons, wheel); a touch
-//     screen's first finger is the pointer and any finger down is the left button;
+//   - a multi-touch screen: the tablet report, the first finger the pointer and any finger down the left button. Boot argument
+//     droidvm-touch-digitizer=1: a built-in digitizer touch screen of four fingers instead, the report descriptor of
+//     Virtualization's "Virtual USB Touch Screen" (VzCore::Hardware::UsbTouchScreen, macOS 27). On 27.0.1 WindowServer's
+//     BackBoardHIDTouchEventProcessor never attaches it (its direct touch processor is Sidecar's), and IOHIDFamily's pointer
+//     path makes each touch a held button: a tap drags a selection;
+//   - an absolute pointer: the tablet report (absolute X/Y 0..32767, three buttons, wheel);
 //   - a relative mouse: the boot mouse report.
 // No interrupts: a kernel thread polls every 4 ms. Headers: the SDK's IOKit/hid (out/x12377/inc-hid).
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -14,6 +18,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/hid/IOHIDDevice.h>
+#include <kern/clock.h>
 #include <kern/thread.h>
 #include "NativeVirtioPci.h"
 
@@ -28,8 +33,9 @@ enum : uint8_t { cfgSelect = 0, cfgSubsel = 1, cfgSize = 2, cfgData = 8 };
 enum : uint8_t { cfgEvBits = 0x11, cfgAbsInfo = 0x12 };
 enum class Kind : uint8_t { none, touch, pointer, mouse, keyboard };
 
-constexpr unsigned maxDevices = 8, maxSlots = 10, maxQueue = 64, pollMs = 4;
+constexpr unsigned maxDevices = 8, maxSlots = 10, maxQueue = 64, pollMs = 4, fingers = 4;
 constexpr int32_t tabletRange = 0x8000;
+bool gTouchTablet = true;   // false with droidvm-touch-digitizer=1
 
 // usb_kbd_keycode of Linux (drivers/hid/usbhid/usbkbd.c): HID usage -> Linux key code; inverted at start.
 const uint8_t hidToLinux[256] = {
@@ -78,6 +84,15 @@ const uint8_t mouseDescriptor[] = {
   0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
   0xc0, 0xc0,
 };
+// Virtualization's USB touch screen: four Finger collections of contact identifier (6 bits), in range, tip switch and X/Y
+// 0..32767; five bytes a finger, no report ID.
+#define FINGER \
+  0x05, 0x0d, 0x09, 0x22, 0xa1, 0x02, 0x09, 0x38, 0x75, 0x06, 0x95, 0x01, 0x81, 0x02, \
+  0x09, 0x32, 0x09, 0x33, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x02, 0x81, 0x02, \
+  0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x15, 0x00, 0x26, 0xff, 0x7f, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02, 0xc0,
+const uint8_t touchDescriptor[] = {0x05, 0x0d, 0x09, 0x04, 0xa1, 0x01, FINGER FINGER FINGER FINGER 0xc0};
+#undef FINGER
+static_assert(sizeof(touchDescriptor) == 191, "Virtualization's descriptor");
 
 struct Event { uint16_t type, code; int32_t value; };
 struct Descriptor { uint64_t address; uint32_t length; uint16_t flags, next; };
@@ -100,7 +115,7 @@ struct DroidVMInputDevice {
   struct { int32_t id = -1, x = 0, y = 0; } slots[maxSlots];
   int32_t x = 0, y = 0, dx = 0, dy = 0, wheel = 0;
   uint8_t buttons = 0, modifiers = 0, keys[6] = {};
-  uint8_t last[8] = {};
+  uint8_t last[5 * fingers] = {};
   unsigned reports = 0;
   DroidVMHIDDevice *hid = nullptr;
   Descriptor *descriptors() { return reinterpret_cast<Descriptor *>(base); }
@@ -124,8 +139,9 @@ public:
   OSNumber *newVendorIDNumber() const override { return OSNumber::withNumber(virtio_pci::vendorId, 32); }
   OSNumber *newProductIDNumber() const override { return OSNumber::withNumber(0x1052, 32); }
   OSNumber *newLocationIDNumber() const override { return OSNumber::withNumber(0x44560000 | fIndex, 32); }
-  OSNumber *newPrimaryUsagePageNumber() const override { return OSNumber::withNumber(kHIDPage_GenericDesktop, 32); }
+  OSNumber *newPrimaryUsagePageNumber() const override { return OSNumber::withNumber(digitizer() ? 0x0d : kHIDPage_GenericDesktop, 32); }
   OSNumber *newPrimaryUsageNumber() const override;
+  bool digitizer() const { return fDevice->kind == Kind::touch && !gTouchTablet; }
 };
 
 OSDefineMetaClassAndStructors(DroidVMHIDDevice, IOHIDDevice)
@@ -133,9 +149,9 @@ OSDefineMetaClassAndStructors(DroidVMHIDDevice, IOHIDDevice)
 IOReturn DroidVMHIDDevice::newReportDescriptor(IOMemoryDescriptor **descriptor) const
 {
   const uint8_t *bytes = fDevice->kind == Kind::keyboard ? keyboardDescriptor : fDevice->kind == Kind::mouse ? mouseDescriptor
-                                                                                                             : tabletDescriptor;
+                         : digitizer() ? touchDescriptor : tabletDescriptor;
   size_t length = fDevice->kind == Kind::keyboard ? sizeof(keyboardDescriptor) : fDevice->kind == Kind::mouse ? sizeof(mouseDescriptor)
-                                                                                                              : sizeof(tabletDescriptor);
+                  : digitizer() ? sizeof(touchDescriptor) : sizeof(tabletDescriptor);
   *descriptor = IOBufferMemoryDescriptor::withBytes(bytes, length, kIODirectionNone);
   return *descriptor ? kIOReturnSuccess : kIOReturnNoMemory;
 }
@@ -148,7 +164,7 @@ OSString *DroidVMHIDDevice::newProductString() const
 
 OSNumber *DroidVMHIDDevice::newPrimaryUsageNumber() const
 {
-  return OSNumber::withNumber(fDevice->kind == Kind::keyboard ? kHIDUsage_GD_Keyboard : kHIDUsage_GD_Mouse, 32);
+  return OSNumber::withNumber(fDevice->kind == Kind::keyboard ? kHIDUsage_GD_Keyboard : digitizer() ? 0x04 : kHIDUsage_GD_Mouse, 32);
 }
 
 class DroidVMInput : public IOService {
@@ -157,7 +173,13 @@ class DroidVMInput : public IOService {
   IOMemoryMap *fEcam = nullptr;
   DroidVMInputDevice fDevices[maxDevices];
   unsigned fCount = 0;
+  // droidvm-input-times=1 (diagnostics, research/debug-2026-10-28): the times (mach_absolute_time) of the last 256 pointer and touch
+  // reports, published as the ReportTimes property (the count, then the ring) for WindowServer's latency rows.
+  bool fRecordTimes = false;
+  uint64_t fTimes[257] = {};
+  unsigned fPublished = 0;
 
+  void recordTime(DroidVMInputDevice &d) { if (fRecordTimes && d.kind != Kind::keyboard) fTimes[1 + fTimes[0]++ % 256] = mach_absolute_time(); }
   static void pollThread(void *self, wait_result_t);
   void poll(DroidVMInputDevice &d);
   void event(DroidVMInputDevice &d, const Event &e);
@@ -275,6 +297,8 @@ bool DroidVMInput::start(IOService *provider)
   for (unsigned usage = 0; usage < 0xe8; ++usage)
     if (hidToLinux[usage] && !linuxToHid[hidToLinux[usage]] && (usage < 0x80 || usage >= 0xe0))
       linuxToHid[hidToLinux[usage]] = static_cast<uint8_t>(usage);
+  uint32_t touchDigitizer = 0;
+  gTouchTablet = !(PE_parse_boot_argn("droidvm-touch-digitizer", &touchDigitizer, sizeof(touchDigitizer)) && touchDigitizer);
   fEcam = provider->mapDeviceMemoryWithIndex(0, kIOMapAnywhere | kIOMapInhibitCache);
   if (!fEcam) {
     IOLog("DroidVMInput: cannot map the ECAM window\n");
@@ -299,7 +323,19 @@ bool DroidVMInput::start(IOService *provider)
       hid->fDevice = &d;
       hid->fIndex = fCount;
     }
-    if (!hid || !hid->init(nullptr) || !hid->attach(this)) {
+    const bool ready = hid && hid->init(nullptr);
+    uint32_t touchSidecar = 0;
+    if (ready && hid->digitizer() && !(PE_parse_boot_argn("droidvm-touch-sidecar", &touchSidecar, sizeof(touchSidecar)) && touchSidecar)) {
+      hid->setProperty(kIOHIDBuiltInKey, true);   // the touch processor takes a display's touches from a built-in one only
+      // SkyLight's handle_digitizer_added drops a digitizer whose displayUUID (a CFUUID string) names no display it knows:
+      // DroidVMDisplay's IOMFBUUID unless droidvm-touch-display-uuid says otherwise.
+      char displayUUID[40] = "44726F69-6456-4D00-0000-000000000001";
+      PE_parse_boot_argn("droidvm-touch-display-uuid", displayUUID, sizeof(displayUUID) - 1);
+      hid->setProperty("displayUUID", displayUUID);
+    }
+    // droidvm-touch-sidecar=1: neither, as Sidecar's digitizer: WindowServer (WSSidecar2) then makes it a WSSidecar2HIDService on
+    // the main display at its first event, whose touches its modern Sidecar processor delivers as direct touches.
+    if (!ready || !hid->attach(this)) {
       OSSafeReleaseNULL(hid);
     } else if (!hid->start(this)) {
       hid->detach(this);
@@ -313,6 +349,8 @@ bool DroidVMInput::start(IOService *provider)
   IOLog("DroidVMInput: %u device(s) of %u virtio-input function(s)\n", fCount, functions);
   if (!fCount)
     return false;
+  uint32_t recordTimes = 0;
+  fRecordTimes = PE_parse_boot_argn("droidvm-input-times", &recordTimes, sizeof(recordTimes)) && recordTimes;
   thread_t thread;
   if (kernel_thread_start(pollThread, this, &thread) != KERN_SUCCESS)
     return false;
@@ -329,6 +367,13 @@ void DroidVMInput::pollThread(void *self, wait_result_t)
       input->describe();
     for (unsigned i = 0; i < input->fCount; ++i)
       input->poll(input->fDevices[i]);
+    if (input->fRecordTimes && tick % (100 / pollMs) == 0 && input->fTimes[0] != input->fPublished) {
+      input->fPublished = static_cast<unsigned>(input->fTimes[0]);
+      if (OSData *times = OSData::withBytes(input->fTimes, sizeof(input->fTimes))) {
+        input->setProperty("ReportTimes", times);
+        times->release();
+      }
+    }
     IOSleep(pollMs);
   }
 }
@@ -407,9 +452,23 @@ void DroidVMInput::event(DroidVMInputDevice &d, const Event &e)
 // At the end of a frame: one report if anything changed.
 void DroidVMInput::report(DroidVMInputDevice &d)
 {
-  uint8_t bytes[8] = {};
+  uint8_t bytes[sizeof(d.last)] = {};
   unsigned length;
-  if (d.kind == Kind::keyboard) {
+  if (d.kind == Kind::touch && !gTouchTablet) {
+    // Finger i is slot i (the first four of the screen's): its contact identifier, in range and tip switch while its tracking
+    // identifier stands, and where it is (where it was once lifted).
+    for (unsigned i = 0; i < fingers; ++i) {
+      const auto &s = d.slots[i];
+      uint8_t *f = bytes + 5 * i;
+      int32_t sx = scale(s.x, d.minX, d.spanX), sy = scale(s.y, d.minY, d.spanY);
+      f[0] = static_cast<uint8_t>(i | (s.id >= 0 ? 0xc0 : 0));
+      f[1] = static_cast<uint8_t>(sx);
+      f[2] = static_cast<uint8_t>(sx >> 8);
+      f[3] = static_cast<uint8_t>(sy);
+      f[4] = static_cast<uint8_t>(sy >> 8);
+    }
+    length = sizeof(bytes);
+  } else if (d.kind == Kind::keyboard) {
     bytes[0] = d.modifiers;
     memcpy(bytes + 2, d.keys, sizeof(d.keys));
     length = 8;
@@ -423,6 +482,7 @@ void DroidVMInput::report(DroidVMInputDevice &d)
       if (d.hid && (x || y || wheel || d.buttons != d.last[0])) {
         IOBufferMemoryDescriptor *report = IOBufferMemoryDescriptor::withBytes(mouse, sizeof(mouse), kIODirectionNone);
         if (report) {
+          recordTime(d);
           d.hid->handleReport(report);
           report->release();
         }
@@ -462,12 +522,25 @@ void DroidVMInput::report(DroidVMInputDevice &d)
   }
   if (!d.hid || !memcmp(bytes, d.last, length))
     return;
+  if (d.kind == Kind::touch && !gTouchTablet) {
+    // bring-up: each change of which fingers touch, with every finger's report
+    static unsigned edges;
+    unsigned tips = 0, before = 0;
+    for (unsigned i = 0; i < fingers; ++i) {
+      tips |= (bytes[5 * i] >> 7 & 1u) << i;
+      before |= (d.last[5 * i] >> 7 & 1u) << i;
+    }
+    if (tips != before && ++edges <= 300)
+      IOLog("DroidVMInput: touch %u: tips %x -> %x: %02x %02x%02x %02x%02x | %02x %02x%02x %02x%02x\n", edges, before, tips, bytes[0],
+            bytes[2], bytes[1], bytes[4], bytes[3], bytes[5], bytes[7], bytes[6], bytes[9], bytes[8]);
+  }
   memcpy(d.last, bytes, length);
   if (++d.reports <= 20 || d.reports % 500 == 0)   // bring-up: are the events getting through
     IOLog("DroidVMInput: %s report %u: %02x %02x %02x %02x %02x %02x %02x %02x\n", kindName(d.kind), d.reports, bytes[0], bytes[1],
           bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]);
   IOBufferMemoryDescriptor *report = IOBufferMemoryDescriptor::withBytes(bytes, length, kIODirectionNone);
   if (report) {
+    recordTime(d);
     d.hid->handleReport(report);
     report->release();
   }
@@ -505,8 +578,11 @@ void DroidVMInput::describe()
     while (OSObject *client = clients ? clients->getNextObject() : nullptr)
       users += OSDynamicCast(IOUserClient, client) != nullptr;
     OSSafeReleaseNULL(clients);
-    IOLog("DroidVMInput: event service %s on %s, %u user client(s)\n", object->getMetaClass()->getClassName(),
-          provider ? provider->getMetaClass()->getClassName() : "-", users);
+    OSNumber *page = service ? OSDynamicCast(OSNumber, service->getProperty(kIOHIDPrimaryUsagePageKey)) : nullptr;
+    OSNumber *usage = service ? OSDynamicCast(OSNumber, service->getProperty(kIOHIDPrimaryUsageKey)) : nullptr;
+    IOLog("DroidVMInput: event service %s on %s, %u user client(s), usage %#x/%#x, built-in %d\n", object->getMetaClass()->getClassName(),
+          provider ? provider->getMetaClass()->getClassName() : "-", users, page ? page->unsigned32BitValue() : 0,
+          usage ? usage->unsigned32BitValue() : 0, service && service->getProperty(kIOHIDBuiltInKey) == kOSBooleanTrue);
   }
   OSSafeReleaseNULL(services);
 }
