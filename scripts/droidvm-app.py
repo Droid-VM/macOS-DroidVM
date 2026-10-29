@@ -9,6 +9,8 @@
   droidvm-app.py boot [--kernel-arg ...]                 rebuild only the boot disk from the FDT dumped last time
                                                          (new kernel, new kernel arguments)
   droidvm-app.py register                                (re)write the vms.json entry through the daemon's config transaction
+  droidvm-app.py net                                     only switch the registered VM's network (MACOS_NET) and dump its new FDT,
+                                                         keeping every other setting made in the app; then boot
   droidvm-app.py start|stop|status
 
 The daemon plumbing (IPC, configuration transaction, VM template) is the iOS tool's (ios/tools/droidvm-app.py, imported and
@@ -72,6 +74,13 @@ GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1', 'ca-triple-buffer=1', 'ca
 # gpu_* fields and screens; the guest scans out IOSurface pages as guest-handle blobs, which the host blits (zero copy in the guest).
 VIRTIO_GPU = os.environ.get('MACOS_VIRTIO_GPU') == '1'
 REFRESH_HZ = int(os.environ.get('MACOS_REFRESH_HZ') or 120)
+# MACOS_NET (default 1): the app's br-wifi network (a tap bridged to the phone's wlan0) as crosvm's virtio-net on virtio-mmio
+# (--virtio-mmio-net, between --droidvm-gpu's and --virtio-mmio-gpu's windows), /arm-io/net in the ADT, driven by DroidVMEthernet
+# (en0, DHCP from the Wi-Fi's router). The MAC is the one en0 had with no device behind it, so the Data volume's en0 stays en0.
+# MACOS_NET=0: no device, en0 drops every packet (it still exists for the TimeSync clock). The template changes: register and prepare.
+NET = os.environ.get('MACOS_NET', '1') == '1'
+NET_MAC = '02:44:56:4d:00:01'
+NET_BRIDGE = 'br-wifi'
 FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
 REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000', 'mac-sandbox-skip-exec=1']   # see TODO.md: without them launchd cannot get far
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
@@ -97,7 +106,9 @@ def template(persistent):
                                  '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
                                  '--virtio-mmio-block', run.STORE + ',lock=false', *(['--droidvm-gpu'] if GPU else []),
-                                 *(['--virtio-mmio-gpu'] if VIRTIO_GPU else [])]})
+                                 *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else [])]})
+    if NET:
+        vm['networks'] = [{'network_id': network_id(), 'mac_address': NET_MAC}]
     if VIRTIO_GPU:
         vm.update({'gpu_backend': 'gpu_virglrenderer', 'gpu_mode': 'native', 'gpu_api': 'drm2kgsl'})
         # The app's edk2 drives the virtio-gpu (and on MMIO hangs with its queue size 0); this one has no driver for it, so the
@@ -108,6 +119,15 @@ def template(persistent):
                          # simplefb stays (edk2's GOP, DarwinBoot and the boot console draw there) but is not shown
                          'simplefb': dict(vm['screens']['simplefb'], exporter='none')}
     return vm
+
+
+def network_id():
+    """The id of the app's br-wifi network (its networks.json), as the upstream rig's fresh-deploy.sh looks it up."""
+    networks = json.loads(sh(f'cat {ios.APP}/files/networks.json'))['networks']
+    ids = [n['id'] for n in networks if NET_BRIDGE in (n.get('bridge_name'), n.get('name'))]
+    if not ids:
+        raise SystemExit(f'no {NET_BRIDGE} network in the app (MACOS_NET=0 boots without one)')
+    return ids[0]
 
 
 ORIGINAL_VM_CONFIG = ios.vm_config
@@ -134,7 +154,7 @@ def boot_disk(args):
     adb('pull', DTB, str(fdt), timeout=60)
     adt = OUT / 'kernel.macho.adt'
     run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000 - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None, gpu=GPU,
-                 virtio_gpu=VIRTIO_GPU)   # every vCPU the app gives the VM
+                 virtio_gpu=VIRTIO_GPU, net=NET)   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + (GPU_ARGS if GPU else []) + args.kernel_arg)
     local = OUT / 'boot'
@@ -150,9 +170,8 @@ def boot_disk(args):
     print('boot disk pushed:', BOOT, '\nkernel args:', line)
 
 
-def prepare(args):
-    push_images(args)
-    ios.register(args)
+def dump_fdt():
+    """Start the registered VM once with the boot disk it has, until crosvm has dumped the FDT, and stop it."""
     ipc = ios.Ipc()
     sh(f'rm -f {DTB}')
     print('start (placeholder boot disk)', ipc.call('vm_start', vm_id=VM_ID).get('success'))
@@ -164,7 +183,33 @@ def prepare(args):
         raise SystemExit('the daemon did not dump the FDT')
     time.sleep(3)
     print('stop', ipc.call('vm_stop', vm_id=VM_ID).get('success'))
+
+
+def prepare(args):
+    push_images(args)
+    ios.register(args)
+    dump_fdt()
     boot_disk(args)
+
+
+def net(args):
+    """The registered VM with (MACOS_NET=1) or without the virtio-mmio network: --virtio-mmio-net before --virtio-mmio-gpu (crosvm's
+    order) and the br-wifi network at NET_MAC. A new MMIO window moves the virtio-gpu one, so the FDT is dumped again."""
+    ipc = ios.Ipc()
+    row = ios.find_vm(ipc)
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
+    options = [o for o in vm['extra_options'] if o != '--virtio-mmio-net']
+    if NET:
+        options.insert(options.index('--virtio-mmio-gpu') if '--virtio-mmio-gpu' in options else len(options), '--virtio-mmio-net')
+    vm.update({'extra_options': options, 'networks': [{'network_id': network_id(), 'mac_address': NET_MAC}] if NET else []})
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
+    print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
+    if not reply.get('success'):
+        raise SystemExit(1)
+    dump_fdt()
 
 
 def main():
@@ -172,7 +217,7 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
-    for name in ('push', 'register', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'net', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -183,6 +228,8 @@ def main():
         boot_disk(args)
     elif args.cmd == 'prepare':
         prepare(args)
+    elif args.cmd == 'net':
+        net(args)
     else:
         {'register': ios.register, 'start': ios.start}[args.cmd](args)
 
