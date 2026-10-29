@@ -26,8 +26,8 @@ TRIPLE = 'arm64e-apple-darwin'
 # pacibsp/retab, signed static function pointers) for cfg(target_abi = "pauthtest") only, so this is the built-in target with that ABI;
 # init-fini off: dyld signs Mach-O initializers itself.
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
-# NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan: a sandbox-optional shader cache,
-# sRGB extended-range blends, llvm.bitreverse, growing memory blocks, patch(quad, 0)), in the order its build-native-metal-bridge.py applies.
+# NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan, none since NativeMetal wip/hackintosh
+# carries them), in the order its build-native-metal-bridge.py applies.
 PATCHES = sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch')) + sorted((UNIXNU / 'patches/metal2vulkan').glob('*.patch'))
 
 pin = json.loads((UNIXNU / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
@@ -64,6 +64,9 @@ air, fc_air = OUT / 'runtime_examples.air', OUT / 'function_constant.air'
 fixtures = SOURCE / 'crates/metal2vulkan-validation/fixtures/public'
 subprocess.run([str(LLVM / 'llvm-as'), '-o', str(air), str(fixtures / 'examples/runtime_examples.ll')], check=True)
 subprocess.run([str(LLVM / 'llvm-as'), '-o', str(fc_air), str(fixtures / 'kernel_function_constant_gate_fold.ll')], check=True)
+# the GPU scanout's half-float conversion kernel (NativeMetal shaders/scanout_convert.ll, GpuScanoutPresenter.h)
+scanout_air = OUT / 'scanout_convert.air'
+subprocess.run([str(LLVM / 'llvm-as'), '-o', str(scanout_air), str(UNIXNU / 'drivers/NativeMetal/shaders/scanout_convert.ll')], check=True)
 manifest = OUT / 'Cargo.toml'
 manifest.write_text('\n'.join([
     '[package]', 'name = "native-metal-bridge"', 'version = "0.1.0"', 'edition = "2024"', '[workspace]',
@@ -72,20 +75,15 @@ manifest.write_text('\n'.join([
     'metal2vulkan = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan')) + ', features = ["ash"] }',
     'metal2vulkan-runtime = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan-runtime')) + ' }',
     'libc = "0.2"',
-    # the shader cache's hashes: not UniXNU's "asm" (ARMv8 SHA-256 instructions), which pulls sha2-asm and cc-rs, and cc-rs takes
-    # target_abi = "pauthtest" for the Linux pauthtest target
-    'sha2 = "0.10"',
-    # the bridge's global allocator (NativeMetalBridge.rs), as Droid-VM/UniXNU's build-adreno-metal-bridge.py pins it
-    'mimalloc = { version = "=0.1.43", default-features = false }',
     # WindowServer's update thread spends much of a frame in the runtime's small functions across the translator's crates: one
     # optimisation unit with link-time optimisation inlines them across crate boundaries (as build-adreno-metal-bridge.py)
     '[profile.release]', 'panic = "unwind"', 'debug = 1', 'lto = "fat"', 'codegen-units = 1', '',
 ]))
 key = TRIPLE.replace('-', '_')
-env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
+env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), NMB_SCANOUT_AIR=str(scanout_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
            **{f'CC_{key}': str(LLVM / 'clang'), f'CXX_{key}': str(LLVM / 'clang++'), f'AR_{key}': str(LLVM / 'llvm-ar'),
               f'CFLAGS_{key}': f'-target arm64e-apple-macos14.0 -isysroot {SDK} -O2', f'CXXFLAGS_{key}': f'-isysroot {SDK}'},
-           # mimalloc's C goes through cc-rs, which would derive a Linux triple from the target spec's target_abi (pauthtest): its
+           # dependencies' C goes through cc-rs, which would derive a Linux triple from the target spec's target_abi (pauthtest): its
            # defaults off, the triple and SDK are CFLAGS' above
            CRATE_CC_NO_DEFAULTS='1')
 target_dir = OUT / 'target'
@@ -98,9 +96,4 @@ if result.returncode:
     raise SystemExit(log.read_text()[-6000:])
 library = OUT / 'libnative_metal_bridge.a'
 shutil.copyfile(target_dir / TRIPLE / 'release/libnative_metal_bridge.a', library)
-# mimalloc's C (libmimalloc-sys) is not bundled into the static library: the plugin links it beside (build-metal-plugin.sh)
-mimalloc = sorted((target_dir / TRIPLE / 'release/build').glob('libmimalloc-sys*/**/libmimalloc.a'), key=lambda path: path.stat().st_mtime)
-if not mimalloc:
-    raise SystemExit('no libmimalloc.a in the build')
-shutil.copyfile(mimalloc[-1], OUT / 'libmimalloc.a')
 print(f'{library}: {library.stat().st_size} bytes (translator {pin[:12]})')

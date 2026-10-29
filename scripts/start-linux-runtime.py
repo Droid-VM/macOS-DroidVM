@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TC = ROOT / 'toolchains/linux'
-IMAGE = 'sha256:34c45909102c90bc2ae66c98e690d038f479255966c814b59d284004f0185dbf'
+IMAGE = 'sha256:e8b09bc18737d2d78927470e2da9205f0cc05f36ec2b24e67c9f460403d6c96e'   # rebuilt 2026-10-29 from ios Dockerfile.appleclang (Darling 20260608); 34c45909 was lost
 NAME = 'macos-appleclang'
 
 
