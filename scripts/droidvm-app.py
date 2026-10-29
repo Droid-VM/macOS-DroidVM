@@ -81,6 +81,8 @@ REFRESH_HZ = int(os.environ.get('MACOS_REFRESH_HZ') or 120)
 NET = os.environ.get('MACOS_NET', '1') == '1'
 NET_MAC = '02:44:56:4d:00:01'
 NET_BRIDGE = 'br-wifi'
+# The guest's display size is the boot console's (simplefb, the GOP DroidVMDisplay reads), so both screens carry it.
+WIDTH, HEIGHT = 1920, 1080
 FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
 REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000', 'mac-sandbox-skip-exec=1']   # see TODO.md: without them launchd cannot get far
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
@@ -115,9 +117,9 @@ def template(persistent):
         # bootloader keeps the simplefb GOP it wants (edk2-gunyah VIRTIO_GPU_ENABLE=FALSE; see FIRMWARE).
         vm['boot'] = dict(vm['boot'], uefi=dict(vm['boot']['uefi'], firmware=FIRMWARE))
         vm['screens'] = {'gpu-0': dict(vm['screens']['gpu-0'], enabled=True, exporter='native', transport_cap='gpu',
-                                       width=1280, height=800, refresh_rate=REFRESH_HZ),
+                                       width=WIDTH, height=HEIGHT, refresh_rate=REFRESH_HZ),
                          # simplefb stays (edk2's GOP, DarwinBoot and the boot console draw there) but is not shown
-                         'simplefb': dict(vm['screens']['simplefb'], exporter='none')}
+                         'simplefb': dict(vm['screens']['simplefb'], exporter='none', width=WIDTH, height=HEIGHT)}
     return vm
 
 
@@ -153,7 +155,9 @@ def boot_disk(args):
     fdt = OUT / 'generated.dtb'
     adb('pull', DTB, str(fdt), timeout=60)
     adt = OUT / 'kernel.macho.adt'
-    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0xA00000 - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None, gpu=GPU,
+    # Below the shim's RAM base (0x600000 of firmware window), the framebuffer and the pools at the top of RAM (0xA00000 before:
+    # the window and a 1280x800 framebuffer's 4 MiB)
+    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None, gpu=GPU,
                  virtio_gpu=VIRTIO_GPU, net=NET)   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + (GPU_ARGS if GPU else []) + args.kernel_arg)

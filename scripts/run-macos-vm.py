@@ -132,6 +132,17 @@ def fdt_pool_bytes(fdt):
                for _, size in module.reg_pairs(props['reg']))
 
 
+def fdt_framebuffer_bytes(fdt):
+    """The bytes of crosvm's simplefb framebuffer (the boot console, below the pools at the top of RAM; its size follows the
+    screen's): the ADT's DRAM ends below it too, or the kernel's early mapping of it crosses the DRAM boundary and panics before
+    the console is up (pmap_map_bd_with_options)."""
+    spec = importlib.util.spec_from_file_location('make_droidvm_adt', ADT_TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return sum(size for props in module.parse_fdt(Path(fdt).read_bytes()).values()
+               if props.get('compatible', b'').startswith(b'simple-framebuffer\0') for _, size in module.reg_pairs(props['reg']))
+
+
 def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, virtio_gpu=False, net=False):
     """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight).
     gpu: crosvm --droidvm-gpu is on; its window is the FDT's last virtio-mmio one (it follows the disks) and becomes /arm-io/gpu.
