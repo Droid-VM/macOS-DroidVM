@@ -239,6 +239,33 @@ publish = publish.replace(closed, closed + '                IOLog("droidvm-gpu: 
                           'native_adreno_pinned_bytes[0]>>20,native_adreno_pinned_bytes[1]>>20);\n')
 scope['staged'].write_text(publish)
 submit = (adreno / 'NativeAdrenoSubmit.cpp').read_text()
+# DROIDVM_GPU_SUBMIT_TIMES=1 (diagnostics, research/debug-2026-10-28): where a submission's kernel call goes, logged every 2000 of them in
+# microseconds a submission: hold (validate, retire, hold the BOs), wc (write-combine re-assertion and audit), publish (cache maintenance,
+# TLB), peek (the IB log), ring (the host round trip), and the slowest round trip.
+if os.environ.get('DROIDVM_GPU_SUBMIT_TIMES') == '1':
+    for old, new in [('#include <IOKit/IOLib.h>\n',
+                      '#include <IOKit/IOLib.h>\n#include <kern/clock.h>\n'
+                      'static uint64_t gSubmitTimes[7];   // submissions, then the phases\' and the slowest round trip\'s ticks\n'),
+                     ('    IOReturn swept=retireCompleted();\n', '    const uint64_t t0=mach_absolute_time();\n    IOReturn swept=retireCompleted();\n'),
+                     ('    uint32_t value=0;\n    /* int-070', '    const uint64_t t1=mach_absolute_time();\n    uint32_t value=0;\n    /* int-070'),
+                     ('    (void)vm_->sampleWord(buffers[0].iova,&cached,&before);\n',
+                      '    const uint64_t t2=mach_absolute_time();\n    (void)vm_->sampleWord(buffers[0].iova,&cached,&before);\n'),
+                     ('    {\n        const uint32_t slot=native_adreno_ib_log_count&3;',
+                      '    const uint64_t t3=mach_absolute_time();\n    {\n        const uint32_t slot=native_adreno_ib_log_count&3;'),
+                     ('    status=ring_->submitFramed(words,word_count,&value);\n',
+                      '    const uint64_t t4=mach_absolute_time();\n    status=ring_->submitFramed(words,word_count,&value);\n'
+                      '    {\n        const uint64_t t5=mach_absolute_time();\n'
+                      '        gSubmitTimes[0]++;gSubmitTimes[1]+=t1-t0;gSubmitTimes[2]+=t2-t1;gSubmitTimes[3]+=t3-t2;gSubmitTimes[4]+=t4-t3;\n'
+                      '        gSubmitTimes[5]+=t5-t4;if(t5-t4>gSubmitTimes[6])gSubmitTimes[6]=t5-t4;\n'
+                      '        if(gSubmitTimes[0]==2000) {\n'
+                      '            uint64_t us[6];for(unsigned i=0;i<6;i++){absolutetime_to_nanoseconds(gSubmitTimes[1+i],&us[i]);us[i]/=i<5?2000*1000/10:1000;}\n'
+                      '            IOLog("droidvm-gpu: submit x0.1us hold %llu wc %llu publish %llu peek %llu ring %llu, slowest ring %llu us\\n",'
+                      'us[0],us[1],us[2],us[3],us[4],us[5]);\n'
+                      '            for(auto &t:gSubmitTimes)t=0;\n'
+                      '        }\n    }\n')]:
+        if submit.count(old) != 1:
+            sys.exit('NativeAdrenoSubmit.cpp: the submit timing no longer applies: ' + old[:60])
+        submit = submit.replace(old, new)
 # A submission released the jobs that had completed by asking the host for each one still in flight whether it had (DroidVMGpu.cpp's
 # observeFence: a DROIDVM_GPU_OP_RETIRED round trip per job). It now releases those the ring has already seen complete (the waits on
 # them, which also release theirs) and asks the host only when every job slot is taken; an unmap still sweeps with the host first

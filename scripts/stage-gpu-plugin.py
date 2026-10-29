@@ -22,6 +22,8 @@ processes) every SECONDS, all on its stdout, so in the kernel's log too.
 --user adds a local administrator (uid 501, staff, admin; SALTED-SHA512-PBKDF2 shadow hash) to the Data volume's directory
 (/var/db/dslocal): the setup assistant that would create one is skipped. A boot job makes its home before the first login, with .skipbuddy
 (no MiniBuddy, which would keep loginwindow from launching the Dock and Finder).
+--file SOURCE:DEST copies a host file to DEST on the Data volume (/private/var: m2vsim/x is /private/var/m2vsim/x; not tmp/, which
+the boot empties), e.g. a bridge call trace for tools/m2vsim's replay in the guest.
 --data-size-mib makes the Data volume's container that large (the seed's is 1 GiB, which the first login's caches fill to 91%).
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
@@ -192,6 +194,7 @@ def main():
     parser.add_argument('--user', metavar='NAME:PASSWORD')
     parser.add_argument('--data-size-mib', type=int)
     parser.add_argument('--reduce-transparency', action='store_true')
+    parser.add_argument('--file', metavar='SOURCE:DEST', action='append', default=[])
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
     bundles = [b.resolve() for b in args.bundles]
@@ -323,6 +326,12 @@ def main():
                                    stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(keyboard)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(keyboard)], check=True)
+                for item in args.file:
+                    source, dest = item.split(':', 1)
+                    target = mount / dest.lstrip('/')
+                    subprocess.run(['sudo', 'mkdir', '-p', str(target.parent)], check=True)
+                    subprocess.run(['sudo', 'cp', source, str(target)], check=True)
+                    subprocess.run(['sudo', 'chmod', '644', str(target)], check=True)
                 if args.reduce_transparency:
                     managed = mount / MANAGED_PREFS
                     folders = [managed] + ([managed / args.user.split(':', 1)[0]] if args.user else [])

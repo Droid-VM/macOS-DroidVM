@@ -70,8 +70,23 @@ if os.environ.get('NMB_FRAME_ROWS') == '1':
         s = s.replace(old, new)
 open(sys.argv[2], 'w').write(s)
 PY
-"${CXX[@]}" $O/frontend.mm -o $O/frontend.o
-python3 scripts/apple-ld.py -bundle -dead_strip -o $B/MacOS/NativeAdrenoMetal $O/plugin.o $O/frontend.o out/metal/bridge/libnative_metal_bridge.a \
+# NMB_TRACE=1: the frontend's bridge calls go through tools/m2vsim's recorder, which the boot argument nmb-trace=1 turns on in
+# WindowServer (a trace for tools/m2vsim's replay on the host).
+TRACE=()
+if [ "${NMB_TRACE:-0}" = 1 ]; then
+  python3 tools/m2vsim/gen_trace.py $U/bridge/NativeMetalObjects.h $O/trace
+  TRACE=(-include $O/trace/nmb_trace_redirect.h)
+  "${CXX[@]}" -x c++ -I $O/trace -I tools/m2vsim tools/m2vsim/trace_record.cpp -o $O/trace_record.o
+fi
+"${CXX[@]}" "${TRACE[@]}" $O/frontend.mm -o $O/frontend.o
+# NMB_LATENCY=1 (diagnostics): WindowServer's frame latency rows and update-thread samples (research/debug-2026-10-28/WSLatency.mm).
+LATENCY=()
+if [ "${NMB_LATENCY:-0}" = 1 ]; then
+  "${CXX[@]}" research/debug-2026-10-28/WSLatency.mm -o $O/latency.o
+  LATENCY=($O/latency.o)
+fi
+python3 scripts/apple-ld.py -bundle -dead_strip -o $B/MacOS/NativeAdrenoMetal $O/plugin.o $O/frontend.o ${TRACE:+$O/trace_record.o} "${LATENCY[@]}" \
+  out/metal/bridge/libnative_metal_bridge.a \
   -framework Foundation -framework Metal -framework IOSurface -framework IOKit -framework CoreFoundation -framework IOGPU \
   -lobjc -lc++ -lSystem -liconv 2>&1 | { grep -v "was built for newer" || true; }   # a failed link fails the build (pipefail)
 cp out/metal/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib $B/MacOS/
