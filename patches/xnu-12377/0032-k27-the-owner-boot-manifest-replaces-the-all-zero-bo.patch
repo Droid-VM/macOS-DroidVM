@@ -1,0 +1,31 @@
+From 09e03f2e0f0a66687434eaf894aad27f6fb2027d Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 03:31:00 -0400
+Subject: [PATCH 32/40] k27: the owner boot manifest replaces the all-zero
+ boot-manifest-hash placeholder (27 Image4 needs one at start)
+
+(cherry picked from commit 7b0eea541248f1da67050621685c084ce553ce0a)
+---
+ iokit/bsddev/IOKitBSDInit.cpp | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+index afee67a..cafc29f 100644
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -607,7 +607,14 @@ native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID,
+ 	SHA384_Final(digest, &context);
+ 	IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
+ 	if (!chosen) { native_owner_boot_manifest_status = 2; return 0; }
+-	// Never replace an existing firmware/Apple identity with an owner identity.
++	// Never replace an existing firmware/Apple identity with an owner identity. k27: except the all-zero placeholder that
++	// run-macos-vm.py (MACOS_BOOT_MANIFEST_HASH=1) puts there so that macOS 27's Image4 kext can initialize its magazine.
++	OSData *existing = OSDynamicCast(OSData, chosen->getProperty("boot-manifest-hash"));
++	static const uint8_t placeholder[48] = {};
++	if (existing && existing->getLength() == sizeof(placeholder) &&
++	    !memcmp(existing->getBytesNoCopy(), placeholder, sizeof(placeholder)) && !chosen->getProperty("owner-boot-manifest-domain")) {
++		chosen->removeProperty("boot-manifest-hash");
++	}
+ 	if (chosen->getProperty("boot-manifest-hash") || chosen->getProperty("owner-boot-manifest-domain")) {
+ 		chosen->release();
+ 		native_owner_boot_manifest_status = 3;

@@ -1,8 +1,9 @@
-From 8eae839a5dd8480ea30f6edc37c8abd8d07a22ea Mon Sep 17 00:00:00 2001
+From 682cab85bb22bf23490c9fcba738ce9f9c1c5ec0 Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 08:01:46 -0400
-Subject: [PATCH 04/48] drop duplicate ml_device_is_prod_fused
+Subject: [PATCH 04/40] drop duplicate ml_device_is_prod_fused
 
+(cherry picked from commit 8eae839a5dd8480ea30f6edc37c8abd8d07a22ea)
 ---
  osfmk/kern/link_compat.c | 7 -------
  1 file changed, 7 deletions(-)

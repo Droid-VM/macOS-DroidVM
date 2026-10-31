@@ -1,0 +1,32 @@
+From 8a8393057b252e3394d8fa8410f5f0080e6be3f4 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 10:07:51 -0400
+Subject: [PATCH 37/40] k27: k27_amfi_page_shift (31), what macOS 27's AMFI
+ reads as PAGE_SHIFT_CONST: k27/kc-build27.py binds its one GOT slot here so
+ CoreEntitlements' CEElementIterate stack-page check (sp within 0x80 of a page
+ start -> fail) cannot trip on fixed call chains; AMFI's bytes stay as shipped
+
+(cherry picked from commit c0d30feb851769460b884751e31f21e460899e13)
+---
+ osfmk/arm64/arm_vm_init.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index d856a65..f7f387e 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -313,6 +313,14 @@ SECURITY_READ_ONLY_LATE(static unsigned long) segSizeKCDATA;
+ SECURITY_READ_ONLY_LATE(static boolean_t) use_contiguous_hint = TRUE;
+ 
+ SECURITY_READ_ONLY_LATE(int) PAGE_SHIFT_CONST;
++#if defined(BCM2837)
++/*
++ * What macOS 27's AMFI reads as PAGE_SHIFT_CONST (k27/kc-build27.py binds its one reference here): CoreEntitlements'
++ * CEElementIterate fails when (sp & ~(-1 << PAGE_SHIFT_CONST)) < 0x80, which on a call chain of fixed depth over a page aligned
++ * kernel stack is a fixed outcome, and our frames put every spawn's entitlement dictionary copy there. 31: the low 31 bits of sp.
++ */
++__attribute__((used)) const int k27_amfi_page_shift = 31;
++#endif
+ 
+ SECURITY_READ_ONLY_LATE(vm_offset_t) end_kern;
+ SECURITY_READ_ONLY_LATE(vm_offset_t) etext;

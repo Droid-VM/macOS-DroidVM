@@ -1,0 +1,460 @@
+From 7b2fe392e430110fa8c6f37b4eaeed069ad3836d Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sun, 25 Oct 2026 01:27:00 -0400
+Subject: [PATCH 19/40] bring-up profiling: pc-sample=<seconds> reports, every
+ period, the timer interrupts' idle/user/kernel split, the busiest tasks and
+ kernel pcs (a sample taken where interrupts are unmasked is charged to the
+ code that masked them), decrementer values by log2, deadlines already past by
+ source and the queue's earliest call, the kernel stacks arming waits within
+ 50 us and those spinning in hw_lck_ticket_contended; pc-sample-hz=<n> samples
+ from a per-CPU timer instead (the kernel is tickless) (verified: found
+ NativeVirtioBlock's IODelay(1) timer storm and the crash-relaunch lock
+ contention)
+
+(cherry picked from commit b6c757108e4a053e1c19a32d34113ab2dce0e6d5)
+---
+ osfmk/arm/arm_timer.c    |  26 ++++
+ osfmk/arm/rtclock.c      |   4 +
+ osfmk/kern/exception.c   | 326 +++++++++++++++++++++++++++++++++++++++
+ osfmk/kern/lock_ticket.c |   8 +
+ osfmk/kern/waitq.c       |   5 +
+ 5 files changed, 369 insertions(+)
+
+diff --git a/osfmk/arm/arm_timer.c b/osfmk/arm/arm_timer.c
+index f083e22..4a98688 100644
+--- a/osfmk/arm/arm_timer.c
++++ b/osfmk/arm/arm_timer.c
+@@ -173,6 +173,32 @@ timer_resync_deadlines(void)
+ 		deadline = run_deadline;
+ 	}
+ 
++	/* bring-up (boot-arg pc-sample): which source picks a deadline already past (0 the timer queue, 1 the idle timer, 2 a running
++	 * timer, 3 + i running timer i) */
++	if (deadline > 0 && deadline != EndOfAllTime && deadline <= mach_absolute_time()) {
++		extern uint32_t virt_timer_past[3 + RUNNING_TIMER_MAX];
++		processor_t processor = PERCPU_GET_RELATIVE(processor, cpu_data, cpu_data_ptr);
++		unsigned int source = deadline == run_deadline ? 2 : deadline == cpu_data_ptr->idle_timer_deadline ? 1 : 0;
++		os_atomic_inc(&virt_timer_past[source], relaxed);
++		if (source == 0) {
++			extern uint64_t virt_timer_past_head[3];   /* the queue's earliest call: function, soft and hard deadline - now */
++			timer_call_t head = priority_queue_min(&mytimer->queue.mpq_pqhead, struct timer_call, tc_pqlink);
++			if (head != NULL) {
++				uint64_t now = mach_absolute_time();
++				virt_timer_past_head[0] = VM_KERNEL_STRIP_PTR((uint64_t)head->tc_func);
++				virt_timer_past_head[1] = head->tc_soft_deadline - now;
++				virt_timer_past_head[2] = head->tc_pqlink.deadline - now;
++			}
++		}
++		if (source == 2) {
++			for (int i = 0; i < RUNNING_TIMER_MAX; i++) {
++				if (processor->running_timers[i].tc_pqlink.deadline == deadline) {
++					os_atomic_inc(&virt_timer_past[3 + i], relaxed);
++				}
++			}
++		}
++	}
++
+ 	if ((deadline == EndOfAllTime)
+ 	    || ((deadline > 0) && (cpu_data_ptr->rtcPop != deadline))) {
+ 		int             decr;
+diff --git a/osfmk/arm/rtclock.c b/osfmk/arm/rtclock.c
+index 35715b5..fb707d1 100644
+--- a/osfmk/arm/rtclock.c
++++ b/osfmk/arm/rtclock.c
+@@ -370,6 +370,10 @@ rtclock_intr(__unused unsigned int is_user_context)
+ 		    user_mode ? pc : VM_KERNEL_UNSLIDE(pc), user_mode);
+ 	}
+ 
++	/* bring-up profiling (boot-arg pc-sample, osfmk/kern/exception.c) */
++	extern void virt_pc_sample(uint64_t pc, uint64_t fp, unsigned int user_mode, uint32_t decrementer, bool due);
++	virt_pc_sample(pc, regs ? get_saved_state_fp(regs) : 0, user_mode, cdp->cpu_decrementer, abstime >= cdp->rtcPop);
++
+ 	/* call the generic etimer */
+ 	timer_intr(user_mode, pc);
+ }
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index 7057d77..aa18433 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -145,6 +145,7 @@ TUNABLE_WRITEABLE(unsigned int, exception_log_max_pid, "exception_log_max_pid",
+  */
+ #if defined(__arm64__) && defined(MACH_BSD)
+ #include <kern/backtrace.h>
++#include <os/hash.h>
+ #include <vm/vm_shared_region.h>
+ #include <vm/vm_shared_region_xnu.h>
+ 
+@@ -275,6 +276,8 @@ virt_log_user_backtrace(const char *tag)
+  * the first process of that name instead (looked up every period, for a daemon whose pid is not known in advance).
+  */
+ #include <kern/thread_call.h>
++#include <kern/timer_call.h>
++#include <arm/cpu_data_internal.h>
+ #include <kern/queue.h>
+ extern void *proc_find(int pid);
+ extern void proc_rele(void *p);
+@@ -400,6 +403,329 @@ virt_sample_init(void)
+ 	}
+ }
+ STARTUP(THREAD_CALL, STARTUP_RANK_LAST, virt_sample_init);
++
++/*
++ * Virtual machine boards: boot-arg pc-sample=<seconds> profiles the guest from the timer interrupt (rtclock_intr calls
++ * virt_pc_sample with the interrupted pc). Every period it prints the samples spent idle, in user space and in the kernel, the
++ * processes with the most samples (kernel and user) and the hottest kernel pcs (16-byte granules), then starts again: where the
++ * CPU time of a guest that keeps every vCPU busy goes.
++ */
++static TUNABLE(uint32_t, virt_pc_sample_period, "pc-sample", 0);
++#define VIRT_PC_SLOTS 4096
++#define VIRT_PC_TASKS 64
++static struct virt_pc_bin { uint64_t pc; uint32_t count; } *virt_pc_hist;   /* VIRT_PC_SLOTS, allocated: static data must stay small */
++static struct { task_t task; uint32_t kernel, user; char name[20]; } virt_pc_tasks[VIRT_PC_TASKS];
++static uint32_t virt_pc_idle, virt_pc_user, virt_pc_kernel, virt_pc_lost;
++static uint32_t virt_pc_early, virt_pc_decrementer[33];
++uint32_t virt_timer_past[3 + RUNNING_TIMER_MAX];
++uint64_t virt_timer_past_head[3];   /* osfmk/arm/arm_timer.c: deadlines already past when chosen, by source */   /* pops before their deadline; the decrementer programmed, by log2 */
++static thread_call_t virt_pc_call;
++
++/* waits armed with a deadline already (nearly) past (osfmk/kern/waitq.c): the kernel stacks that arm them, by count */
++#define VIRT_WAIT_STACKS 32
++#define VIRT_WAIT_FRAMES 10
++static struct virt_wait_stack { task_t task; uint32_t count; uintptr_t frames[VIRT_WAIT_FRAMES]; } *virt_wait_stacks;   /* VIRT_WAIT_STACKS, allocated */
++static uint32_t virt_wait_short, virt_wait_lost;
++uint64_t virt_wait_short_abs;   /* 50 us: armed this close to now counts as a short wait */
++static SIMPLE_LOCK_DECLARE(virt_wait_lock, 0);
++
++static void virt_note_stack(uintptr_t *frames);
++
++void
++virt_note_short_wait(void)
++{
++	uintptr_t frames[VIRT_WAIT_FRAMES] = { 0 };
++	backtrace(frames, VIRT_WAIT_FRAMES, NULL, NULL);
++	virt_note_stack(frames);
++}
++
++/* the table also takes the stacks of samples spinning for a ticket lock (frames[0] VIRT_SPIN_MARK, then the pc and its callers) */
++#define VIRT_SPIN_MARK 0x5350494eULL
++#define VIRT_SPIN_DEPTH 6
++
++static void
++virt_note_stack(uintptr_t *frames)
++{
++	task_t task = current_task();
++	unsigned int h = (unsigned int)(os_hash_kernel_pointer((void *)(frames[2] ^ frames[3] ^ frames[4] ^ (uintptr_t)task)) % VIRT_WAIT_STACKS);
++	simple_lock(&virt_wait_lock, LCK_GRP_NULL);   /* the thread lock is held: interrupts are off */
++	virt_wait_short++;
++	for (unsigned int probe = 0; probe < 8; probe++, h = (h + 1) % VIRT_WAIT_STACKS) {
++		if (virt_wait_stacks[h].count == 0) {
++			virt_wait_stacks[h].task = task;
++			memcpy(virt_wait_stacks[h].frames, frames, VIRT_WAIT_FRAMES * sizeof(*frames));
++		}
++		if (virt_wait_stacks[h].task == task && memcmp(virt_wait_stacks[h].frames, frames, VIRT_WAIT_FRAMES * sizeof(*frames)) == 0) {
++			virt_wait_stacks[h].count++;
++			simple_unlock(&virt_wait_lock);
++			return;
++		}
++	}
++	virt_wait_lost++;
++	simple_unlock(&virt_wait_lock);
++}
++
++/*
++ * A timer held off while interrupts were masked is taken where ml_set_interrupts_enabled unmasks them: charge such a sample
++ * to the code that masked them, the first return address on the frame chain outside the two functions.
++ */
++static uint64_t
++virt_pc_unmasker(uint64_t pc, uint64_t fp, thread_t thread)
++{
++	extern boolean_t ml_set_interrupts_enabled_with_debug(boolean_t, boolean_t);
++	uint64_t first = VM_KERNEL_STRIP_PTR((uint64_t)&ml_set_interrupts_enabled);
++	uint64_t last = VM_KERNEL_STRIP_PTR((uint64_t)&ml_set_interrupts_enabled_with_debug) + 0x200;
++	uint64_t bottom = thread->kernel_stack, top = bottom + kernel_stack_size;
++	for (int depth = 0; depth < 4 && pc >= first && pc < last; depth++) {
++		if (fp < bottom || fp + 16 > top || (fp & 7)) {
++			break;
++		}
++		pc = VM_KERNEL_STRIP_PTR(((uint64_t *)fp)[1]);
++		fp = ((uint64_t *)fp)[0];
++	}
++	return pc;
++}
++
++/*
++ * pc-sample-hz=<n>: sample from a per-CPU timer at n Hz instead of from every timer interrupt. The kernel is tickless: interrupt
++ * sampling sees threads that sleep briefly and often, and a thread that computes only when its quantum ends.
++ */
++static TUNABLE(uint32_t, virt_pc_hz, "pc-sample-hz", 0);
++static struct timer_call *virt_pc_timers;   /* one per CPU, armed by the CPU's first timer interrupt */
++static uint8_t *virt_pc_armed;
++static uint64_t virt_pc_interval;
++static void virt_pc_record(uint64_t pc, uint64_t fp, unsigned int user_mode);
++
++static void
++virt_pc_tick(timer_call_param_t call, __unused timer_call_param_t p1)
++{
++	struct arm_saved_state *regs = getCpuDatap()->cpu_int_state;
++	if (regs != NULL) {
++		virt_pc_record(get_saved_state_pc(regs), get_saved_state_fp(regs), PSR64_IS_USER(get_saved_state_cpsr(regs)));
++	}
++	timer_call_enter((timer_call_t)call, mach_absolute_time() + virt_pc_interval, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL);
++}
++
++void
++virt_pc_sample(uint64_t pc, uint64_t fp, unsigned int user_mode, uint32_t decrementer, bool due)
++{
++	if (virt_pc_call == NULL) {
++		return;
++	}
++	if (!due) {
++		os_atomic_inc(&virt_pc_early, relaxed);
++	}
++	os_atomic_inc(&virt_pc_decrementer[decrementer ? 32 - __builtin_clz(decrementer) : 0], relaxed);
++	if (virt_pc_timers != NULL) {
++		int cpu = cpu_number();
++		if (!virt_pc_armed[cpu]) {
++			virt_pc_armed[cpu] = 1;
++			timer_call_setup(&virt_pc_timers[cpu], virt_pc_tick, &virt_pc_timers[cpu]);
++			timer_call_enter(&virt_pc_timers[cpu], mach_absolute_time() + virt_pc_interval, TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL);
++		}
++		return;
++	}
++	virt_pc_record(pc, fp, user_mode);
++}
++
++static void
++virt_pc_record(uint64_t pc, uint64_t fp, unsigned int user_mode)
++{
++	thread_t thread = current_thread();
++	if (thread == current_processor()->idle_thread) {
++		os_atomic_inc(&virt_pc_idle, relaxed);
++		return;
++	}
++	os_atomic_inc(user_mode ? &virt_pc_user : &virt_pc_kernel, relaxed);
++	task_t task = get_threadtask(thread);
++	unsigned int t = (unsigned int)(((uintptr_t)task >> 6) % VIRT_PC_TASKS);
++	for (unsigned int probe = 0; probe < 8; probe++, t = (t + 1) % VIRT_PC_TASKS) {
++		if (virt_pc_tasks[t].task == NULL) {   /* named by virt_pc_report: no proc access in the interrupt (nor before bsd_init) */
++			os_atomic_cmpxchg(&virt_pc_tasks[t].task, NULL, task, relaxed);
++		}
++		if (virt_pc_tasks[t].task == task) {
++			os_atomic_inc(user_mode ? &virt_pc_tasks[t].user : &virt_pc_tasks[t].kernel, relaxed);
++			break;
++		}
++	}
++	if (user_mode) {
++		return;
++	}
++	pc = virt_pc_unmasker(VM_KERNEL_STRIP_PTR(pc), fp, thread);
++	extern uintptr_t virt_ticket_contended_start(void);
++	uint64_t spin = VM_KERNEL_STRIP_PTR((uint64_t)virt_ticket_contended_start());
++	if (virt_wait_stacks != NULL && pc >= spin && pc < spin + 0x204) {   /* hw_lck_ticket_contended: whose lock */
++		uintptr_t frames[VIRT_WAIT_FRAMES] = { VIRT_SPIN_MARK, pc };
++		uint64_t bottom = thread->kernel_stack, top = bottom + kernel_stack_size;
++		for (unsigned int f = 2; f < VIRT_SPIN_DEPTH && fp >= bottom && fp + 16 <= top && (fp & 7) == 0; f++) {
++			frames[f] = VM_KERNEL_STRIP_PTR(((uint64_t *)fp)[1]);
++			fp = ((uint64_t *)fp)[0];
++		}
++		virt_note_stack(frames);
++	}
++	pc &= ~0xfULL;
++	unsigned int h = (unsigned int)((pc >> 4) % VIRT_PC_SLOTS);
++	for (unsigned int probe = 0; probe < 16; probe++, h = (h + 1) % VIRT_PC_SLOTS) {
++		if (virt_pc_hist[h].pc == 0) {
++			os_atomic_cmpxchg(&virt_pc_hist[h].pc, 0, pc, relaxed);
++		}
++		if (virt_pc_hist[h].pc == pc) {
++			os_atomic_inc(&virt_pc_hist[h].count, relaxed);
++			return;
++		}
++	}
++	os_atomic_inc(&virt_pc_lost, relaxed);
++}
++
++static void
++virt_pc_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
++{
++	printf("pc-sample: %u idle, %u user, %u kernel (%u kernel pcs not binned)\n", virt_pc_idle, virt_pc_user, virt_pc_kernel, virt_pc_lost);
++	printf("pc-sample: %u pops before their deadline; decrementer by log2:", virt_pc_early);
++	for (unsigned int b = 0; b < 33; b++) {
++		if (virt_pc_decrementer[b] != 0) {
++			printf(" %u:%u", b, virt_pc_decrementer[b]);
++		}
++		virt_pc_decrementer[b] = 0;
++	}
++	printf("\n");
++	virt_pc_early = 0;
++	printf("pc-sample: past deadlines: queue %u idle %u running %u (", virt_timer_past[0], virt_timer_past[1], virt_timer_past[2]);
++	for (unsigned int i = 0; i < 3 + RUNNING_TIMER_MAX; i++) {
++		if (i >= 3) {
++			printf(" %u", virt_timer_past[i]);
++		}
++		virt_timer_past[i] = 0;
++	}
++	printf(")\n");
++	printf("pc-sample: last past queue head: func 0x%llx soft %lld hard %lld (ticks from now)\n", virt_timer_past_head[0],
++	    (long long)virt_timer_past_head[1], (long long)virt_timer_past_head[2]);
++	/* the short waits' stacks: their tasks are named with the sampled ones */
++	struct virt_wait_stack waits[VIRT_WAIT_STACKS];
++	spl_t s = splsched();
++	simple_lock(&virt_wait_lock, LCK_GRP_NULL);
++	memcpy(waits, virt_wait_stacks, sizeof(waits));
++	bzero(virt_wait_stacks, sizeof(waits));
++	uint32_t wait_short = virt_wait_short, wait_lost = virt_wait_lost;
++	virt_wait_short = virt_wait_lost = 0;
++	simple_unlock(&virt_wait_lock);
++	splx(s);
++	char wait_names[VIRT_WAIT_STACKS][20];
++	/* name the sampled tasks still alive ("exited" for the others) */
++	for (unsigned int t = 0; t < VIRT_PC_TASKS; t++) {
++		strlcpy(virt_pc_tasks[t].name, "exited", sizeof(virt_pc_tasks[t].name));
++	}
++	for (unsigned int w = 0; w < VIRT_WAIT_STACKS; w++) {
++		strlcpy(wait_names[w], "exited", sizeof(wait_names[w]));
++	}
++	task_t alive;
++	lck_mtx_lock(&tasks_threads_lock);
++	queue_iterate(&tasks, alive, task_t, tasks) {
++		for (unsigned int t = 0; t < VIRT_PC_TASKS; t++) {
++			if (virt_pc_tasks[t].task == alive) {
++				void *proc = get_bsdtask_info(alive);
++				strlcpy(virt_pc_tasks[t].name, alive == kernel_task || proc == NULL ? "kernel_task" : proc_best_name((struct proc *)proc),
++				    sizeof(virt_pc_tasks[t].name));
++			}
++		}
++		for (unsigned int w = 0; w < VIRT_WAIT_STACKS; w++) {
++			if (waits[w].count != 0 && waits[w].task == alive) {
++				void *proc = get_bsdtask_info(alive);
++				strlcpy(wait_names[w], alive == kernel_task || proc == NULL ? "kernel_task" : proc_best_name((struct proc *)proc),
++				    sizeof(wait_names[w]));
++			}
++		}
++	}
++	lck_mtx_unlock(&tasks_threads_lock);
++	for (unsigned int rank = 0; rank < 15; rank++) {
++		unsigned int best = VIRT_PC_TASKS;
++		for (unsigned int t = 0; t < VIRT_PC_TASKS; t++) {
++			if (virt_pc_tasks[t].task != NULL && virt_pc_tasks[t].kernel + virt_pc_tasks[t].user != 0 &&
++			    (best == VIRT_PC_TASKS || virt_pc_tasks[t].kernel + virt_pc_tasks[t].user > virt_pc_tasks[best].kernel + virt_pc_tasks[best].user)) {
++				best = t;
++			}
++		}
++		if (best == VIRT_PC_TASKS) {
++			break;
++		}
++		printf("pc-sample: task %s kernel %u user %u\n", virt_pc_tasks[best].name, virt_pc_tasks[best].kernel, virt_pc_tasks[best].user);
++		virt_pc_tasks[best].kernel = virt_pc_tasks[best].user = 0;
++	}
++	printf("pc-sample: %u waits armed within 50 us or samples spinning for a ticket lock (%u not binned)\n", wait_short, wait_lost);
++	for (unsigned int rank = 0; rank < 12; rank++) {
++		unsigned int best = VIRT_WAIT_STACKS;
++		for (unsigned int w = 0; w < VIRT_WAIT_STACKS; w++) {
++			if (waits[w].count != 0 && (best == VIRT_WAIT_STACKS || waits[w].count > waits[best].count)) {
++				best = w;
++			}
++		}
++		if (best == VIRT_WAIT_STACKS) {
++			break;
++		}
++		printf("pc-sample: wait %s %u:", wait_names[best], waits[best].count);
++		for (unsigned int f = 0; f < VIRT_WAIT_FRAMES; f++) {
++			printf(" 0x%llx", (unsigned long long)VM_KERNEL_STRIP_PTR(waits[best].frames[f]));
++		}
++		printf("\n");
++		waits[best].count = 0;
++	}
++	for (unsigned int rank = 0; rank < 30; rank++) {
++		unsigned int best = VIRT_PC_SLOTS;
++		for (unsigned int h = 0; h < VIRT_PC_SLOTS; h++) {
++			if (virt_pc_hist[h].count != 0 && (best == VIRT_PC_SLOTS || virt_pc_hist[h].count > virt_pc_hist[best].count)) {
++				best = h;
++			}
++		}
++		if (best == VIRT_PC_SLOTS) {
++			break;
++		}
++		printf("pc-sample: pc 0x%llx %u\n", (unsigned long long)virt_pc_hist[best].pc, virt_pc_hist[best].count);
++		virt_pc_hist[best].count = 0;
++	}
++	/* start again (samples racing with the reset are lost or kept, either is fine for a profile) */
++	bzero(virt_pc_hist, VIRT_PC_SLOTS * sizeof(*virt_pc_hist));
++	for (unsigned int t = 0; t < VIRT_PC_TASKS; t++) {   /* tasks are named again next period: exited ones free their slot */
++		virt_pc_tasks[t].kernel = virt_pc_tasks[t].user = 0;
++		virt_pc_tasks[t].name[0] = '\0';
++		virt_pc_tasks[t].task = NULL;
++	}
++	virt_pc_idle = virt_pc_user = virt_pc_kernel = virt_pc_lost = 0;
++	uint64_t deadline;
++	clock_interval_to_deadline(virt_pc_sample_period, NSEC_PER_SEC, &deadline);
++	thread_call_enter_delayed(virt_pc_call, deadline);
++}
++
++__startup_func
++static void
++virt_pc_sample_init(void)
++{
++	if (virt_pc_sample_period != 0) {
++		uint64_t deadline;
++		virt_pc_hist = kalloc_data(VIRT_PC_SLOTS * sizeof(*virt_pc_hist), Z_WAITOK | Z_ZERO);   /* no Z_NOFAIL: a kmem-sized request */
++		if (virt_pc_hist == NULL) {
++			return;
++		}
++		virt_wait_stacks = kalloc_data(VIRT_WAIT_STACKS * sizeof(*virt_wait_stacks), Z_WAITOK | Z_ZERO);
++		if (virt_wait_stacks == NULL) {
++			return;
++		}
++		nanoseconds_to_absolutetime(50 * NSEC_PER_USEC, &virt_wait_short_abs);
++		if (virt_pc_hz != 0) {
++			unsigned int cpus = (unsigned int)ml_get_max_cpu_number() + 1;
++			virt_pc_timers = kalloc_data(cpus * sizeof(*virt_pc_timers), Z_WAITOK | Z_ZERO);
++			virt_pc_armed = kalloc_data(cpus, Z_WAITOK | Z_ZERO);
++			if (virt_pc_timers == NULL || virt_pc_armed == NULL) {
++				return;
++			}
++			nanoseconds_to_absolutetime(NSEC_PER_SEC / virt_pc_hz, &virt_pc_interval);
++		}
++		thread_call_t call = thread_call_allocate(virt_pc_report, NULL);
++		clock_interval_to_deadline(virt_pc_sample_period, NSEC_PER_SEC, &deadline);
++		thread_call_enter_delayed(call, deadline);
++		virt_pc_call = call;
++	}
++}
++STARTUP(THREAD_CALL, STARTUP_RANK_LAST, virt_pc_sample_init);
+ #endif /* __arm64__ && MACH_BSD */
+ 
+ /*
+diff --git a/osfmk/kern/lock_ticket.c b/osfmk/kern/lock_ticket.c
+index 067f5e3..bf56301 100644
+--- a/osfmk/kern/lock_ticket.c
++++ b/osfmk/kern/lock_ticket.c
+@@ -587,6 +587,14 @@ hw_lck_ticket_contended(
+ 	return HW_LOCK_ACQUIRED;
+ }
+ 
++/* bring-up (boot-arg pc-sample, osfmk/kern/exception.c): samples spinning here are charged to their callers */
++uintptr_t virt_ticket_contended_start(void);
++uintptr_t
++virt_ticket_contended_start(void)
++{
++	return (uintptr_t)&hw_lck_ticket_contended;
++}
++
+ static void __attribute__((noinline))
+ lck_ticket_contended(lck_ticket_t *tlock, uint8_t mt, thread_t cthread
+     LCK_GRP_ARG(lck_grp_t *grp))
+diff --git a/osfmk/kern/waitq.c b/osfmk/kern/waitq.c
+index 6d2831f..c853fbd 100644
+--- a/osfmk/kern/waitq.c
++++ b/osfmk/kern/waitq.c
+@@ -1394,6 +1394,11 @@ waitq_assert_wait64_locked(waitq_t waitq,
+ 
+ 		if (deadline != 0) {
+ 			bool was_active;
++			extern uint64_t virt_wait_short_abs;   /* bring-up (boot-arg pc-sample): who waits with a deadline already past */
++			if (__improbable(virt_wait_short_abs != 0 && deadline < mach_absolute_time() + virt_wait_short_abs)) {
++				extern void virt_note_short_wait(void);
++				virt_note_short_wait();
++			}
+ 
+ 			was_active = timer_call_enter_with_leeway(thread->wait_timer,
+ 			    NULL,

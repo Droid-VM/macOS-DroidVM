@@ -1,9 +1,10 @@
-From eb7f972bbf5c7bcbe16c8df89149d066bb06a59c Mon Sep 17 00:00:00 2001
+From 986dfc4bab90400f96b54b6dd75f7eb5301668f0 Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 09:07:28 -0400
-Subject: [PATCH 06/48] bring-up diagnostics, kalloc empty-view guard, macOS
+Subject: [PATCH 06/40] bring-up diagnostics, kalloc empty-view guard, macOS
  target fixes
 
+(cherry picked from commit eb7f972bbf5c7bcbe16c8df89149d066bb06a59c)
 ---
  osfmk/arm/arm_init.c                   | 13 +++++++++++++
  osfmk/arm/pmap/pmap.c                  |  4 +++-

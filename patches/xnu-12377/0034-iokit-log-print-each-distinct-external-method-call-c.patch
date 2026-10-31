@@ -1,0 +1,47 @@
+From c29de4780b2f67deacad375a16166fbff61f04c2 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 05:29:42 -0400
+Subject: [PATCH 34/40] iokit-log: print each distinct external method call
+ (class, selector, result) of the named processes once
+
+(cherry picked from commit 97f9ce032f5311fb58451a200489bd3c2fe875cd)
+---
+ iokit/Kernel/IOUserClient.cpp | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/iokit/Kernel/IOUserClient.cpp b/iokit/Kernel/IOUserClient.cpp
+index 5e2ef5c..e92c3a1 100644
+--- a/iokit/Kernel/IOUserClient.cpp
++++ b/iokit/Kernel/IOUserClient.cpp
+@@ -5334,6 +5334,31 @@ is_io_connect_method
+ 	if (kIOReturnSuccess == ret) {
+ 		ret = client->callExternalMethod( selector, &args );
+ 	}
++#ifdef BCM2837
++	/* iokit-log: each distinct (class, selector, result) of the named processes' external method calls, once */
++	if (virt_iokit_log_enabled()) {
++		static struct { const OSMetaClass *meta; uint32_t selector; IOReturn ret; } seen[256];
++		static uint32_t seen_count;
++		const OSMetaClass *meta = client->getMetaClass();
++		bool known = false;
++		for (uint32_t i = 0; i < seen_count && i < 256; i++) {
++			if (seen[i].meta == meta && seen[i].selector == selector && seen[i].ret == ret) {
++				known = true;
++				break;
++			}
++		}
++		if (!known && seen_count < 256) {
++			seen[seen_count].meta = meta;
++			seen[seen_count].selector = selector;
++			seen[seen_count].ret = ret;
++			seen_count++;
++			char comm[MAXCOMLEN + 1];
++			proc_selfname(comm, sizeof(comm));
++			printf("iokit: %s call %s %u (in %u/%u out %u/%u) -> 0x%x\n", comm, meta->getClassName(), selector,
++			    scalar_inputCnt, inband_inputCnt, *scalar_outputCnt, *inband_outputCnt, ret);
++		}
++	}
++#endif
+ 
+ 	*scalar_outputCnt = args.scalarOutputCount;
+ 	*inband_outputCnt = args.structureOutputSize;

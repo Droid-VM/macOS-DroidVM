@@ -1,8 +1,9 @@
-From 3cae342edf5bf6504b4b911afe6d44c6971ea908 Mon Sep 17 00:00:00 2001
+From 2e6b9dd786bf9f32e115cbb9698812dcb1e260d3 Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 08:04:54 -0400
-Subject: [PATCH 05/48] dedupe BCM2837 machine flags
+Subject: [PATCH 05/40] dedupe BCM2837 machine flags
 
+(cherry picked from commit 3cae342edf5bf6504b4b911afe6d44c6971ea908)
 ---
  makedefs/MakeInc.def | 1 -
  1 file changed, 1 deletion(-)

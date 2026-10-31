@@ -1,8 +1,9 @@
-From ad4b23eda10a734db9796d31943954488be749fb Mon Sep 17 00:00:00 2001
+From 496c5d2b4394fdd7d64f04e6d75d3532107719af Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 07:58:07 -0400
-Subject: [PATCH 02/48] merge: our port diff on top of their 21 patches
+Subject: [PATCH 02/40] merge: our port diff on top of their 21 patches
 
+(cherry picked from commit ad4b23eda10a734db9796d31943954488be749fb)
 ---
  .../CoreEntitlements/CoreEntitlements.h       |   5 +
  EXTERNAL_HEADERS/CoreEntitlements/V2/API.h    |  51 +++

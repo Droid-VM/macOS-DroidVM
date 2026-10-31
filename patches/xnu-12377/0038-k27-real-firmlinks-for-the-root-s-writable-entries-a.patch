@@ -1,0 +1,207 @@
+From bf1212bb40450a40a9ebb70a069881785bf1a89e Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 11:50:11 -0400
+Subject: [PATCH 38/40] k27: real firmlinks for the root's writable entries and
+ no MNT_UNION on the root for kexts
+
+CONFIG_FIRMLINKS on; after the Data mount native_owner_firmlinks_prepare (k27-firmlinks, default on) sets /Applications, /Library,
+/Users, /Volumes, /cores, /opt, /usr/local, /System/Library/Caches, /System/Volumes/Hardware, /private/etc and /private/tmp (empty
+directories of the SystemOS volume now) as firmlinks into the Data volume; lookup follows a firmlink source the filesystem returns
+and '..' of a target goes to the source's parent, as cache_lookup_path does. Sandbox's root-entry metadata denials go and the
+Sandbox Data-prefix string patch is no longer needed.
+
+vfs_flags hides MNT_UNION on the mount over the root volume's root (k27-root-union-visible=1 shows it): Sandbox evaluates
+file-attribute union-mounted-filesystem with it and mds.sb denies file-read* there, so mds aborted on SystemVersion.plist every few
+seconds. kern_exec.c's own check reads mnt_flag.
+
+(cherry picked from commit b84cfb2a621c1af02c81c97d7f6509f10ddfb7c1)
+---
+ bsd/kern/kern_exec.c        | 50 ++++++++++++++++++++++++++++++++++++-
+ bsd/vfs/kpi_vfs.c           | 19 +++++++++++++-
+ bsd/vfs/vfs_lookup.c        | 36 ++++++++++++++++++++++++++
+ config/MASTER.arm64.bcm2837 |  2 +-
+ 4 files changed, 104 insertions(+), 3 deletions(-)
+
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index c85e3b8..94f8435 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -8171,7 +8171,7 @@ native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
+ 	native_owner_cache_readonly = readonly;
+ 	native_owner_cache_actual_mount_flags = vfs_flags(cache_mount);
+ 	native_owner_cache_current_root = (uintptr_t)rootvnode;
+-	int native_union = (vfs_flags(cache_mount) & MNT_UNION) &&
++	int native_union = (cache_mount->mnt_flag & MNT_UNION) &&   /* vfs_flags hides it on this mount (kpi_vfs.c) */
+ 	    vnode_mountedhere(original_os_root) == cache_mount && rootvnode == mounted_root;
+ 	native_owner_cache_native_union = native_union;
+ 	cache_authorized = readonly && actual == selected &&
+@@ -8335,6 +8335,53 @@ native_staged_apps_prepare(proc_t p, user_addr_t scratch)
+ 	    "/Applications/Weather.app/Info.plist", &native_staged_apps_stage, &native_staged_apps_status);
+ }
+ 
++/* k27 (k27-firmlinks, default on): macOS's writable root entries are firmlinks of the System volume into the Data volume; here the
++ * SystemOS volume (scripts/make-macos-systemos.sh) has empty directories for them and the Data volume at /private/var keeps them under
++ * .data. Set as firmlinks after the Data mount: a lookup goes on in the target (vfs_lookup.c), a path reads back with the source's,
++ * and the entries stay directories (macOS 27's Sandbox profiles allow the ancestors of their paths as directories). A source that is
++ * no directory (an older SystemOS disk with symbolic links) is left alone. native_owner_firmlinks has a bit per entry set. */
++static TUNABLE(bool, k27_firmlinks, "k27-firmlinks", true);
++volatile uint32_t native_owner_firmlinks = 0;
++static void
++native_owner_firmlinks_prepare(void)
++{
++	static const char *const links[][2] = {
++		{"/Applications", "/private/var/.data/Applications"},
++		{"/Library", "/private/var/.data/Library"},
++		{"/Users", "/private/var/.data/Users"},
++		{"/Volumes", "/private/var/.data/Volumes"},
++		{"/cores", "/private/var/.data/cores"},
++		{"/opt", "/private/var/.data/opt"},
++		{"/usr/local", "/private/var/.data/usr/local"},
++		{"/System/Library/Caches", "/private/var/.data/System/Library/Caches"},
++		{"/System/Volumes/Hardware", "/private/var/.data/System/Volumes/Hardware"},
++		{"/private/etc", "/private/var/.data/private/etc"},
++		{"/private/tmp", "/private/var/tmp"},
++	};
++	if (!k27_firmlinks) {
++		return;
++	}
++	for (unsigned i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
++		vnode_t source = NULLVP, target = NULLVP;
++		int error = vnode_lookup(links[i][0], 0, &source, vfs_context_current());
++		if (!error) {
++			error = vnode_vtype(source) == VDIR ? vnode_lookup(links[i][1], 0, &target, vfs_context_current()) : ENOTDIR;
++		}
++		if (!error) {
++			error = vnode_vtype(target) == VDIR && vnode_mount(target) != vnode_mount(source) ? 0 : ENOTDIR;
++		}
++		if (!error) {
++			error = vnode_setasfirmlink(source, target);
++		}
++		if (!error) {
++			native_owner_firmlinks |= 1u << i;
++		}
++		printf("k27: firmlink %s -> %s: %d\n", links[i][0], links[i][1], error);
++		if (target) vnode_put(target);
++		if (source) vnode_put(source);
++	}
++}
++
+ static int
+ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ {
+@@ -8395,6 +8442,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ 	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
++	if (!error) native_owner_firmlinks_prepare();
+ 	if (!error) native_gpu_addon_prepare(p, scratch);
+ done:
+ 	if (data_root) vnode_put(data_root);
+diff --git a/bsd/vfs/kpi_vfs.c b/bsd/vfs/kpi_vfs.c
+index b4a5832..955a974 100644
+--- a/bsd/vfs/kpi_vfs.c
++++ b/bsd/vfs/kpi_vfs.c
+@@ -92,6 +92,7 @@
+ #include <sys/buf.h>
+ #include <sys/errno.h>
+ #include <kern/kalloc.h>
++#include <kern/startup.h>
+ #include <sys/domain.h>
+ #include <sys/mbuf.h>
+ #include <sys/syslog.h>
+@@ -468,11 +469,27 @@ vfs_mount_id(mount_t mp)
+ 	return mp->mnt_mount_id;
+ }
+ 
++static TUNABLE(bool, k27_root_union_visible, "k27-root-union-visible", false);
++
+ /* returns command modifier flags of mount_t ie. MNT_CMDFLAGS */
+ uint64_t
+ vfs_flags(mount_t mp)
+ {
+-	return (uint64_t)(mp->mnt_flag & (MNT_CMDFLAGS | MNT_VISFLAGMASK));
++	uint64_t flags = mp->mnt_flag & (MNT_CMDFLAGS | MNT_VISFLAGMASK);
++	vnode_t covered = mp->mnt_vnodecovered;
++
++	/*
++	 * k27 (k27-root-union-visible=0, the default): the owner chain's SystemOS volume is union-mounted over the root volume's root and
++	 * stands in for the root volume, which on macOS is never a union. Kexts do not see MNT_UNION on it: macOS 27's Sandbox evaluates
++	 * (file-attribute union-mounted-filesystem) with vfs_flags, and mds.sb ends with (deny file-read* (file-attribute
++	 * union-mounted-filesystem)), so mds could read nothing of the root (SystemVersion.plist: abort, a crash every few seconds).
++	 * The kernel's own code reads mnt_flag.
++	 */
++	if (!k27_root_union_visible && (flags & MNT_UNION) && covered != NULLVP && (covered->v_flag & VROOT) &&
++	    covered->v_mount != NULL && (covered->v_mount->mnt_flag & MNT_ROOTFS)) {
++		flags &= ~(uint64_t)MNT_UNION;
++	}
++	return flags;
+ }
+ 
+ /* set any of the command modifier flags(MNT_CMDFLAGS) in mount_t */
+diff --git a/bsd/vfs/vfs_lookup.c b/bsd/vfs/vfs_lookup.c
+index a83e6b9..da50e08 100644
+--- a/bsd/vfs/vfs_lookup.c
++++ b/bsd/vfs/vfs_lookup.c
+@@ -1156,6 +1156,24 @@ lookup_handle_found_vnode(struct nameidata *ndp, struct componentname *cnp, int
+ 		lookup_consider_update_cache(ndp->ni_dvp, dp, cnp, nc_generation);
+ 	}
+ 
++#if CONFIG_FIRMLINKS
++	/*
++	 * A firmlink source found by the filesystem (a name cache hit has already switched): on macOS APFS returns the target,
++	 * here (k27, kern_exec.c native_owner_firmlinks: the SystemOS volume's /Library, /Users, ... into the Data volume) the
++	 * source is a plain directory of the read-only union root, so switch to the target as cache_lookup_path does. Not for
++	 * the last component of a delete or rename, which works on the name in its directory.
++	 */
++	if (dp->v_fmlink && dp->v_type == VDIR && !(cnp->cn_flags & CN_FIRMLINK_NOFOLLOW) &&
++	    !((cnp->cn_flags & ISLASTCN) && (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME))) {
++		vnode_t target = NULLVP;
++		if (vnode_getfirmlink(dp, &target) == 0) {
++			vnode_put(dp);
++			dp = ndp->ni_vp = target;
++			ndp->ni_flag |= NAMEI_FIRMLINK_FOLLOWED;
++		}
++	}
++#endif /* CONFIG_FIRMLINKS */
++
+ 	/*
+ 	 * Check to see if the vnode has been mounted on...
+ 	 * if so find the root of the mounted file system.
+@@ -1577,6 +1595,24 @@ dirloop:
+ 			}
+ 		}
+ 
++#if CONFIG_FIRMLINKS
++		/* ".." of a firmlink target is the source's parent (cache_lookup_path does the same on a name cache hit). */
++		if ((dp->v_flag & VFMLINKTARGET) && dp->v_fmlink && !(cnp->cn_flags & CN_FIRMLINK_NOFOLLOW)) {
++			tdp = dp;
++			dp = tdp->v_fmlink;
++			if (vnode_getwithref(dp)) {
++				vnode_put(tdp);
++				dp = NULLVP;
++				error = ENOENT;
++				goto bad;
++			}
++			vnode_put(tdp);
++			ndp->ni_dvp = dp;
++			dp_authorized = 0;
++			ndp->ni_flag |= NAMEI_FIRMLINK_FOLLOWED;
++		}
++#endif /* CONFIG_FIRMLINKS */
++
+ 		for (;;) {
+ 			if (dp == ndp->ni_rootdir || dp == rootvnode) {
+ 				ndp->ni_dvp = dp;
+diff --git a/config/MASTER.arm64.bcm2837 b/config/MASTER.arm64.bcm2837
+index a10a62b..d19205f 100644
+--- a/config/MASTER.arm64.bcm2837
++++ b/config/MASTER.arm64.bcm2837
+@@ -33,7 +33,7 @@
+ #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel config_imgsrc_access ]
+ #  BSD_DEV =        [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEV ]
+ #  BSD_DEBUG =      [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEBUG ]
+-#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver]
++#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver config_firmlinks ]
+ #  FILESYS_RELEASE= [ FILESYS_BASE ]
+ #  FILESYS_DEV =    [ FILESYS_BASE fdesc config_union_mounts ]
+ #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc config_union_mounts ]

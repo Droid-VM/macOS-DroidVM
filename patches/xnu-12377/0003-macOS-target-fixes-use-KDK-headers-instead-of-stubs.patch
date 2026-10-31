@@ -1,8 +1,9 @@
-From 5cff9b00dad33a275b66af2fa7cc59c25e593d12 Mon Sep 17 00:00:00 2001
+From b70c46a846db6ee4d44c59913c88334ddfa1b28d Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 08:01:11 -0400
-Subject: [PATCH 03/48] macOS target fixes; use KDK headers instead of stubs
+Subject: [PATCH 03/40] macOS target fixes; use KDK headers instead of stubs
 
+(cherry picked from commit 5cff9b00dad33a275b66af2fa7cc59c25e593d12)
 ---
  EXTERNAL_HEADERS/CoreEntitlements/V2/API.h    |  51 ---
  EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h |   1 -

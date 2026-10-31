@@ -1,0 +1,71 @@
+From b64b79b55aac734cc1d419299c09b9d122eb0016 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 07:50:55 -0400
+Subject: [PATCH 35/40] k27-deny-exec: exec of the listed paths fails with
+ EPERM (default /usr/libexec/mobileactivationd, which launchd starts despite a
+ disabled.plist and which crash-looped)
+
+(cherry picked from commit 096dc5c530fb33f0e8311dfa0b25f98d62e6142c)
+---
+ bsd/kern/kern_exec.c | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 28d6eaa..c85e3b8 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -7473,6 +7473,42 @@ bad:
+  *	vnode_getattr:???
+  *	vnode_authorize:???
+  */
++#if defined(BCM2837)
++/*
++ * k27 (boot-arg k27-deny-exec=PATH[,PATH...], default /usr/libexec/mobileactivationd): daemons that cannot run on this board and that
++ * launchd does not keep from starting (a seed's disabled.plist is not honoured for every job). mobileactivationd needs the device
++ * identity it validates in dealwith_activation ("Failed to validate OIC", "Invalid UIK/UCRT") and crashed every 15 s, each time with a
++ * ReportCrash. EPERM from exec: launchd's spawn fails, the job's clients get an error from the lookup instead.
++ */
++static TUNABLE_STR(k27_deny_exec, 256, "k27-deny-exec", "/usr/libexec/mobileactivationd");
++
++static bool
++k27_exec_denied(struct vnode *vp)
++{
++	if (k27_deny_exec[0] == '\0') {
++		return false;
++	}
++	char *path = zalloc(ZV_NAMEI);
++	int len = MAXPATHLEN;
++	bool denied = false;
++	if (vn_getpath(vp, path, &len) == 0) {
++		for (const char *n = k27_deny_exec; *n;) {
++			size_t l = 0;
++			while (n[l] && n[l] != ',') {
++				l++;
++			}
++			if (l && strlen(path) == l && strncmp(path, n, l) == 0) {
++				denied = true;
++				break;
++			}
++			n += l + (n[l] == ',');
++		}
++	}
++	zfree(ZV_NAMEI, path);
++	return denied;
++}
++#endif
++
+ static int
+ exec_check_permissions(struct image_params *imgp)
+ {
+@@ -7486,6 +7522,11 @@ exec_check_permissions(struct image_params *imgp)
+ 	if (!vnode_isreg(vp)) {
+ 		return EACCES;
+ 	}
++#if defined(BCM2837)
++	if (k27_exec_denied(vp)) {
++		return EPERM;
++	}
++#endif
+ 
+ 	/* Get the file attributes that we will be using here and elsewhere */
+ 	VATTR_INIT(vap);

@@ -1,0 +1,141 @@
+From fd136eaee48b06e6f28a19a3b3d688347e46e4ab Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 01:47:48 -0400
+Subject: [PATCH 25/40] k27 base: snapshot of xnu-m's uncommitted work
+ (2026-10-30)
+
+---
+ bsd/conf/files       |  2 +-
+ bsd/kern/kern_exec.c | 29 +++++++++++++++++++++--------
+ bsd/vfs/vfs_lookup.c | 20 +++++++++++++++++++-
+ security/mac_base.c  |  6 ++++++
+ 4 files changed, 47 insertions(+), 10 deletions(-)
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 60d8aa6..4202ae9 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -126,7 +126,7 @@ bsd/vfs/vfs_fslog.c			standard
+ bsd/vfs/vfs_init.c			standard
+ bsd/vfs/vfs_io_compression_stats.c	optional config_io_compression_stats
+ bsd/vfs/vfs_lookup.c			standard
+-bsd/vfs/vfs_quota.c			optional quota
++bsd/vfs/vfs_quota.c			standard
+ bsd/vfs/vfs_subr.c			standard
+ bsd/vfs/vfs_syscalls.c			standard
+ bsd/vfs/vfs_support.c			standard
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index af28273..28d6eaa 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -6922,9 +6922,10 @@ exec_extract_strings(struct image_params *imgp)
+ 	}
+ 
+ 	/*
+-	 * UniXNU virt boards: exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each VAR=VALUE to the
++	 * UniXNU virt boards: exec-env=NAME:VAR=VALUE[,VAR=VALUE...][;NAME:...] appends each VAR=VALUE to the
+ 	 * environment of every executable whose file name is NAME (an A/B test's variable for one
+-	 * system daemon, whose launchd job lives on the read-only system volume).
++	 * system daemon, whose launchd job lives on the read-only system volume; WebKit's WebContent
++	 * needs GIGACAGE_ENABLED=no, its 64 GiB cage does not fit the 39-bit user space).
+ 	 */
+ 	{
+ 		static char exec_env[256];
+@@ -6932,15 +6933,26 @@ exec_extract_strings(struct image_params *imgp)
+ 		if (exec_env_state == 0) {
+ 			exec_env_state = PE_parse_boot_arg_str("exec-env", exec_env, sizeof(exec_env)) ? 2 : 1;
+ 		}
+-		const char *colon = exec_env_state == 2 ? strchr(exec_env, ':') : NULL;
+ 		const char *path = imgp->ip_strings + strlen(EXECUTABLE_KEY);
+ 		const char *base = strrchr(path, '/');
+ 		base = base ? base + 1 : path;
+-		if (colon && strlen(base) == (size_t)(colon - exec_env) &&
+-		    strncmp(base, exec_env, colon - exec_env) == 0) {
+-			for (const char *item = colon + 1; *item != '\0';) {
++		for (const char *group = exec_env_state == 2 ? exec_env : ""; *group != '\0';) {
++			const char *group_end = strchr(group, ';');
++			if (group_end == NULL) {
++				group_end = group + strlen(group);
++			}
++			const char *colon = strchr(group, ':');
++			if (colon == NULL || colon > group_end || strlen(base) != (size_t)(colon - group) ||
++			    strncmp(base, group, colon - group) != 0) {
++				group = group_end + (*group_end == ';');
++				continue;
++			}
++			for (const char *item = colon + 1; item < group_end;) {
+ 				const char *end = strchr(item, ',');
+-				size_t len = end ? (size_t)(end - item) : strlen(item);
++				if (end == NULL || end > group_end) {
++					end = group_end;
++				}
++				size_t len = (size_t)(end - item);
+ 				char assignment[128];
+ 				if (len > 0 && len < sizeof(assignment)) {
+ 					memcpy(assignment, item, len);
+@@ -6956,8 +6968,9 @@ exec_extract_strings(struct image_params *imgp)
+ 					imgp->ip_argspace -= new_ptr_size;
+ 					imgp->ip_envc++;
+ 				}
+-				item += len + (end ? 1 : 0);
++				item = end + 1;
+ 			}
++			group = group_end + (*group_end == ';');
+ 		}
+ 	}
+ 
+diff --git a/bsd/vfs/vfs_lookup.c b/bsd/vfs/vfs_lookup.c
+index fc7e7e5..a83e6b9 100644
+--- a/bsd/vfs/vfs_lookup.c
++++ b/bsd/vfs/vfs_lookup.c
+@@ -1899,7 +1899,25 @@ lookup_traverse_union(vnode_t dvp, vnode_t *new_dvp, vfs_context_t ctx)
+ 	NDINIT(&nd, LOOKUP, OP_LOOKUP, USEDVP, UIO_SYSSPACE, CAST_USER_ADDR_T(pp), ctx);
+ 	nd.ni_dvp = dvp->v_mount->mnt_vnodecovered;
+ 	error = namei(&nd);
+-	if (error == 0) {
++	if (error == 0 && nd.ni_vp->v_mount == dvp->v_mount) {
++		/*
++		 * The path in the covered mount led back into this one (the owner chain's SystemOS volume over the OS volume at "/":
++		 * the OS volume's /System/Cryptexes/App links to /System/Volumes/Preboot/Cryptexes/App, which only the SystemOS volume
++		 * has), so there is no underlying directory: a readdir that went on with this vnode would read the same directory again
++		 * from offset 0 forever (Safari's CFBundle scan of its own bundle never returned), as a lookup would retry it.
++		 */
++		vnode_put(nd.ni_vp);
++		error = ENOENT;
++	} else if (error == 0 && nd.ni_vp->v_type != VDIR) {
++		/*
++		 * The covered mount has no directory there, only a symbolic link: the OS volume's
++		 * /System/Library/PrivateFrameworks/Safari.framework links to /System/Cryptexes/OS/..., a directory of the SystemOS
++		 * volume. getdirentries64 then failed with EINVAL after the upper entries, so CFBundle could not create the bundle
++		 * (bundleWithIdentifier: nil, Safari crashed at launch) and lookups below it failed with ENOTDIR.
++		 */
++		vnode_put(nd.ni_vp);
++		error = ENOENT;
++	} else if (error == 0) {
+ 		*new_dvp = nd.ni_vp;
+ 	}
+ 	nameidone(&nd);
+diff --git a/security/mac_base.c b/security/mac_base.c
+index 6dc2004..738358a 100644
+--- a/security/mac_base.c
++++ b/security/mac_base.c
+@@ -96,6 +96,9 @@
+ #include <kern/kalloc.h>
+ #include <kern/sched_prim.h>
+ #include <kern/task.h>
++#include <mach/mach_vm.h>
++#include <vm/vm_kern_xnu.h>
++#include <vm/vm_map_xnu.h>
+ 
+ #if CONFIG_MACF
+ #include <security/mac.h>
+@@ -1614,6 +1617,9 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ 	}
+ 
+ done:
++	if (virt_allow_all) {
++		mach_vm_deallocate(current_map(), virt_allow_all, PAGE_SIZE);
++	}
+ 	/*
+ 	 * Bring-up (mac-sandbox-permissive=1): a macOS daemon names its own profile in sandbox_init(); the iPadOS Sandbox kext does not
+ 	 * know it: call 22 (profile lookup) answers ENOENT and the follow-up call 1 (apply) EINVAL, after which the daemon aborts. Report

@@ -1,10 +1,11 @@
-From 7c7f30d256944c87cb0347763c306e4bfe68b91a Mon Sep 17 00:00:00 2001
+From 7af10eadab11c33e33d02cce835a4c52b3f6de34 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 08/48] owner chain: scratch page before the mounts, default
+Subject: [PATCH 08/40] owner chain: scratch page before the mounts, default
  Data volume UUID, Data seed lookup through the verified block device,
  rootauth=0 boot-arg
 
+(cherry picked from commit 7c7f30d256944c87cb0347763c306e4bfe68b91a)
 ---
  bsd/kern/bsd_init.c           |  9 +++++++
  bsd/kern/kern_exec.c          |  8 +++---

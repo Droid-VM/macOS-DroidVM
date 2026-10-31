@@ -1,9 +1,10 @@
-From 799147af3e189e3e68ed33e78a75f195c8a01b4e Mon Sep 17 00:00:00 2001
+From 0f23b79bcaad739d21da746d735b66345a3ef3e9 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 11/48] no kqworkloop limits (launchd sets 3/10, daemons need
+Subject: [PATCH 11/40] no kqworkloop limits (launchd sets 3/10, daemons need
  more)
 
+(cherry picked from commit 799147af3e189e3e68ed33e78a75f195c8a01b4e)
 ---
  bsd/kern/kern_proc.c | 8 ++++++++
  1 file changed, 8 insertions(+)
