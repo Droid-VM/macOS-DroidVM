@@ -1,7 +1,7 @@
 From b5302f936b70573ae63d82e5542586bac324a18f Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 03:04:15 -0400
-Subject: [PATCH 7/9] native_pmap_user_mappings: user mappings of a managed
+Subject: [PATCH 13/48] native_pmap_user_mappings: user mappings of a managed
  page (UniXNU zzx-pmap-user-mappings, for DroidVMGpu's BO release)
 
 ---
@@ -93,6 +93,3 @@ index 29a55d9..79d0bc1 100644
 +	pvh_unlock(pai);
 +	return count;
 +}
--- 
-2.53.0
-

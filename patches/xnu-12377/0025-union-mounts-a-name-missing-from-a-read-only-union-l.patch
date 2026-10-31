@@ -1,11 +1,11 @@
 From a360f135be6d44c9dd93b958ae291a0bafb2b4cd Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Wed, 28 Oct 2026 15:12:25 -0400
-Subject: [PATCH] union mounts: a name missing from a read-only union layer is
- looked up in the covered layer for a create too (the layer's lookup answered
- EJUSTRETURN: it would let the name be created but cannot). With the owner
- chain's SystemOS volume over the OS volume at /, mkdir("/dev") failed with
- EROFS instead of EEXIST, so xpcproxy's mkpath_np of kernelmanagerd's
+Subject: [PATCH 25/48] union mounts: a name missing from a read-only union
+ layer is looked up in the covered layer for a create too (the layer's lookup
+ answered EJUSTRETURN: it would let the name be created but cannot). With the
+ owner chain's SystemOS volume over the OS volume at /, mkdir("/dev") failed
+ with EROFS instead of EEXIST, so xpcproxy's mkpath_np of kernelmanagerd's
  StandardErrorPath directory (/dev/console) failed and kernelmanagerd never
  ran; iconservicesagent's volume icons ask it for the kext bundle
  (KextManagerCreateURLForBundleIdentifier) and waited forever, and with them
@@ -36,6 +36,3 @@ index 66db98b..fc7e7e5 100644
  		    (dp->v_mount != NULL) &&
  		    (dp->v_mount->mnt_flag & MNT_UNION) &&
  		    !(ndp->ni_flag & NAMEI_NOUNION)) {
--- 
-2.53.0
-

@@ -1,0 +1,472 @@
+From eb7f972bbf5c7bcbe16c8df89149d066bb06a59c Mon Sep 17 00:00:00 2001
+From: t <t@t>
+Date: Fri, 23 Oct 2026 09:07:28 -0400
+Subject: [PATCH 06/48] bring-up diagnostics, kalloc empty-view guard, macOS
+ target fixes
+
+---
+ osfmk/arm/arm_init.c                   | 13 +++++++++++++
+ osfmk/arm/pmap/pmap.c                  |  4 +++-
+ osfmk/arm64/arm_vm_init.c              | 19 +++++++++++++++++++
+ osfmk/kern/kalloc.c                    | 13 +++++++++++++
+ osfmk/kern/link_compat.c               |  3 +++
+ osfmk/kern/startup.c                   |  6 ++----
+ osfmk/prng/prng_random.c               |  5 +++++
+ osfmk/vm/vm_compressor_backing_store.c |  2 +-
+ osfmk/vm/vm_kern.c                     | 16 ++++++++++++++++
+ 9 files changed, 75 insertions(+), 6 deletions(-)
+
+diff --git a/osfmk/arm/arm_init.c b/osfmk/arm/arm_init.c
+index 72d3561..bee138e 100644
+--- a/osfmk/arm/arm_init.c
++++ b/osfmk/arm/arm_init.c
+@@ -30,6 +30,7 @@
+  * @OSF_COPYRIGHT@
+  */
+ 
++extern volatile unsigned long long port_crumb; /* port bring-up breadcrumb, read from the host (link_compat.c) */
+ #include <debug.h>
+ #include <mach_ldebug.h>
+ #include <mach_kdp.h>
+@@ -582,8 +583,10 @@ arm_init(
+ 	pmap_first_pnum = (ppnum_t)atop(gDramBase);
+ 
+ 	boot_progress_stage("arm_vm_init enter");
++	port_crumb = 1;
+ 	arm_vm_init(xmaxmem, args);
+ 	boot_progress_stage("arm_vm_init returned");
++	port_crumb = 2;
+ 
+ 	if (debug_boot_arg) {
+ 		patch_low_glo();
+@@ -594,9 +597,11 @@ arm_init(
+ #endif
+ 
+ 	PE_consistent_debug_inherit();
++	port_crumb = 4;
+ 
+ 	/* Setup debugging output. */
+ 	const unsigned int serial_exists = serial_init();
++	port_crumb = 5;
+ 	kernel_startup_initialize_upto(STARTUP_SUB_KPRINTF);
+ 	kprintf("kprintf initialized\n");
+ 
+@@ -639,9 +644,11 @@ arm_init(
+ 		disableConsoleOutput = FALSE;     /* Allow printfs to happen */
+ 	}
+ 	PE_create_console();
++	port_crumb = 6;
+ 
+ 	/* setup console output */
+ 	PE_init_printf(FALSE);
++	port_crumb = 7;
+ 
+ #if __arm64__
+ #if DEBUG
+@@ -650,8 +657,10 @@ arm_init(
+ #endif
+ 
+ 	cpu_machine_idle_init(TRUE);
++	port_crumb = 8;
+ 
+ 	PE_init_platform(TRUE, &BootCpuData);
++	port_crumb = 9;
+ 
+ 	/* Initialize the debug infrastructure system-wide and on the local core. */
+ 	pe_arm_debug_init_early(&BootCpuData);
+@@ -663,6 +672,7 @@ arm_init(
+ 	}
+ 
+ 	ml_map_cpu_pio();
++	port_crumb = 10;
+ 
+ #if APPLE_ARM64_ARCH_FAMILY
+ 	configure_late_apple_regs(true);
+@@ -671,6 +681,7 @@ arm_init(
+ #endif
+ 
+ 	cpu_timebase_init(TRUE);
++	port_crumb = 11;
+ 
+ #if KPERF
+ 	/* kptimer_curcpu_up() must be called after cpu_timebase_init */
+@@ -678,6 +689,7 @@ arm_init(
+ #endif /* KPERF */
+ 
+ 	PE_init_cpu();
++	port_crumb = 12;
+ #if __arm64__
+ 	apt_msg_init();
+ 	apt_msg_init_cpu();
+@@ -701,6 +713,7 @@ arm_init(
+ 	 * against string vulnerabilities
+ 	 */
+ 	__stack_chk_guard &= ~(0xFFULL << 8);
++	port_crumb = 13;
+ 	machine_startup(args);
+ }
+ 
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 73d5792..97607b3 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -2810,7 +2810,9 @@ pmap_init(
+ 	 *	(can be overruled by permanent transltion
+ 	 *	table entries at page zero - see arm_vm_init).
+ 	 */
++	kprintf("port: pmap_init vm_protect\n");
+ 	vm_protect(kernel_map, 0, PAGE_SIZE, TRUE, VM_PROT_NONE);
++	kprintf("port: pmap_init vm_protect done\n");
+ 
+ 	pmap_initialized = TRUE;
+ 
+@@ -2820,7 +2822,7 @@ pmap_init(
+ 	 */
+ 	pmap_zone = zone_create_ext("pmap", sizeof(struct pmap),
+ 	    ZC_ZFREE_CLEARMEM, ZONE_ID_PMAP, NULL);
+-
++	kprintf("port: pmap_zone done\n");
+ 
+ 	/*
+ 	 *	Initialize the pmap object (for tracking the vm_page_t
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index 0ac4b57..e41237f 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++extern volatile unsigned long long port_crumb; /* port bring-up breadcrumb (link_compat.c) */
+ #include <mach_kdp.h>
+ #include <debug.h>
+ 
+@@ -1823,6 +1824,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	/*
+ 	 * Get the virtual and physical kernel-managed memory base from boot_args.
+ 	 */
++	port_crumb = 30;
+ 	gVirtBase = args->virtBase;
+ 	gPhysBase = args->physBase;
+ #if KASAN
+@@ -1862,8 +1864,10 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ #endif
+ 
+ 	// Slide the physical aperture to a random page-aligned location within the slide range
++	port_crumb = 50;
+ 	uint64_t physmap_slide = early_random() & ARM64_PHYSMAP_SLIDE_MASK & ~((uint64_t)PAGE_MASK);
+ 	assert(physmap_slide < ARM64_PHYSMAP_SLIDE_RANGE);
++	port_crumb = 51;
+ 
+ 	physmap_base += physmap_slide;
+ 
+@@ -1914,6 +1918,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 
+ 	boot_tte = (tt_entry_t *)&bootstrap_pagetables;
+ 	boot_ttep = kvtophys((vm_offset_t)boot_tte);
++	port_crumb = 52;
+ 
+ #if DEVELOPMENT || DEBUG
+ 	/* Sanity check - assert that BOOTSTRAP_TABLE_SIZE is sufficiently-large to
+@@ -1942,11 +1947,13 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 
+ #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) || defined(KERNEL_INTEGRITY_PV_CTRR)
+ 	arm_replace_identity_map();
++	port_crumb = 31;
+ #endif
+ 
+ 	/* Initialize invalid tte page */
+ 	invalid_tte = (tt_entry_t *)alloc_ptpage(TRUE);
+ 	invalid_ttep = kvtophys((vm_offset_t)invalid_tte);
++	port_crumb = 53;
+ 	bzero(invalid_tte, ARM_PGBYTES);
+ 
+ 	/*
+@@ -1972,6 +1979,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	 *   the so called physical aperture should be statically mapped
+ 	 */
+ 	init_ptpages(cpu_tte, gVirtBase, dynamic_memory_begin, TRUE, ARM_TTE_TABLE_AP(ARM_TTE_TABLE_AP_USER_NA));
++	port_crumb = 32;
+ 
+ #if defined(ARM_LARGE_MEMORY)
+ 	/*
+@@ -1980,12 +1988,14 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	 *   the rest of the kernel virtual address space
+ 	 */
+ 	init_ptpages(cpu_tte, physmap_base, ROUND_L1(physmap_end), TRUE, ARM_DYNAMIC_TABLE_XN | ARM_TTE_TABLE_AP(ARM_TTE_TABLE_AP_USER_NA));
++	port_crumb = 33;
+ #endif
+ 
+ 
+ #if __ARM_KERNEL_PROTECT__
+ 	/* Expand the page tables to prepare for the EL0 mappings. */
+ 	arm_vm_expand_kernel_el0_mappings();
++	port_crumb = 34;
+ #endif /* __ARM_KERNEL_PROTECT__ */
+ 
+ 	/*
+@@ -2088,6 +2098,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	end_kern = round_page(segHIGHESTKC ? segHIGHESTKC : getlastkerneladdr()); /* Force end to next page */
+ 
+ 	vm_set_page_size();
++	port_crumb = 35;
+ 
+ 	vm_kernel_base = segTEXTB;
+ 	vm_kernel_top = (vm_offset_t) &last_kernel_symbol;
+@@ -2122,6 +2133,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	vm_prelink_edata = segPRELINKDATAB + segSizePRELINKDATA;
+ 
+ 	arm_vm_prot_init(args);
++	port_crumb = 36;
+ 
+ 	/*
+ 	 * Initialize the page tables for the low globals:
+@@ -2152,6 +2164,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	 * With legacy 3 level table systems we never mapped more than a single L1 entry so this may be dead code
+ 	 */
+ 	init_ptpages(cpu_tte, dynamic_memory_begin, VM_MAX_KERNEL_ADDRESS, TRUE, ARM_DYNAMIC_TABLE_XN | ARM_TTE_TABLE_AP(ARM_TTE_TABLE_AP_USER_NA));
++	port_crumb = 37;
+ #endif
+ 
+ #if KASAN
+@@ -2162,7 +2175,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ #endif /* KASAN */
+ 
+ 	arm_vm_physmap_init(args);
++	port_crumb = 38;
+ 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
++	port_crumb = 39;
+ 
+ #if XNU_MONITOR
+ 	ml_enable_monitor();
+@@ -2171,6 +2186,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
+ 
+ 	flush_mmu_tlb();
++	port_crumb = 40;
+ 	kva_active = TRUE;
+ 	// global table pointers may need to be different due to physical aperture remapping
+ 	cpu_tte = (tt_entry_t*)(phystokv(cpu_ttep));
+@@ -2268,6 +2284,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ #endif
+ #endif
+ 	pmap_bootstrap(dynamic_memory_begin);
++	port_crumb = 41;
+ 
+ 	disable_preemption();
+ 
+@@ -2390,10 +2407,12 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 
+ #if XNU_MONITOR
+ 	pmap_static_allocations_done();
++	port_crumb = 42;
+ #endif
+ 	first_avail = avail_start;
+ 	patch_low_glo_static_region(args->topOfKernelData, avail_start - args->topOfKernelData);
+ 	enable_preemption();
++	port_crumb = 43;
+ }
+ 
+ /*
+diff --git a/osfmk/kern/kalloc.c b/osfmk/kern/kalloc.c
+index 74b028f..5d37de5 100644
+--- a/osfmk/kern/kalloc.c
++++ b/osfmk/kern/kalloc.c
+@@ -1861,13 +1861,21 @@ __startup_func
+ static void
+ kalloc_type_view_init_fixed(void)
+ {
++	kprintf("port: ktv fixed start\n");
+ 	kalloc_type_hash_seed = (uint32_t) early_random();
++	kprintf("port: ktv seed\n");
+ 	kalloc_type_build_dlut();
++	kprintf("port: ktv dlut\n");
+ 	/*
+ 	 * Parse __kalloc_type sections and build array of pointers to
+ 	 * all kalloc type views in kt_buffer.
+ 	 */
+ 	kt_count = kalloc_type_view_parse(KTV_FIXED);
++	kprintf("port: ktv parsed %u\n", (unsigned)kt_count);
++	if (kt_count == 0) {
++		/* port: without Apple's type summary every view counts as data-only and takes the data heap above, so there is nothing to place */
++		return;
++	}
+ 	assert(kt_count < KALLOC_TYPE_SIZE_MASK);
+ 
+ #if MACH_ASSERT
+@@ -1887,9 +1895,11 @@ kalloc_type_view_init_fixed(void)
+ 	 * frequency list of number of unique and total signatures per kalloc
+ 	 * size class
+ 	 */
++	kprintf("port: ktv sorted\n");
+ 	uint16_t *kt_skip_list_start = (uint16_t *)(kt_buffer + kt_count);
+ 	uint16_t *kt_shuffle_buf = kalloc_type_create_iterators_fixed(
+ 		kt_skip_list_start, kt_count);
++	kprintf("port: ktv iterators\n");
+ 
+ 	/*
+ 	 * Create zones based on signatures
+@@ -1989,6 +1999,9 @@ kalloc_type_view_init_var(void)
+ 	 */
+ 	kt_count = kalloc_type_view_parse(KTV_VAR);
+ 	assert(kt_count < UINT32_MAX);
++	if (kt_count == 0) {
++		return; /* port: see kalloc_type_view_init_fixed */
++	}
+ 
+ #if MACH_ASSERT
+ 	vm_size_t sig_slist_size = (size_t) kt_count * sizeof(uint32_t);
+diff --git a/osfmk/kern/link_compat.c b/osfmk/kern/link_compat.c
+index 6dc1281..ecc09d8 100644
+--- a/osfmk/kern/link_compat.c
++++ b/osfmk/kern/link_compat.c
+@@ -32,3 +32,6 @@ pid_hibernate(void *p, void *args, int *ret)
+ 	return 45;
+ }
+ #endif
++
++/* Bring-up breadcrumb: the last boot step reached, read from the host with rig-dmesg.py --peek port_crumb. */
++volatile unsigned long long port_crumb;
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+index 9adf29d..a004862 100644
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -224,8 +224,7 @@ static inline void
+ kernel_bootstrap_log(const char *message)
+ {
+ 	boot_progress_stage(message);
+-	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+-	    startup_phase >= STARTUP_SUB_KPRINTF) {
++	if (startup_phase >= STARTUP_SUB_KPRINTF) { /* port bring-up: always log, there is no serial console to turn on */
+ 		kprintf("kernel_bootstrap: %s\n", message);
+ 	}
+ 	kernel_debug_string_early(message);
+@@ -235,8 +234,7 @@ static inline void
+ kernel_bootstrap_thread_log(const char *message)
+ {
+ 	boot_progress_stage(message);
+-	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+-	    startup_phase >= STARTUP_SUB_KPRINTF) {
++	if (startup_phase >= STARTUP_SUB_KPRINTF) { /* port bring-up: always log, there is no serial console to turn on */
+ 		kprintf("kernel_bootstrap_thread: %s\n", message);
+ 	}
+ 	kernel_debug_string_early(message);
+diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
+index de584ba..44b993c 100644
+--- a/osfmk/prng/prng_random.c
++++ b/osfmk/prng/prng_random.c
+@@ -26,6 +26,7 @@
+  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+  */
+ 
++extern volatile unsigned long long port_crumb; /* port bring-up breadcrumb (link_compat.c) */
+ #include <kern/locks.h>
+ #include <kern/cpu_number.h>
+ #include <libkern/section_keywords.h>
+@@ -205,10 +206,13 @@ early_random_init(void)
+ 	int rc;
+ 	const char ps[] = "xnu early random";
+ 
++	port_crumb = 60;
+ 	bootseed_init();
++	port_crumb = 61;
+ 
+ 	/* Init DRBG for NIST HMAC */
+ 	ccdrbg_factory_nisthmac(&erandom.drbg_info, &erandom.drbg_custom);
++	port_crumb = 62;
+ 	assert3u(erandom.drbg_info.size, <=, sizeof(erandom.drbg_state));
+ 
+ 	/*
+@@ -218,6 +222,7 @@ early_random_init(void)
+ 	assert3u(sizeof(earlyseed), >, sizeof(nonce));
+ 	nonce = ml_get_timebase();
+ 	rc = ccdrbg_init(&erandom.drbg_info, (struct ccdrbg_state *)erandom.drbg_state, sizeof(earlyseed), earlyseed, sizeof(nonce), &nonce, sizeof(ps) - 1, ps);
++	port_crumb = 63;
+ 	if (rc != CCDRBG_STATUS_OK) {
+ 		panic("ccdrbg_init() returned %d", rc);
+ 	}
+diff --git a/osfmk/vm/vm_compressor_backing_store.c b/osfmk/vm/vm_compressor_backing_store.c
+index 10a4aee..03e234d 100644
+--- a/osfmk/vm/vm_compressor_backing_store.c
++++ b/osfmk/vm/vm_compressor_backing_store.c
+@@ -172,7 +172,7 @@ boolean_t vm_swap_force_defrag = FALSE, vm_swap_force_reclaim = FALSE;
+ 
+ #else /* !XNU_TARGET_OS_OSX */
+ 
+-#define VM_MAX_SWAP_FILE_NUM            100
++#define VM_MAX_SWAP_FILE_NUM            5 /* port: 100 swap files reserve ~150 GB of kernel VA for the compressor, more than this 4 KiB-page layout has */
+ /* port: the macOS-target code at vm_swap_init() still scales by these; values as the !XNU_TARGET_OS_OSX branch gives a non-large-memory device */
+ #define VM_MAX_SWAP_FILE_SWAP_ENABLED_NUM (4ULL * (1ULL << 30) / MAX_SWAP_FILE_SIZE)
+ #define VM_MIN_SWAP_FILE_SWAP_ENABLED_NUM (4ULL * (1ULL << 30) / MAX_SWAP_FILE_SIZE)
+diff --git a/osfmk/vm/vm_kern.c b/osfmk/vm/vm_kern.c
+index 34de1af..4f2045c 100644
+--- a/osfmk/vm/vm_kern.c
++++ b/osfmk/vm/vm_kern.c
+@@ -3147,7 +3147,9 @@ kmem_scramble_ranges(void)
+ 	 * this map is 2G in size and starts at the end of kernel_text on x86. It
+ 	 * could overflow into the heap.
+ 	 */
++	kprintf("port: kext_alloc_init\n");
+ 	kext_alloc_init();
++	kprintf("port: kext_alloc_init done\n");
+ 
+ 	/*
+ 	 * Eat a random amount of kernel_map to fuzz subsequent heap, zone and
+@@ -3159,11 +3161,17 @@ kmem_scramble_ranges(void)
+ 	 * do not admit this address to be part of any zone submap.
+ 	 */
+ 	km_range = kmem_fuzz_start();
++	kprintf("port: fuzz %llx-%llx\n", (unsigned long long)km_range.min_address, (unsigned long long)km_range.max_address);
+ 
+ 	/*
+ 	 * Add claims for ptr and data kmem ranges
+ 	 */
+ 	kmem_add_extra_claims(km_range);
++	kprintf("port: claims %u\n", kmem_claim_count);
++	for (uint32_t i = 0; i < kmem_claim_count; i++) {
++		kprintf("port: claim[%u] %s size %llx flags %x\n", i, kmem_claims[i].kc_name, (unsigned long long)kmem_claims[i].kc_size, (unsigned)kmem_claims[i].kc_flags);
++	}
++	kprintf("port: free_size %llx\n", (unsigned long long)mach_vm_range_size(&km_range));
+ 
+ 	/*
+ 	 * Minimally verify that our placer will be able to resolve the constraints
+@@ -3193,8 +3201,10 @@ kmem_scramble_ranges(void)
+ 	 */
+ 	assert(kmem_claim_count < UINT16_MAX);
+ 	kmem_shuffle_claims();
++	kprintf("port: shuffled\n");
+ 
+ 	vm_map_ilk_lock(kernel_map);
++	kprintf("port: locked\n");
+ 
+ 	/*
+ 	 * Apply restrictions and determine range for each claim
+@@ -3214,6 +3224,8 @@ kmem_scramble_ranges(void)
+ 		    km_range.min_address, vm_map_max(kernel_map));
+ 		sp_size   = kmem_claim_to_allocation_size(sp.kc_size, is_last);
+ 
++		kprintf("port: claim %s size %llx alloc %llx hole %llx\n", sp.kc_name, (unsigned long long)sp.kc_size,
++		    (unsigned long long)sp_size, (unsigned long long)hole_size);
+ 		if (hole_size < sp_size) {
+ 			panic("kmem_range_init: vm_map_store_lookup_hole() "
+ 			    "failing for claim %s, hole %#llx < size %#llx",
+@@ -3265,6 +3277,7 @@ kmem_scramble_ranges(void)
+ 	}
+ 
+ 	vm_map_ilk_unlock(kernel_map);
++	kprintf("port: unlocked\n");
+ 
+ #if DEBUG || DEVELOPMENT
+ 	for (uint32_t i = 0; i < kmem_claim_count; i++) {
+@@ -3294,8 +3307,11 @@ __startup_func
+ static void
+ kmem_range_init(void)
+ {
++	kprintf("port: kmem_scramble_ranges\n");
+ 	kmem_scramble_ranges();
++	kprintf("port: pmap_init\n");
+ 	pmap_init();
++	kprintf("port: pmap_init done\n");
+ 
+ 	for (uint32_t i = 0; i < ARRAY_COUNT(kmem_slabs); i++) {
+ 		vm_guard_object_slab_init(&kmem_slabs[i][KMEM_DIRECTION_FORWARDS]);

@@ -1,9 +1,9 @@
 From bd5eb7a1ab37c110029fc96a6a44355c41babc7f Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Wed, 28 Oct 2026 13:43:06 -0400
-Subject: [PATCH] union-hide-lower: the mount over the root volume's root vnode
- reports MNT_ROOTFS in statfs, getfsstat and the vfs sysctls, as the one root
- volume it stands in for (its mnt_flag is unchanged). fseventsd makes its
+Subject: [PATCH 24/48] union-hide-lower: the mount over the root volume's root
+ vnode reports MNT_ROOTFS in statfs, getfsstat and the vfs sysctls, as the one
+ root volume it stands in for (its mnt_flag is unchanged). fseventsd makes its
  global disk logger only on the volume whose f_flags has MNT_ROOTFS; without
  one it never finished starting, every FSEvents client's registration timed
  out after 10 s and was retried, and syspolicyd, so authd, so loginwindow's
@@ -110,6 +110,3 @@ index a9fa81d..d63b482 100644
  		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
  		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
  
--- 
-2.53.0
-

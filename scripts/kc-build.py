@@ -35,6 +35,7 @@ LC_FILESET_ENTRY, LC_CHAINED_FIXUPS = 0x80000035, 0x80000034
 # Top-level segments that move from where KC265 has them (offsets from the collection base) to make room for the larger kernel.
 DATA_CONST_START = 0x78c000
 DATA_START = 0x3814000
+KEPT_POINTER_REBINDS = []   # see build(); k27/kc-build27.py sets some
 
 
 def up(value, align=PAGE):
@@ -238,6 +239,13 @@ def build(args):
             kext_sites.append((site + shift, remap.map(target) if remap.in_old_kernel(target) else target + shift, auth, diversity, addr_div, key))
             if not remap.in_old_kernel(target):
                 kext_targets.add(site + shift)
+    # KEPT_POINTER_REBINDS: (site in kc, kernel symbol): a kept kext's pointer bound to another symbol of the new kernel than its own
+    for va, symbol in KEPT_POINTER_REBINDS:
+        found = new_symbols.get(symbol, [])
+        index = next((i for i, s in enumerate(kext_sites) if s[0] == va + shift), None)
+        if len(found) != 1 or index is None:
+            raise SystemExit(f'pointer rebind {va:#x} -> {symbol}: {len(found)} symbols, site {"missing" if index is None else "found"}')
+        kext_sites[index] = (va + shift, found[0], *kext_sites[index][2:])
     kept_old_sites = {s[0]: s[1] for s in kext_sites}
     print(f'kexts: {len(kext_sites)} chained pointers')
 

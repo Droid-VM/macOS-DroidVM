@@ -1,0 +1,959 @@
+From 81c44fe9cbdd5d4c7eeed15a27eba15816cba7a9 Mon Sep 17 00:00:00 2001
+From: t <t@t>
+Date: Fri, 23 Oct 2026 07:57:21 -0400
+Subject: [PATCH 01/48] their 21 patches
+
+---
+ bsd/sys/make_symbol_aliasing.sh         |   2 +-
+ config/MASTER                           |   2 +
+ config/MASTER.arm64.bcm2837             | 129 ++++++++++++++++++++++++
+ iokit/Kernel/IOStartIOKit.cpp           |   3 +
+ iokit/KernelConfigTables.cpp            |  43 ++++++++
+ makedefs/MakeInc.def                    |  13 ++-
+ osfmk/arm/pmap/pmap.c                   |  21 +++-
+ osfmk/arm/rtclock.c                     |   5 +
+ osfmk/arm64/arm_vm_init.c               |   2 +
+ osfmk/arm64/caches_asm.s                |   4 +
+ osfmk/arm64/machine_routines.c          |   5 +
+ osfmk/arm64/machine_routines_nos.c      |  37 +++++++
+ osfmk/arm64/proc_reg.h                  |   8 ++
+ osfmk/arm64/sptm/pmap/pmap.c            |   4 +-
+ osfmk/arm64/start.s                     |  22 +++-
+ osfmk/conf/files.arm64                  |   9 +-
+ osfmk/kern/startup.c                    |   3 +
+ osfmk/prng/prng_random.c                |  58 +++++++++++
+ pexpert/arm/pe_init.c                   |  24 ++++-
+ pexpert/arm/pe_serial.c                 |  26 +++++
+ pexpert/pexpert/arm64/BCM2837.h         |  72 +++++++++++++
+ pexpert/pexpert/arm64/Makefile          |   3 +-
+ pexpert/pexpert/arm64/apple_arm64_cpu.h |   3 +
+ pexpert/pexpert/arm64/board_config.h    |  10 ++
+ 24 files changed, 486 insertions(+), 22 deletions(-)
+ create mode 100644 config/MASTER.arm64.bcm2837
+ create mode 100644 osfmk/arm64/machine_routines_nos.c
+ create mode 100644 pexpert/pexpert/arm64/BCM2837.h
+
+diff --git a/bsd/sys/make_symbol_aliasing.sh b/bsd/sys/make_symbol_aliasing.sh
+index 24fb244..91b2cf5 100755
+--- a/bsd/sys/make_symbol_aliasing.sh
++++ b/bsd/sys/make_symbol_aliasing.sh
+@@ -34,7 +34,7 @@ fi
+ SDKROOT="$1"
+ OUTPUT="$2"
+ 
+-AVAILABILITY_PL="${SDKROOT}/${DRIVERKITROOT}/usr/local/libexec/availability.pl"
++AVAILABILITY_PL="${XNU_AVAILABILITY_PL:-${SDKROOT}/${DRIVERKITROOT}/usr/local/libexec/availability.pl}"
+ 
+ if [ ! -x "${AVAILABILITY_PL}" ] ; then
+     echo "Unable to locate ${AVAILABILITY_PL} (or not executable)" >&2
+diff --git a/config/MASTER b/config/MASTER
+index 1b97480..192e99c 100644
+--- a/config/MASTER
++++ b/config/MASTER
+@@ -328,6 +328,8 @@ options		CONFIG_EXCLAVES			# <config_exclaves>
+ # Compile XNU with PPL support.
+ options   CONFIG_PMAP_PPL			# <config_pmap_ppl>
+ 
++options   CONFIG_APPLE_AMCC			# <apple_amcc>
++
+ options   NOS_ARM_ASM			# <nos_arm_asm>
+ options   NOS_ARM_PMAP			# <nos_arm_pmap>
+ 
+diff --git a/config/MASTER.arm64.bcm2837 b/config/MASTER.arm64.bcm2837
+new file mode 100644
+index 0000000..5c66c91
+--- /dev/null
++++ b/config/MASTER.arm64.bcm2837
+@@ -0,0 +1,129 @@
++#
++# Mach Operating System
++# Copyright (c) 1986 Carnegie-Mellon University
++# Copyright 2001-2024 Apple Inc.
++#
++# All rights reserved.  The CMU software License Agreement
++# specifies the terms and conditions for use and redistribution.
++#
++######################################################################
++#
++#  Master Apple configuration file (see the master machine independent
++#  configuration file for a description of the file format).
++#
++#  BCM2837 (non-Apple ARMv8 SoC) configuration: MASTER.arm64.iPhoneOS of
++#  this release without the Apple CPU counters (Apple PMU registers) and
++#  without paravirtualization. It keeps the PPL-era pmap (config_pmap_ppl);
++#  doconf is never given -sptm or -exclaves for this SoC.
++#
++######################################################################
++#
++#  Standard Apple OS Configurations:
++#  -------- ----- -- ---------------
++#
++#  ARM_EXTRAS_BASE = [ config_pmap_ppl ]
++#  KERNEL_BASE =    [ arm64 nos_arm_asm nos_arm_pmap xsmall msgb_small config_embedded config_enforce_signed_code config_code_signature_reconstitution config_requires_u32_munging config_darkboot ARM_EXTRAS_BASE ]
++#  KERNEL_RELEASE = [ KERNEL_BASE release ]
++#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug config_proc_resource_limits config_ext_paniclog ]
++#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_waitq_stats config_workloop_debug config_proc_resource_limits config_ext_paniclog ]
++#  BSD_EXTRAS_BASE = [ ]
++#  BSD_EXTRAS_DEV = [ config_coredump config_ucoredump ]
++#  BSD_EXTRAS_DEBUG = [ config_coredump config_ucoredump ]
++#  BSD_BASE =       [ mach_bsd psynch config_proc_uuid_policy config_personas config_imageboot config_imageboot_img4 BSD_EXTRAS_BASE ]
++#  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel config_imgsrc_access ]
++#  BSD_DEV =        [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEV ]
++#  BSD_DEBUG =      [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEBUG ]
++#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs]
++#  FILESYS_RELEASE= [ FILESYS_BASE ]
++#  FILESYS_DEV =    [ FILESYS_BASE fdesc config_union_mounts ]
++#  FILESYS_DEBUG =  [ FILESYS_BASE fdesc config_union_mounts ]
++#  SKYWALK_BASE =   [ skywalk config_nexus_user_pipe config_nexus_kernel_pipe config_nexus_flowswitch config_nexus_netif ]
++#  SKYWALK_RELEASE = [ SKYWALK_BASE ]
++#  SKYWALK_DEV =    [ SKYWALK_BASE ]
++#  SKYWALK_DEBUG =  [ SKYWALK_BASE ]
++#  NETWORKING =     [ inet tcpdrop_synfin bpfilter if_bridge traffic_mgt dummynet ah_all_crypto if_fake if_redirect vlan ]
++#  NETWORKING_RELEASE = [ NETWORKING ]
++#  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler if_headless kctl_test ]
++#  NETWORKING_DEBUG = [ NETWORKING_DEV ]
++#  VPN =            [ ipsec flow_divert necp content_filter ]
++#  PF_RELEASE =     [ pf pflog ]
++#  PF_DEV =         [ PF_RELEASE ]
++#  PF_DEBUG =       [ PF_DEV ]
++#  MULTIPATH =      [ multipath mptcp ]
++#  IOKIT_BASE =     [ iokit iokitcpp no_kernel_hid config_sleep ]
++#  IOKIT_RELEASE =  [ IOKIT_BASE ]
++#  IOKIT_DEV =      [ IOKIT_BASE iokitstats iotracking ]
++#  IOKIT_DEBUG =    [ IOKIT_BASE iokitstats iotracking]
++#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kec_fips zlib crypto_sha2 config_img4 ]
++#  LIBKERN_RELEASE =[ LIBKERN_BASE ]
++#  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
++#  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]
++
++#  CPU_COUNTERS_BASE = [ ]
++#  PERF_EXTRAS_BASE = [ ]
++#  PERF_EXTRAS_DEV = [ kdp_interactive_debugging config_kdp_coredump_encryption ]
++#  PERF_EXTRAS_DEBUG = [ kdp_interactive_debugging config_kdp_coredump_encryption ]
++
++#  PERF_DBG_BASE =  [ mach_kdp config_serial_kdp CPU_COUNTERS_BASE kperf PERF_EXTRAS_BASE ]
++#  PERF_DBG_RELEASE=[ PERF_DBG_BASE ist_kdebug ]
++#  PERF_DBG_DEV =   [ PERF_DBG_BASE config_dtrace lock_stats zleaks alternate_debugger config_debug_syscall_rejection config_iotrace PERF_EXTRAS_DEV config_memory_microstackshot ]
++#  PERF_DBG_DEBUG = [ PERF_DBG_BASE config_dtrace lock_stats zleaks alternate_debugger config_debug_syscall_rejection config_iotrace PERF_EXTRAS_DEBUG config_memory_microstackshot ]
++#  PERF_DBG_KASAN = [ PERF_DBG_BASE config_dtrace lock_stats zleaks alternate_debugger config_debug_syscall_rejection config_iotrace PERF_EXTRAS_DEV config_memory_microstackshot ]
++#  PARAVIRT_BASE =  [ ]
++#  MACH_BASE =      [ mach config_ecc_logging vc_progress_white importance_inheritance config_atm config_coalitions config_iosched config_library_validation config_sysdiagnose config_telemetry config_mach_bridge_recv_time config_quiesce_counter config_io_compression_stats phys_write_acct config_service_port_info PARAVIRT_BASE ]
++#  MACH_RELEASE =   [ MACH_BASE config_skip_precise_user_kernel_time debugger_for_zone_info ]
++#  MACH_DEV =       [ MACH_BASE config_io_accounting importance_trace config_task_suspend_stats ]
++#  MACH_DEBUG =     [ MACH_BASE config_io_accounting importance_trace importance_debug config_task_suspend_stats ]
++#  SCHED_BASE =     [ config_sched_timeshare_core config_sched_deferred_ast config_clutch config_sched_sfi config_taskwatch config_preadopt_tg ]
++#  SCHED_RELEASE =  [ SCHED_BASE ]
++#  SCHED_DEV =      [ SCHED_BASE ]
++#  SCHED_DEBUG =    [ SCHED_BASE ]
++#if MASTER_CONFIG_ENABLE_KERNEL_TAG && MASTER_CONFIG_ENABLE_SPTM
++#  VM_EXTRA =       [ kernel_tagging ]
++#  VM_EXTRA_DEV =   [ ]
++#elif MASTER_CONFIG_ENABLE_SPTM
++#  VM_EXTRA =       [ ]
++#  VM_EXTRA_DEV =   [ ]
++#else
++#  VM_EXTRA =       [ ]
++#  VM_EXTRA_DEV =   [ ]
++#endif /* MASTER_CONFIG_ENABLE_KERNEL_TAG && MASTER_CONFIG_ENABLE_SPTM */
++#  VM_BASE =        [ vps_dynamic_prio vm_pressure_events jetsam freeze memorystatus config_code_decryption phantom_cache config_secluded_memory config_cs_validation_bitmap config_deferred_reclaim config_map_ranges VM_EXTRA ]
++#  VM_RELEASE =     [ VM_BASE ]
++#  VM_DEV =         [ VM_BASE dynamic_codesigning ubsan_minimal VM_EXTRA_DEV ]
++#  VM_DEBUG =       [ VM_BASE dynamic_codesigning ubsan_minimal VM_EXTRA_DEV ]
++#  VM_KASAN =       [ VM_BASE dynamic_codesigning config_kasan config_ubsan config_kcov config_ksancov kernel_tagging kernel_tbi]
++#  SECURITY_BASE =    [ config_macf kernel_integrity config_secure_bsd_root reslide_shared_cache ]
++#  SECURITY_RELEASE = [ SECURITY_BASE ]
++#  SECURITY_DEV =     [ SECURITY_BASE config_setuid config_kas_info ]
++#  SECURITY_DEBUG =   [ SECURITY_BASE config_setuid config_kas_info ]
++#  BASE =           [ MULTIPATH VPN ]
++#  RELEASE =        [ BASE KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE             SKYWALK_RELEASE NETWORKING_RELEASE PF_RELEASE IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM_RELEASE SECURITY_RELEASE ]
++#  DEVELOPMENT =    [ BASE KERNEL_DEV     BSD_DEV     FILESYS_DEV     SKYWALK_DEV     NETWORKING_DEV     PF_DEV     IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     SECURITY_DEV     ]
++#  DEBUG =          [ BASE KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG   SKYWALK_DEBUG   NETWORKING_DEBUG   PF_DEBUG   IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG_DEBUG   MACH_DEBUG   SCHED_DEBUG   VM_DEBUG   SECURITY_DEBUG   ]
++#  KASAN =          [ BASE KERNEL_DEV     BSD_DEV     FILESYS_DEV     SKYWALK_DEV     NETWORKING_DEV     PF_DEV     IOKIT_DEV     LIBKERN_DEV     PERF_DBG_KASAN   MACH_DEV     SCHED_DEV     VM_KASAN   SECURITY_DEV     ]
++#  SPTM =           [ BASE KERNEL_DEV     BSD_DEV     FILESYS_DEV     SKYWALK_DEV     NETWORKING_DEV     PF_DEV     IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     SECURITY_DEV     ]
++#
++######################################################################
++#
++machine		"arm64"						# <arm64>
++
++makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
++
++options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
++options     TRASH_VFP_ON_SAVE   # <debug,trash_vfp>
++options		ALTERNATE_DEBUGGER	# <alternate_debugger>
++
++options   CONFIG_VNODES=1024		# <xsmall>
++
++options   CONFIG_FREEZE_SUSPENDED_MIN=4		# <xsmall>
++
++options	  CONFIG_MACH_APPROXIMATE_TIME
++
++options   CONFIG_KERNEL_INTEGRITY		# <kernel_integrity>
++
++options   CONFIG_RESLIDE_SHARED_CACHE		# <reslide_shared_cache>
++
++options   CONFIG_UBSAN_MINIMAL		# <ubsan_minimal>
++options   CONFIG_KERNEL_TBI		# <kernel_tbi>
++options   CONFIG_KERNEL_TAGGING		# <kernel_tagging>
+diff --git a/iokit/Kernel/IOStartIOKit.cpp b/iokit/Kernel/IOStartIOKit.cpp
+index 95553a0..f09a1dd 100644
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -77,8 +77,11 @@ IOKitInitializeTime( void )
+ 	t.tv_sec = 30;
+ 	t.tv_nsec = 0;
+ 
++// RTC is not present on this target
++#ifndef BCM2837
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IORTC"), &t );
++#endif
+ #if defined(__i386__) || defined(__x86_64__)
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IONVRAM"), &t );
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+index 559a9db..e843e61 100644
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -34,6 +34,49 @@
+ 
+ const char * gIOKernelConfigTables =
+     "("
++#if XNU_ARM_DT_PLATFORM
++    "   {"
++    "     'IOClass'         = ArmDTPlatform;"
++    "     'IOProviderClass' = IOPlatformExpertDevice;"
++    "     'IONameMatch'     = 'device-tree';"
++    "     'IOProbeScore'    = 5000:32;"
++    "   },"
++#endif
++#if XNU_ARMCPU
++    "   {"
++    "     'IOClass'         = ArmCpu;"
++    "     'IOProviderClass' = IOPlatformDevice;"
++    "     'IOProbeScore'    = 2000:32;"
++    "   },"
++#endif
++#if XNU_NATIVE_UFS_SM8350
++    "   {"
++    "     'IOClass' = NativeUfs;"
++    "     'IOMatchCategory' = NativeUfsRoot;"
++    "     'IOProviderClass' = IOPlatformExpertDevice;"
++    "     'IOProbeScore' = 500:32;"
++    "   },"
++    "   {"
++    "     'IOClass' = IOBlockStorageDriver;"
++    "     'IOProviderClass' = IOBlockStorageDevice;"
++    "     'IOPropertyMatch' = { 'device-type' = Generic; };"
++    "   },"
++    "   {"
++    "     'IOClass' = IOGUIDPartitionScheme;"
++    "     'IOProviderClass' = IOMedia;"
++    "     'IOMatchCategory' = IOStorage;"
++    "     'IOProbeScore' = 4000:32;"
++    "     'Content Mask' = 'GUID_partition_scheme';"
++    "     'IOPropertyMatch' = { Whole = .true.; };"
++    "   },"
++    "   {"
++    "     'IOClass' = IOMediaBSDClient;"
++    "     'IOProviderClass' = IOMedia;"
++    "     'IOMatchCategory' = IOMediaBSDClient;"
++    "     'IOProbeScore' = 30000:32;"
++    "     'IOResourceMatch' = IOBSD;"
++    "   },"
++#endif
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"
+     "     'IOProviderClass' = IOPlatformExpertDevice;"
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index e37762b..77043d2 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -29,7 +29,7 @@ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else ifneq ($(findstring _host,$(RC_ProjectName)),)
+ SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+ else
+-SUPPORTED_ARM64_MACHINE_CONFIGS = T6000 T6020 T6030 T6031 T6041 T6050 T8101 T8103 T8112 T8122 T8132 T8142 VMAPPLE
++SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T6020 T6030 T6031 T6041 T6050 T8101 T8103 T8112 T8122 T8132 T8142 VMAPPLE
+ 
+ SPTM_ENABLED_SOCS_MacOSX = t6000 t8112 t6020 t8122 t6030 t6031 t6041 t6050 t8132 t8142
+ EXCLAVES_ENABLED_SOCS_MacOSX = t8142 t6050
+@@ -93,6 +93,7 @@ MACHINE_FLAGS_ARM64_T8132 = -DARM64_BOARD_CONFIG_T8132			-mcpu=apple-m4
+ MACHINE_FLAGS_ARM64_T8142 = -DARM64_BOARD_CONFIG_T8142 			-mcpu=apple-m4+memtag+predres2
+ 
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a+sme2
++MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
+ 
+ 
+ #
+@@ -912,7 +913,8 @@ LDFLAGS_KERNEL_GEN = \
+ 	-Wl,-headerpad,152
+ 
+ # LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -lfirehose_kernel
+-LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -L$(SDKROOT)/usr/local/lib/kernel/platform
++export KERNEL_SDKROOT ?= $(SDKROOT)
++LDFLAGS_KERNEL_SDK	= -L$(KERNEL_SDKROOT)/usr/local/lib/kernel -L$(KERNEL_SDKROOT)/usr/local/lib/kernel/platform
+ ifneq ($(KDKROOT),)
+ LDFLAGS_KERNEL_SDK     += -L$(KDKROOT)/usr/local/lib/kernel/platform
+ endif
+@@ -1151,9 +1153,12 @@ LD_KERNEL_LIBS	   = -lcc_kext
+ LD_KERNEL_ARCHIVES = $(LDFLAGS_KERNEL_SDK) -lfirehose_kernel
+ 
+ # Link binary support library
++# (only Apple SoCs have one; BCM2837 builds the machine layer from source)
+ ifneq ($(CURRENT_MACHINE_CONFIG),NONE)
++ifneq ($(wildcard $(KDKROOT)/System/Library/KernelSupport/lib$(CURRENT_MACHINE_CONFIG).os.$(CURRENT_KERNEL_CONFIG).a),)
+         LDFLAGS_KERNEL_ONLY += -rdynamic -Wl,-force_load,$(KDKROOT)/System/Library/KernelSupport/lib$(CURRENT_MACHINE_CONFIG).os.$(CURRENT_KERNEL_CONFIG).a
+ endif
++endif
+ 
+ #
+ # Derive SPTM/TXM and Exclaves enablement from the EDM properties.
+@@ -1227,8 +1232,8 @@ INCFLAGS_IMPORT	= $(patsubst %, -I$(OBJROOT)/EXPORT_HDRS/%, $(COMPONENT_IMPORT_L
+ INCFLAGS_EXTERN	= -I$(SRCROOT)/EXTERNAL_HEADERS
+ INCFLAGS_GEN	= -I$(SRCROOT)/$(COMPONENT) -I$(OBJROOT)/EXPORT_HDRS/$(COMPONENT)
+ INCFLAGS_LOCAL	= -I.
+-INCFLAGS_SDK    = -I$(SDKROOT)/usr/local/include/kernel -I$(SDKROOT)/usr/local/include/iBoot -I$(SDKROOT)/$(KPINCDIR)/AppleFeatures
+-INCFLAGS_PLATFORM = -I$(SDKROOT)/$(KPINCDIR)/platform
++INCFLAGS_SDK    = -I$(KERNEL_SDKROOT)/usr/local/include/kernel -I$(KERNEL_SDKROOT)/usr/local/include -I$(KERNEL_SDKROOT)/usr/local/include/iBoot -I$(KERNEL_SDKROOT)/$(KPINCDIR)/AppleFeatures
++INCFLAGS_PLATFORM = -I$(KERNEL_SDKROOT)/$(KPINCDIR)/platform
+ ifneq ($(KDKROOT),)
+ INCFLAGS_SDK   += -I$(KDKROOT)/$(KPINCDIR) -I$(KDKROOT)/System/Library/KernelSupport
+ INCFLAGS_PLATFORM += -I$(KDKROOT)/$(KINCDIR)/platform -I$(KDKROOT)/$(KPINCDIR)/platform
+diff --git a/osfmk/arm/pmap/pmap.c b/osfmk/arm/pmap/pmap.c
+index 19e7e67..6ae16de 100644
+--- a/osfmk/arm/pmap/pmap.c
++++ b/osfmk/arm/pmap/pmap.c
+@@ -84,8 +84,10 @@
+ 
+ #include <arm64/proc_reg.h>
+ #include <pexpert/arm64/boot.h>
++#if XNU_MONITOR
+ #include <arm64/ppl/sart.h>
+ #include <arm64/ppl/uat.h>
++#endif
+ 
+ #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) || defined(KERNEL_INTEGRITY_PV_CTRR)
+ #include <arm64/amcc_rorgn.h>
+@@ -922,6 +924,8 @@ PMAP_SUPPORT_PROTOTYPES(
+ 	vm_prot_t allow_mode,
+ 	int options), ARM_FORCE_FAST_FAULT_INDEX);
+ 
++MARK_AS_PMAP_TEXT static void pmap_phys_write_disable(vm_address_t va);
++
+ MARK_AS_PMAP_TEXT static boolean_t
+ arm_force_fast_fault_with_flush_range(
+ 	ppnum_t ppnum,
+@@ -2334,7 +2338,9 @@ pmap_bootstrap(
+ 	/**
+ 	 * Bootstrap any necessary SART data structures and values needed from the device tree.
+ 	 */
++#if XNU_MONITOR
+ 	sart_bootstrap();
++#endif
+ 
+ 	/**
+ 	 * Don't make any assumptions about the alignment of avail_start before this
+@@ -4947,13 +4953,13 @@ pmap_page_protect_options_with_flush_range(
+ 		if (pvh_ptep_is_iommu(pte_p)) {
+ #if XNU_MONITOR
+ 			if (__improbable(pvh_flags & PVH_FLAG_LOCKDOWN_MASK)) {
+-				panic("pmap_page_protect: ppnum 0x%x locked down, cannot be owned by iommu %p, pve_p=%p",
+-				    ppnum, ptep_get_iommu(pte_p), pve_p);
++				panic("pmap_page_protect: ppnum 0x%x locked down, cannot be owned by iommu ptep %p, pve_p=%p",
++				    ppnum, pte_p, pve_p);
+ 			}
+ #endif
+ 			if (remove && (options & PMAP_OPTIONS_COMPRESSOR)) {
+-				panic("pmap_page_protect: attempt to compress ppnum 0x%x owned by iommu %p, pve_p=%p",
+-				    ppnum, ptep_get_iommu(pte_p), pve_p);
++				panic("pmap_page_protect: attempt to compress ppnum 0x%x owned by iommu ptep %p, pve_p=%p",
++				    ppnum, pte_p, pve_p);
+ 			}
+ 			goto protect_skip_pve_pass1;
+ 		}
+@@ -7235,7 +7241,9 @@ void
+ pmap_sync_page_attributes_phys(
+ 	ppnum_t pp)
+ {
+-	flush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);
++	/* ptoa() widens before the shift: pp << PAGE_SHIFT is a 32-bit shift and drops the high bits of physical
++	 * addresses at or above 4 GiB (all of DRAM on boards whose memory starts there), which phystokv() then rejects. */
++	flush_dcache((vm_offset_t) ptoa(pp), PAGE_SIZE, TRUE);
+ }
+ 
+ #if CONFIG_COREDUMP
+@@ -12237,6 +12245,7 @@ pmap_unpin_kernel_pages(vm_offset_t kva __unused, size_t nbytes __unused)
+ #endif /* !XNU_MONITOR */
+ 
+ 
++#if PMAP_CS_PPL_MONITOR || PMAP_CS_INCLUDE_CODE_SIGNING
+ MARK_AS_PMAP_TEXT static inline void
+ pmap_cs_lockdown_pages(vm_address_t kva, vm_size_t size, bool ppl_writable)
+ {
+@@ -12257,6 +12266,8 @@ pmap_cs_unlockdown_pages(vm_address_t kva, vm_size_t size, bool ppl_writable)
+ #endif
+ }
+ 
++#endif /* PMAP_CS_PPL_MONITOR || PMAP_CS_INCLUDE_CODE_SIGNING */
++
+ /**
+  * Perform basic validation checks on the destination only and
+  * corresponding offset/sizes prior to writing to a read only allocation.
+diff --git a/osfmk/arm/rtclock.c b/osfmk/arm/rtclock.c
+index 58ad17e..35715b5 100644
+--- a/osfmk/arm/rtclock.c
++++ b/osfmk/arm/rtclock.c
+@@ -328,6 +328,11 @@ rtclock_intr(__unused unsigned int is_user_context)
+ 	unsigned int             user_mode;
+ 	uintptr_t                pc;
+ 
++#if XNU_NATIVE_DWC3_CONSOLE
++	extern void unixnu_dwc3_poll(void);
++	unixnu_dwc3_poll();
++#endif
++
+ 	cdp = getCpuDatap();
+ 
+ 	cdp->cpu_stat.timer_cnt++;
+diff --git a/osfmk/arm64/arm_vm_init.c b/osfmk/arm64/arm_vm_init.c
+index 756af52..0ac4b57 100644
+--- a/osfmk/arm64/arm_vm_init.c
++++ b/osfmk/arm64/arm_vm_init.c
+@@ -2164,7 +2164,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
+ 	arm_vm_physmap_init(args);
+ 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
+ 
++#if XNU_MONITOR
+ 	ml_enable_monitor();
++#endif
+ 
+ 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
+ 
+diff --git a/osfmk/arm64/caches_asm.s b/osfmk/arm64/caches_asm.s
+index 1588830..58a91a8 100644
+--- a/osfmk/arm64/caches_asm.s
++++ b/osfmk/arm64/caches_asm.s
+@@ -304,6 +304,10 @@ L_cpudr_loop:
+  */
+ 	.text
+ 	.align 2
++#if !defined(APPLE_ARM64_ARCH_FAMILY)
++	.globl EXT(CleanPoC_DcacheRegion_Force_nopreempt_nohid)
++LEXT(CleanPoC_DcacheRegion_Force_nopreempt_nohid)
++#endif
+ LEXT(CleanPoC_DcacheRegion_internal)
+ 	dsb		sy
+ 	CLEANPOC_DCACHEREGION
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index 07143d5..ac03c45 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -2708,8 +2708,13 @@ _enable_virtual_timer(void)
+ 	uint64_t cntvctl = CNTV_CTL_EL0_ENABLE; /* One wants to use 32 bits, but "mrs" prefers it this way */
+ 
+ 	__builtin_arm_wsr64(KERNEL_CNTV_CTL_EL0, cntvctl);
++#if !defined(XNU_VIRTUAL_TIMER_ONLY) || !XNU_VIRTUAL_TIMER_ONLY
+ 	/* disable the physical timer as a precaution, as its registers reset to architecturally unknown values */
+ 	__builtin_arm_wsr64("CNTP_CTL_EL0", CNTP_CTL_EL0_IMASKED);
++#endif
++	/* Some EL1 ports can use the virtual timer but fault on physical-timer
++	 * control accesses. Keep that optional precaution out of their path;
++	 * virtual timer setup and the Apple-specific timer remain unchanged. */
+ #if HAS_APPLE_GENERIC_TIMER
+ 	__builtin_arm_wsr64("S3_1_C15_C13_4", CNTP_CTL_EL0_IMASKED);
+ #endif
+diff --git a/osfmk/arm64/machine_routines_nos.c b/osfmk/arm64/machine_routines_nos.c
+new file mode 100644
+index 0000000..523fe6c
+--- /dev/null
++++ b/osfmk/arm64/machine_routines_nos.c
+@@ -0,0 +1,37 @@
++/* SPDX-License-Identifier: BSD-2-Clause-Patent */
++/*
++ * Source for the machine routines that xnu-12377 only ships as
++ * machine_routines_nos.o in the KDK KernelSupport archives
++ * (lib<SoC>.os.<config>.a). Behaviour follows the T8101 object of the
++ * macOS 26.5.2 (25F84) KDK, without its Apple SPRR programming.
++ */
++#include <arm/machine_routines.h>
++#include <pexpert/device_tree.h>
++
++boolean_t
++ml_device_is_prod_fused(void)
++{
++	DTEntry chosen = NULL;
++	void const *value = NULL;
++	unsigned int size = 0;
++
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess) {
++		return FALSE;
++	}
++	if (SecureDTGetProperty(chosen, "certificate-production-status", &value, &size) != kSuccess ||
++	    size != sizeof(uint32_t)) {
++		return FALSE;
++	}
++	return *(uint32_t const *)value;
++}
++
++/* SIQ is an SPTM-platform interrupt facility; arm_init_sptm.c is its only caller. */
++void
++siq_init(void)
++{
++}
++
++void
++siq_cpu_init(void)
++{
++}
+diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
+index f4d148b..d3bb7ea 100644
+--- a/osfmk/arm64/proc_reg.h
++++ b/osfmk/arm64/proc_reg.h
+@@ -243,6 +243,14 @@
+ /* D-Cache, 128KB for Acc8 PCore, 8-way. 64KB for ECore, 8-way. */
+ #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
+ 
++#elif defined (BCM2837) /* Raspberry Pi 3 */
++
++/* I-Cache. We don't have detailed spec so we just follow the ARM technical reference. */
++#define MMU_I_CLINE 6
++
++/* D-Cache. */
++#define MMU_CLINE   6
++
+ #elif defined (VMAPPLE)
+ 
+ /* I-Cache. */
+diff --git a/osfmk/arm64/sptm/pmap/pmap.c b/osfmk/arm64/sptm/pmap/pmap.c
+index 3622ef2..54faef4 100644
+--- a/osfmk/arm64/sptm/pmap/pmap.c
++++ b/osfmk/arm64/sptm/pmap/pmap.c
+@@ -7568,7 +7568,9 @@ void
+ pmap_sync_page_attributes_phys(
+ 	ppnum_t pp)
+ {
+-	flush_dcache((vm_offset_t) (pp << PAGE_SHIFT), PAGE_SIZE, TRUE);
++	/* ptoa() widens before the shift: pp << PAGE_SHIFT is a 32-bit shift and drops the high bits of physical
++	 * addresses at or above 4 GiB (all of DRAM on boards whose memory starts there), which phystokv() then rejects. */
++	flush_dcache((vm_offset_t) ptoa(pp), PAGE_SIZE, TRUE);
+ }
+ 
+ #if CONFIG_COREDUMP
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 6aa6fe4..3ed10c7 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -33,7 +33,9 @@
+ #include <pexpert/arm64/board_config.h>
+ #include <mach_assert.h>
+ #include <machine/asm.h>
++#if defined(APPLE_ARM64_ARCH_FAMILY)
+ #include <arm64/tunables/tunables.s>
++#endif
+ #include <arm64/exception_asm.h>
+ 
+ #if __ARM_KERNEL_PROTECT__
+@@ -143,8 +145,8 @@ LEXT(reset_vector)
+ 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
+ 	add		x19, x19, EXT(ResetHandlerData)@pageoff
+ 	mrs		x15, MPIDR_EL1						// Load MPIDR to get CPU number
+-#if HAS_CLUSTER
+-	and		x0, x15, #0xFFFF					// CPU number in Affinity0, cluster ID in Affinity1
++#if HAS_CLUSTER || defined(BCM2837)
++	and		x0, x15, #0xFFFF					// CPU number in Affinity0, cluster ID in Affinity1 (SM8550 and SM8350 number cores in Affinity1)
+ #else
+ 	and		x0, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
+ #endif
+@@ -706,6 +708,19 @@ common_start:
+ 	dsb		ish
+ 
+ 
++#if defined(BCM2837) && (!defined(XNU_NATIVE_ARCH_TIMER) || !XNU_NATIVE_ARCH_TIMER)
++	// Setup timer interrupt routing; must be done before MMU is enabled
++	mrs		x15, MPIDR_EL1						// Load MPIDR to get CPU number
++	and		x15, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
++	mov		x0, #0x4000
++	lsl		x0, x0, #16
++	add		x0, x0, #0x0040						// x0: 0x4000004X Core Timers interrupt control
++	add		x0, x0, x15, lsl #2
++	mov		w1, #0xF0 						// x1: 0xF0 	  Route to Core FIQs
++	str		w1, [x0]
++	isb		sy
++#endif
++
+ #ifndef __ARM_IC_NOALIAS_ICACHE__
+ 	/* Invalidate the TLB and icache on systems that do not guarantee that the
+ 	 * caches are invalidated on reset.
+@@ -781,10 +796,13 @@ common_start:
+ 	// Initialization common to all non-virtual Apple targets
+ #endif  // APPLE_ARM64_ARCH_FAMILY
+ 
++
++#if defined(APPLE_ARM64_ARCH_FAMILY)
+ 	// Read MIDR before start of per-SoC tunables
+ 	mrs x12, MIDR_EL1
+ 
+ 	APPLY_TUNABLES x12, x13, x14
++#endif
+ 
+ #if HAS_CLUSTER && !NO_CPU_OVRD
+ 	// Unmask external IRQs if we're restarting from non-retention WFI
+diff --git a/osfmk/conf/files.arm64 b/osfmk/conf/files.arm64
+index 878b515..d24eea1 100644
+--- a/osfmk/conf/files.arm64
++++ b/osfmk/conf/files.arm64
+@@ -35,10 +35,10 @@ osfmk/arm64/WKdmCompress_4k.s	standard
+ osfmk/arm64/WKdmData.s		standard
+ osfmk/arm64/lz4_decode_arm64.s  standard
+ osfmk/arm64/lz4_encode_arm64.s  standard
+-osfmk/arm64/amcc_rorgn_ppl.c optional nos_arm_asm config_pmap_ppl
+-osfmk/arm64/amcc_rorgn_ppl_amcc.c optional nos_arm_asm config_pmap_ppl
+-osfmk/arm64/amcc_rorgn_common.c optional nos_arm_asm
+-osfmk/arm64/amcc_rorgn_pv_ctrr.c optional nos_arm_asm
++osfmk/arm64/amcc_rorgn_ppl.c optional nos_arm_asm config_pmap_ppl apple_amcc
++osfmk/arm64/amcc_rorgn_ppl_amcc.c optional nos_arm_asm config_pmap_ppl apple_amcc
++osfmk/arm64/amcc_rorgn_common.c optional nos_arm_asm apple_amcc
++osfmk/arm64/amcc_rorgn_pv_ctrr.c optional nos_arm_asm apple_amcc
+ osfmk/arm64/bcopy.s standard
+ osfmk/arm64/bzero.s standard
+ osfmk/arm/caches.c		standard
+@@ -72,6 +72,7 @@ osfmk/arm64/machine_routines.c		standard
+ osfmk/arm64/machine_routines_asm.s	optional nos_arm_asm
+ osfmk/arm64/machine_task.c		standard
+ osfmk/arm/machine_routines_apple.c	optional nos_arm_asm
++osfmk/arm64/machine_routines_nos.c	optional nos_arm_asm
+ osfmk/arm/pal_routines.c		standard
+ osfmk/arm/preemption_disable.c	standard
+ osfmk/arm64/mcount.s		optional profile
+diff --git a/osfmk/kern/startup.c b/osfmk/kern/startup.c
+index c977c98..dccdff8 100644
+--- a/osfmk/kern/startup.c
++++ b/osfmk/kern/startup.c
+@@ -527,6 +527,7 @@ kernel_bootstrap(void)
+ 	code_signing_config_t cs_config;
+ 
+ 	printf("%s\n", version); /* log kernel version */
++	printf("Kernel boot args: %s\n", PE_boot_args());
+ 
+ #if HAS_UPSI_FAILURE_INJECTION
+ 	check_for_failure_injection(XNU_STAGE_BOOTSTRAP_START);
+@@ -861,6 +862,7 @@ kernel_bootstrap_thread(void)
+ 	csm_initialize_provisioning_profiles();
+ #endif
+ 
++#if !defined(BCM2837) || (defined(XNU_NATIVE_TRUST_CACHE) && XNU_NATIVE_TRUST_CACHE)
+ 	kernel_bootstrap_log("trust_cache_init");
+ 
+ 	/* Initialize the runtime for the trust cache interface */
+@@ -868,6 +870,7 @@ kernel_bootstrap_thread(void)
+ 
+ 	/* Load the static and engineering trust caches */
+ 	load_static_trust_cache();
++#endif
+ 
+ 	kernel_startup_initialize_upto(STARTUP_SUB_LOCKDOWN);
+ 
+diff --git a/osfmk/prng/prng_random.c b/osfmk/prng/prng_random.c
+index 504b3fa..de584ba 100644
+--- a/osfmk/prng/prng_random.c
++++ b/osfmk/prng/prng_random.c
+@@ -502,3 +502,61 @@ random_bool_gen_bits(struct bool_gen * bg, unsigned int * buffer, unsigned int c
+ 	}
+ 	return rbits;
+ }
++
++/* A built-in source provider must precede platform UUID hashing. */
++#if defined(XNU_SOURCE_CORECRYPTO14) && XNU_SOURCE_CORECRYPTO14
++#include <mach/kmod.h>
++#include <mach-o/loader.h>
++#include <libkern/crypto/crypto_internal.h>
++extern struct mach_header_64 _mh_execute_header;
++extern kern_return_t corecrypto_kext_start(kmod_info_t *, void *);
++SECURITY_READ_ONLY_LATE(kern_return_t) source_corecrypto14_status = KERN_FAILURE;
++
++void
++source_corecrypto14_bootstrap(void)
++{
++    static kmod_info_t info = {
++        .info_version = KMOD_INFO_VERSION,
++        .name = "source-corecrypto14-xnu12377",
++        .version = "14.0",
++    };
++    static const uint8_t sha1_abc[20] = {
++        0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,
++        0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d
++    };
++    static const uint8_t hmac_sha256[32] = {
++        0xb0,0x34,0x4c,0x61,0xd8,0xdb,0x38,0x53,0x5c,0xa8,0xaf,0xce,0xaf,0x0b,0xf1,0x2b,
++        0x88,0x1d,0xc2,0x00,0xc9,0x83,0x3d,0xa7,0x26,0xe9,0x37,0x6c,0x2e,0x32,0xcf,0xf7
++    };
++    uint8_t digest[32], key[20];
++    uint32_t mode = 0;
++    if (PE_parse_boot_argn("fips_mode", &mode, sizeof(mode)) && mode != 0) {
++        panic("source crypto requires default complete POST");
++    }
++    info.address = (vm_address_t)&_mh_execute_header;
++    source_corecrypto14_status = corecrypto_kext_start(&info, NULL);
++    if (source_corecrypto14_status != KERN_SUCCESS || g_crypto_funcs == NULL) {
++        panic("source crypto initialization failed: %d", source_corecrypto14_status);
++    }
++    /* Exercise the new KPI suffix through the kernel's actual table layout. */
++    g_crypto_funcs->digest_fn(CRYPTO_DIGEST_ALG_SHA1, "abc", 3, digest, sizeof(sha1_abc));
++    if (memcmp(digest, sha1_abc, sizeof(sha1_abc)) != 0) {
++        panic("source crypto digest KPI test failed");
++    }
++    memset(key, 0x0b, sizeof(key));
++    g_crypto_funcs->hmac_generate_fn(CRYPTO_DIGEST_ALG_SHA256, key, sizeof(key),
++        "Hi There", 8, digest, sizeof(digest));
++    if (memcmp(digest, hmac_sha256, sizeof(digest)) != 0 ||
++        !g_crypto_funcs->hmac_verify_fn(CRYPTO_DIGEST_ALG_SHA256, key, sizeof(key),
++        "Hi There", 8, digest, sizeof(digest))) {
++        panic("source crypto HMAC KPI test failed");
++    }
++    digest[0] ^= 1;
++    if (g_crypto_funcs->hmac_verify_fn(CRYPTO_DIGEST_ALG_SHA256, key, sizeof(key),
++        "Hi There", 8, digest, sizeof(digest))) {
++        panic("source crypto accepted incorrect HMAC");
++    }
++    cc_clear(sizeof(digest), digest);
++    cc_clear(sizeof(key), key);
++}
++#endif
+diff --git a/pexpert/arm/pe_init.c b/pexpert/arm/pe_init.c
+index db1c4a0..9aa44e9 100644
+--- a/pexpert/arm/pe_init.c
++++ b/pexpert/arm/pe_init.c
+@@ -128,7 +128,7 @@ pe_init_fill_buffer_from_property(DTEntry entry, const char *property_name, char
+ static void
+ check_for_panic_log(void)
+ {
+-#ifdef PLATFORM_PANIC_LOG_PADDR
++#if defined(PLATFORM_PANIC_LOG_PADDR) && !(defined(XNU_DT_PANIC_REGION) && XNU_DT_PANIC_REGION)
+ 	gPanicBase = ml_io_map_wcomb(PLATFORM_PANIC_LOG_PADDR, PLATFORM_PANIC_LOG_SIZE);
+ 	panic_text_len = PLATFORM_PANIC_LOG_SIZE - sizeof(struct embedded_panic_header);
+ 	gPanicSize = PLATFORM_PANIC_LOG_SIZE;
+@@ -158,7 +158,10 @@ check_for_panic_log(void)
+ 		return;
+ 	}
+ 
+-	if (kSuccess != SecureDTGetProperty(entry, "reg", (void const **)&reg_prop, &size)) {
++	if (kSuccess != SecureDTGetProperty(entry, "reg", (void const **)&reg_prop, &size) ||
++	    size != 2 * sizeof(*reg_prop) || !reg_prop[0] ||
++	    reg_prop[1] < sizeof(struct embedded_panic_header) ||
++	    reg_prop[0] > UINTPTR_MAX - reg_prop[1]) {
+ 		return;
+ 	}
+ 
+@@ -166,11 +169,17 @@ check_for_panic_log(void)
+ 		return;
+ 	}
+ 
+-	if (kSuccess != SecureDTGetProperty(chosen, "embedded-panic-log-size", (void const **) &panic_region_length, &size)) {
++	if (kSuccess != SecureDTGetProperty(chosen, "embedded-panic-log-size", (void const **) &panic_region_length, &size) ||
++	    size != sizeof(*panic_region_length) ||
++	    panic_region_length[0] < sizeof(struct embedded_panic_header) ||
++	    panic_region_length[0] > reg_prop[1]) {
+ 		return;
+ 	}
+ 
+ 	gPanicBase = ml_io_map_wcomb(reg_prop[0], panic_region_length[0]);
++	if (!gPanicBase) {
++		return;
++	}
+ 
+ 	/* Deduct the size of the panic header from the panic region size */
+ 	panic_text_len = panic_region_length[0] - sizeof(struct embedded_panic_header);
+@@ -402,6 +411,10 @@ PE_init_iokit(void)
+ 	}
+ 
+ 	InitIOKit(PE_state.deviceTreeHead);
++#if defined(XNU_SOURCE_CORECRYPTO14) && XNU_SOURCE_CORECRYPTO14
++	extern void source_corecrypto14_bootstrap(void);
++	source_corecrypto14_bootstrap();
++#endif
+ 	ConfigureIOKit();
+ }
+ 
+@@ -552,7 +565,10 @@ PE_create_console(void)
+ 	 */
+ 	check_for_panic_log();
+ 
+-	if (PE_state.video.v_display) {
++	/* The ARM graphics path otherwise ignores -v and hides the kernel log. */
++	int verbose = 0;
++	PE_parse_boot_argn("-v", &verbose, sizeof(verbose));
++	if (PE_state.video.v_display && !verbose) {
+ 		PE_initialize_console(&PE_state.video, kPEGraphicsMode);
+ 	} else {
+ 		PE_initialize_console(&PE_state.video, kPETextMode);
+diff --git a/pexpert/arm/pe_serial.c b/pexpert/arm/pe_serial.c
+index 032d9e0..733eadd 100644
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -84,6 +84,24 @@ struct pe_serial_functions {
+ 
+ MARK_AS_HIBERNATE_DATA_CONST_LATE static struct pe_serial_functions* gPESF = NULL;
+ 
++#if XNU_NATIVE_DWC3_CONSOLE
++extern bool unixnu_dwc3_init(void);
++extern unsigned int unixnu_dwc3_ready(void);
++extern void unixnu_dwc3_put(uint8_t);
++extern unsigned int unixnu_dwc3_receive_ready(void);
++extern uint8_t unixnu_dwc3_receive(void);
++static void unixnu_dwc3_noop(void) { }
++static struct pe_serial_functions unixnu_dwc3_functions = {
++    .init = unixnu_dwc3_noop,
++    .transmit_ready = unixnu_dwc3_ready,
++    .transmit_data = unixnu_dwc3_put,
++    .receive_ready = unixnu_dwc3_receive_ready,
++    .receive_data = unixnu_dwc3_receive,
++    .device = SERIAL_UNKNOWN,
++};
++#endif
++
++
+ /**
+  * Whether uart has been initialized already. This value is kept across a
+  * sleep/wake cycle so we know we need to reinitialize when serial_init is
+@@ -899,6 +917,14 @@ serial_init(void)
+ 		return gPESF != NULL;
+ 	}
+ 
++#if XNU_NATIVE_DWC3_CONSOLE
++	if (unixnu_dwc3_init()) {
++		register_serial_functions(&unixnu_dwc3_functions);
++		uart_initted = true;
++		return 1;
++	}
++#endif
++
+ 	soc_base = pe_arm_get_soc_base_phys();
+ 
+ 	if (soc_base == 0) {
+diff --git a/pexpert/pexpert/arm64/BCM2837.h b/pexpert/pexpert/arm64/BCM2837.h
+new file mode 100644
+index 0000000..61afb61
+--- /dev/null
++++ b/pexpert/pexpert/arm64/BCM2837.h
+@@ -0,0 +1,72 @@
++/*
++ * Copyright (c) 2016 Apple Inc. All rights reserved.
++ */
++
++#ifndef _PEXPERT_ARM_BCM2837_H
++#define _PEXPERT_ARM_BCM2837_H
++
++#define NO_MONITOR 1
++#define NO_ECORE 1
++
++#define BCM2837
++#define BCM2837_BRINGUP
++#define ARM_ARCH_TIMER
++
++#define __ARM_ARCH__              8
++#define __ARM_VMSA__              8
++#define __ARM_VFP__               4
++#define __ARM_COHERENT_CACHE__    1
++#define __ARM_DEBUG__             7
++#define __ARM64_PMAP_SUBPAGE_L1__ 1
++
++/* Explicit native ARMv8.1+ bring-up; the original A53 target has no PAN. */
++#if defined(XNU_NATIVE_PAN) && XNU_NATIVE_PAN
++#define __ARM_PAN_AVAILABLE__      1
++#endif
++
++#ifndef ASSEMBLER
++
++#define PI3_UART
++
++#define PI3_BREAK                               asm volatile("brk #0");
++
++#define BCM2837_GPFSEL0_V               (pi3_gpio_base_vaddr + 0x0)
++#define BCM2837_GPSET0_V                (pi3_gpio_base_vaddr + 0x1C)
++#define BCM2837_GPCLR0_V                (pi3_gpio_base_vaddr + 0x28)
++#define BCM2837_GPPUD_V                 (pi3_gpio_base_vaddr + 0x94)
++#define BCM2837_GPPUDCLK0_V             (pi3_gpio_base_vaddr + 0x98)
++
++#define BCM2837_FSEL_INPUT              0x0
++#define BCM2837_FSEL_OUTPUT             0x1
++#define BCM2837_FSEL_ALT0               0x4
++#define BCM2837_FSEL_ALT1               0x5
++#define BCM2837_FSEL_ALT2               0x6
++#define BCM2837_FSEL_ALT3               0x7
++#define BCM2837_FSEL_ALT4               0x3
++#define BCM2837_FSEL_ALT5               0x2
++
++#define BCM2837_FSEL_NFUNCS             54
++#define BCM2837_FSEL_REG(func)          (BCM2837_GPFSEL0_V + (4 * ((func) / 10)))
++#define BCM2837_FSEL_OFFS(func)         (((func) % 10) * 3)
++#define BCM2837_FSEL_MASK(func)         (0x7 << BCM2837_FSEL_OFFS(func))
++
++#define BCM2837_AUX_ENABLES_V           (pi3_aux_base_vaddr + 0x4)
++#define BCM2837_AUX_MU_IO_REG_V         (pi3_aux_base_vaddr + 0x40)
++#define BCM2837_AUX_MU_IER_REG_V        (pi3_aux_base_vaddr + 0x44)
++#define BCM2837_AUX_MU_IIR_REG_V        (pi3_aux_base_vaddr + 0x48)
++#define BCM2837_AUX_MU_LCR_REG_V        (pi3_aux_base_vaddr + 0x4C)
++#define BCM2837_AUX_MU_MCR_REG_V        (pi3_aux_base_vaddr + 0x50)
++#define BCM2837_AUX_MU_LSR_REG_V        (pi3_aux_base_vaddr + 0x54)
++#define BCM2837_AUX_MU_MSR_REG_V        (pi3_aux_base_vaddr + 0x58)
++#define BCM2837_AUX_MU_SCRATCH_V        (pi3_aux_base_vaddr + 0x5C)
++#define BCM2837_AUX_MU_CNTL_REG_V       (pi3_aux_base_vaddr + 0x60)
++#define BCM2837_AUX_MU_STAT_REG_V       (pi3_aux_base_vaddr + 0x64)
++#define BCM2837_AUX_MU_BAUD_REG_V       (pi3_aux_base_vaddr + 0x68)
++#define BCM2837_PUT32(addr, value) do { *((volatile uint32_t *) addr) = value; } while(0)
++#define BCM2837_GET32(addr) *((volatile uint32_t *) addr)
++
++#define PLATFORM_PANIC_LOG_PADDR        0x3c0fc000
++#define PLATFORM_PANIC_LOG_SIZE         16384        // 16kb
++#endif /* ! ASSEMBLER */
++
++#endif /* ! _PEXPERT_ARM_BCM2837_H */
+diff --git a/pexpert/pexpert/arm64/Makefile b/pexpert/pexpert/arm64/Makefile
+index 75938b5..9d094bf 100644
+--- a/pexpert/pexpert/arm64/Makefile
++++ b/pexpert/pexpert/arm64/Makefile
+@@ -33,7 +33,8 @@ PRIVATE_KERNELFILES = \
+ 	H15.h \
+ 	H16.h \
+ 	H17.h \
+-	VMAPPLE.h
++	VMAPPLE.h \
++	BCM2837.h
+ 
+ 
+ # Headers installed into System.framework/PrivateHeaders (userspace internal SDK only).
+diff --git a/pexpert/pexpert/arm64/apple_arm64_cpu.h b/pexpert/pexpert/arm64/apple_arm64_cpu.h
+index e462ede..2138af0 100644
+--- a/pexpert/pexpert/arm64/apple_arm64_cpu.h
++++ b/pexpert/pexpert/arm64/apple_arm64_cpu.h
+@@ -28,6 +28,9 @@
+ 
+ #pragma once
+ 
++/* MPIDR_CORETYPE_*, which apple_arm64_common.h includes first on Apple boards only. */
++#include <pexpert/arm64/apple_arm64_regs.h>
++
+ #if !defined(__ASSEMBLER__)
+ 
+ #include <stdbool.h>
+diff --git a/pexpert/pexpert/arm64/board_config.h b/pexpert/pexpert/arm64/board_config.h
+index 5a6cd33..1942bec 100644
+--- a/pexpert/pexpert/arm64/board_config.h
++++ b/pexpert/pexpert/arm64/board_config.h
+@@ -304,6 +304,16 @@
+ 
+ 
+ 
++#ifdef ARM64_BOARD_CONFIG_BCM2837
++#include <pexpert/arm64/BCM2837.h>
++
++#define MAX_L2_CLINE                   6
++#define MAX_CPUS                       8 /* SM8550 (sheng) and SM8350 (zeta) have eight cores */
++#define MAX_CPU_CLUSTERS               1
++
++#define NO_XNU_PLATFORM_ERROR_HANDLER  1
++#endif  /* ARM64_BOARD_CONFIG_BCM2837 */
++
+ #ifdef ARM64_BOARD_CONFIG_VMAPPLE
+ #include <pexpert/arm64/VMAPPLE.h>
+ 

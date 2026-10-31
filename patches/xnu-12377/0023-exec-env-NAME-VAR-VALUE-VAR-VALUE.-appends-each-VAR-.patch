@@ -1,10 +1,11 @@
 From b5fc7f341d8ff9cd7714b27e2da17a888effebfe Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Tue, 27 Oct 2026 12:07:31 -0400
-Subject: [PATCH] exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each VAR=VALUE
- to the environment of every executable whose file name is NAME, at exec (a
- variable for one system daemon, whose launchd job lives on the read-only
- system volume: launchctl setenv does not reach WindowServer). Verified:
+Subject: [PATCH 23/48] exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each
+ VAR=VALUE to the environment of every executable whose file name is NAME, at
+ exec (a variable for one system daemon, whose launchd job lives on the
+ read-only system volume: launchctl setenv does not reach WindowServer).
+ Verified:
  exec-env=WindowServer:MallocZeroOnFree=0,MallocDebugReport=stderr,MallocReportConfig=1
  makes WindowServer report Enable Xzone Malloc 0 (zero-on-free bincompat),
  other processes unchanged
@@ -64,6 +65,3 @@ index 8345155..af28273 100644
  	/* Save space for envv[] NULL terminator */
  	if (imgp->ip_argspace < new_ptr_size) {
  		error = E2BIG;
--- 
-2.53.0
-

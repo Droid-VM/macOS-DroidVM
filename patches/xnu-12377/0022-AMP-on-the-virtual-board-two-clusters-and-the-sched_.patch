@@ -1,11 +1,12 @@
 From 8e94e112815834a1c539c5f3c7c4177941f4e031 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Tue, 27 Oct 2026 07:57:13 -0400
-Subject: [PATCH] AMP on the virtual board: two clusters and the sched_amp
- scheduler; each CPU's cluster type comes from the device tree's cluster-type
- ('E' or 'P', from the host's vCPU capacities), not the CPU driver's boot
- cluster type; one type of core only skips the two-pset checks (verified: all
- 'P' boots with hw.nperflevels 1, EEEEEEPP with Performance 2 / Efficiency 6)
+Subject: [PATCH 22/48] AMP on the virtual board: two clusters and the
+ sched_amp scheduler; each CPU's cluster type comes from the device tree's
+ cluster-type ('E' or 'P', from the host's vCPU capacities), not the CPU
+ driver's boot cluster type; one type of core only skips the two-pset checks
+ (verified: all 'P' boots with hw.nperflevels 1, EEEEEEPP with Performance 2 /
+ Efficiency 6)
 
 ---
  osfmk/arm64/machine_routines.c       |  4 ++++
@@ -64,6 +65,3 @@ index 786abff..69f6787 100644
  
  #define NO_XNU_PLATFORM_ERROR_HANDLER  1
  #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
--- 
-2.53.0
-

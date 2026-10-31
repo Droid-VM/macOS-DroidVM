@@ -1,0 +1,43 @@
+From 13c822883d80aee1ce1fe1f932cdf318764937dc Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 17:19:00 -0400
+Subject: [PATCH 17/48] bring-up diagnostics: reboot() logs its caller;
+ exec-log=2 also logs the start of every image activation
+
+---
+ bsd/kern/kern_exec.c | 8 ++++++++
+ bsd/kern/kern_xxx.c  | 2 ++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
+index 3edad4b..8345155 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -2998,6 +2998,14 @@ exec_activate_image(struct image_params *imgp)
+ 	/* Use excpath, which contains the copyin-ed exec path */
+ 	DTRACE_PROC1(exec, uintptr_t, excpath);
+ 
++	/* UniXNU virt boards: exec-log=2 also reports the start of every activation (an exec that never returns) */
++	{
++		int value = 0;
++		if (PE_parse_boot_argn("exec-log", &value, sizeof(value)) && value >= 2) {
++			printf("exec-begin: pid %d %s path %s\n", proc_getpid(current_proc()), current_proc()->p_comm, excpath);
++		}
++	}
++
+ 	ndp = kalloc_type(struct nameidata, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+ 
+ 	NDINIT(ndp, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
+diff --git a/bsd/kern/kern_xxx.c b/bsd/kern/kern_xxx.c
+index 5626e8a..bc15c54 100644
+--- a/bsd/kern/kern_xxx.c
++++ b/bsd/kern/kern_xxx.c
+@@ -150,6 +150,8 @@ reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
+ skip_cred_check:
+ #endif
+ #endif
++	/* bring-up diagnostic: who reboots the machine (no panic string reaches the log otherwise) */
++	printf("reboot: pid %d %s opt %#x error %d%s%s\n", proc_pid(p), p->p_comm, uap->opt, error, message ? " message " : "", message ? message : "");
+ 	if (!error) {
+ 		OSBitOrAtomic(P_REBOOT, &p->p_flag);  /* No more signals for this proc */
+ 		error = reboot_kernel(uap->opt, message);

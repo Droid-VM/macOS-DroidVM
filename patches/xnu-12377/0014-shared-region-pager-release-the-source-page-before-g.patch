@@ -1,7 +1,7 @@
 From 952abb44202221a3fffaeffdadb7a2b04d0135f6 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 11:01:34 -0400
-Subject: [PATCH 8/9] shared region pager: release the source page before
+Subject: [PATCH 14/48] shared region pager: release the source page before
  gathering the rest of its 16 KiB slide page
 
 Faulting a neighbour while the source page and its placeholder in the top object were still busy
@@ -105,6 +105,3 @@ index 4d35ccc..0bafe6f 100644
  		assert(VM_PAGE_OBJECT(src_page) == src_page_object);
  		assert(src_page->vmp_busy);
  		assert(src_page_object->paging_in_progress > 0);
--- 
-2.53.0
-

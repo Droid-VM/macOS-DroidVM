@@ -1,0 +1,218 @@
+From 692af4a4d1f169c17902fe3a527a217f34422bdd Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 01:52:33 -0400
+Subject: [PATCH 27/48] k27: KPIs the macOS 27 kexts bind to (k27_compat.c)
+
+---
+ bsd/conf/files        |   1 +
+ bsd/kern/k27_compat.c | 189 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 190 insertions(+)
+ create mode 100644 bsd/kern/k27_compat.c
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 4202ae9..7a2a873 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -433,6 +433,7 @@ bsd/kern/kpi_mbuf.c			optional sockets bound-checks
+ bsd/kern/kern_sfi.c			standard
+ bsd/kern/kern_time.c			standard
+ bsd/kern/kern_trustcache.c  standard
++bsd/kern/k27_compat.c			standard
+ bsd/kern/kern_codesigning.c standard
+ bsd/kern/code_signing/txm.c standard
+ bsd/kern/code_signing/ppl.c standard
+diff --git a/bsd/kern/k27_compat.c b/bsd/kern/k27_compat.c
+new file mode 100644
+index 0000000..88428d7
+--- /dev/null
++++ b/bsd/kern/k27_compat.c
+@@ -0,0 +1,189 @@
++/*
++ * KPIs the kexts of the macOS 27.0.1 kernelcache (xnu-13432) bind to and xnu-12377 lacks. Each one is what the macOS 27 kernel
++ * does (from its disassembly, kernelcache.release.vma2 of 26A434) on top of the 12377 function it grew from; macOS has no code
++ * signing monitor, so the code directory hashes stay 20 bytes (CS_CDHASH_LEN) and the Image4 v2 calls are the 27 kernel's stubs.
++ */
++#include <sys/param.h>
++#include <sys/types.h>
++#include <os/overflow.h>
++#include <sys/ubc.h>
++#include <sys/code_signing.h>
++#include <sys/errno.h>
++#include <sys/proc.h>
++#include <sys/proc_internal.h>
++#include <sys/vnode_internal.h>
++#include <sys/codesign.h>
++#include <sys/trust_caches.h>
++#include <sys/ubc_internal.h>
++#include <kern/task.h>
++#include <kern/debug.h>
++#include <mach/vm_param.h>
++#include <libkern/section_keywords.h>
++
++/* 27 passes a code directory hash as a 64-byte buffer and its length (match/set_compilation_service_cdhash_with_length) */
++struct k27_cdhash {
++	uint8_t hash[64];
++	size_t length;
++};
++
++const uint8_t *csblob_get_cdhash_with_length(struct cs_blob *csblob, uint8_t *length);
++bool match_compilation_service_cdhash_with_length(const struct k27_cdhash *cdhash);
++void set_compilation_service_cdhash_with_length(const struct k27_cdhash *cdhash);
++void unrestrict_local_signing_cdhash_with_length(const struct k27_cdhash *cdhash);
++kern_return_t query_trust_cache_with_length(TCQueryType_t query_type, const uint8_t *cdhash, size_t length,
++    TrustCacheQueryToken_t *query_token);
++uint8_t task_get_sanitizer_config(task_t task);
++const char *vnodeop_desc_name(struct vnodeop_desc *desc);
++bool vfs_context_ignores_content_protection(vfs_context_t ctx);
++bool vfs_context_is_strict_content_protection(vfs_context_t ctx);
++typedef int (*cluster_update_range_callback_t)(vnode_t vp, off_t offset, off_t length, off_t file_size, off_t start, off_t end,
++    void *context);
++int cluster_update_range_with_callback(vnode_t vp, off_t offset, off_t length, off_t file_size,
++    cluster_update_range_callback_t callback, void *context);
++errno_t ifnet_enable_synchronous_input(void *ifp);
++void image4_v2_interface_register(const void *interface);
++int image4_v2_set_nonce_digest(void);
++int image4_v2_roll_nonce(void);
++int image4_v2_load_diavlo_root_ca(const void *a, const void *b, const void *c, const void *d);
++int image4_v2_load_local_policy(const void *a, const void *b);
++
++const uint8_t *
++csblob_get_cdhash_with_length(struct cs_blob *csblob, uint8_t *length)
++{
++	if (length) {
++		*length = CS_CDHASH_LEN;
++	}
++	return csblob_get_cdhash(csblob);
++}
++
++bool
++match_compilation_service_cdhash_with_length(const struct k27_cdhash *cdhash)
++{
++	return cdhash->length == CS_CDHASH_LEN && match_compilation_service_cdhash(cdhash->hash);
++}
++
++void
++set_compilation_service_cdhash_with_length(const struct k27_cdhash *cdhash)
++{
++	if (cdhash->length == CS_CDHASH_LEN) {
++		set_compilation_service_cdhash(cdhash->hash);
++	}
++}
++
++void
++unrestrict_local_signing_cdhash_with_length(__unused const struct k27_cdhash *cdhash)
++{
++	/* a no-op without a code signing monitor, in 27 as in unrestrict_local_signing_cdhash */
++}
++
++/* 27 hands the length to the trust cache's query-with-length when libTrustCache has one, else queries the 20-byte form */
++kern_return_t
++query_trust_cache_with_length(TCQueryType_t query_type, const uint8_t *cdhash, size_t length, TrustCacheQueryToken_t *query_token)
++{
++	if (length != CS_CDHASH_LEN) {
++		return KERN_NOT_FOUND;
++	}
++	return query_trust_cache(query_type, cdhash, query_token);
++}
++
++/* the task's sanitizer configuration byte (27's task field): none */
++uint8_t
++task_get_sanitizer_config(__unused task_t task)
++{
++	return 0;
++}
++
++const char *
++vnodeop_desc_name(struct vnodeop_desc *desc)
++{
++	return desc ? desc->vdesc_name : NULL;
++}
++
++bool
++vfs_context_ignores_content_protection(vfs_context_t ctx)
++{
++	proc_t p = ctx ? vfs_context_proc(ctx) : current_proc();
++	return p ? proc_ignores_content_protection(p) : false;
++}
++
++/* 27's per-process strict content protection policy (p_vfs_iopolicy bit 15) does not exist here */
++bool
++vfs_context_is_strict_content_protection(__unused vfs_context_t ctx)
++{
++	return false;
++}
++
++/*
++ * 27: validate, then per 64 MiB chunk of the page-rounded range ask the callback (non-zero ends it with that error) and mark the
++ * chunk's pages dirty for the cluster layer, which is cluster_update_state's internal call in 12377 (not VM-initiated).
++ */
++int
++cluster_update_range_with_callback(vnode_t vp, off_t offset, off_t length, off_t file_size, cluster_update_range_callback_t callback,
++    void *context)
++{
++	off_t end;
++
++	if (callback == NULL || offset < 0 || length < 0 || file_size < 0 || os_add_overflow(offset, length, &end) ||
++	    file_size > (off_t)(INT64_MAX - PAGE_MASK) || (off_t)round_page_64(file_size) < end) {
++		return EINVAL;
++	}
++	if (length == 0) {
++		return 0;
++	}
++	off_t start = (off_t)trunc_page_64(offset);
++	end = (off_t)round_page_64(end);
++	while (start < end) {
++		off_t stop = MIN(start + 64 * 1024 * 1024, end);
++		int error = callback(vp, offset, length, file_size, start, stop, context);
++		if (error) {
++			return error;
++		}
++		cluster_update_state(vp, start, stop, FALSE);
++		start = stop;
++	}
++	return 0;
++}
++
++/* sets the interface's synchronous input flag in 27; this kernel's input path has no such mode */
++errno_t
++ifnet_enable_synchronous_input(__unused void *ifp)
++{
++	return 0;
++}
++
++/* Image4 (the v2 kext of 27) registers its interface here; nothing in this kernel calls it yet */
++SECURITY_READ_ONLY_LATE(const void *) image4_v2_interface = NULL;
++
++void
++image4_v2_interface_register(const void *interface)
++{
++	if (image4_v2_interface) {
++		panic("image4 v2 interface already registered");
++	}
++	image4_v2_interface = interface;
++}
++
++/* 27 on macOS: no nonce, no Diavlo root, no local policy without a code signing monitor (8, or 3 for a NULL argument) */
++int
++image4_v2_set_nonce_digest(void)
++{
++	return 8;
++}
++
++int
++image4_v2_roll_nonce(void)
++{
++	return 8;
++}
++
++int
++image4_v2_load_diavlo_root_ca(const void *a, const void *b, const void *c, const void *d)
++{
++	return (a && b && c && d) ? 8 : 3;
++}
++
++int
++image4_v2_load_local_policy(const void *a, const void *b)
++{
++	return (a && b) ? 8 : 3;
++}

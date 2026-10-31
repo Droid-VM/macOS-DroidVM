@@ -1,0 +1,21 @@
+From 3cae342edf5bf6504b4b911afe6d44c6971ea908 Mon Sep 17 00:00:00 2001
+From: t <t@t>
+Date: Fri, 23 Oct 2026 08:04:54 -0400
+Subject: [PATCH 05/48] dedupe BCM2837 machine flags
+
+---
+ makedefs/MakeInc.def | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/makedefs/MakeInc.def b/makedefs/MakeInc.def
+index aee18cc..200e3c2 100644
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -94,7 +94,6 @@ MACHINE_FLAGS_ARM64_T8142 = -DARM64_BOARD_CONFIG_T8142 			-mcpu=apple-m4+memtag+
+ 
+ MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837 -march=armv8.5a+crypto
+ MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a+sme2
+-MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
+ 
+ 
+ #

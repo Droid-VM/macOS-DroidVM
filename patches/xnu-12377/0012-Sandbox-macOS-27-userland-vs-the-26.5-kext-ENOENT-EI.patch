@@ -1,7 +1,7 @@
 From acbd6d4d47c7f5fe52fc3fe3e294841f1a72e7b0 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 6/9] Sandbox: macOS 27 userland vs the 26.5 kext
+Subject: [PATCH 12/48] Sandbox: macOS 27 userland vs the 26.5 kext
  (ENOENT/EINVAL on calls 0/1/22, ENOTSUP on 1/264 are ignored under
  mac-sandbox-permissive; sandbox-call-shift boot-arg)
 
@@ -97,6 +97,3 @@ index 6dc2004..369a7e9 100644
  TUNABLE_WRITEABLE(bool, virt_mac_sandbox_permissive, "mac-sandbox-permissive", false);
  TUNABLE_WRITEABLE(bool, virt_mac_amfi_launch_permissive, "mac-amfi-launch-permissive", false);
  TUNABLE_WRITEABLE(bool, virt_mac_sandbox_skip_exec, "mac-sandbox-skip-exec", false);
--- 
-2.53.0
-

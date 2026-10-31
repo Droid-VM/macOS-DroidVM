@@ -1,0 +1,37 @@
+From 1f8206fd6328d0265f10fca4d7442594f49cca5c Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 03:52:57 -0400
+Subject: [PATCH 37/48] k27: k27-sandbox-native=1 turns mac-sandbox-permissive
+ off
+
+---
+ security/mac_base.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/security/mac_base.c b/security/mac_base.c
+index 8fadf97..eed70dc 100644
+--- a/security/mac_base.c
++++ b/security/mac_base.c
+@@ -1939,6 +1939,22 @@ TUNABLE_WRITEABLE(bool, virt_mac_sandbox_permissive, "mac-sandbox-permissive", f
+ TUNABLE_WRITEABLE(bool, virt_mac_amfi_launch_permissive, "mac-amfi-launch-permissive", false);
+ TUNABLE_WRITEABLE(bool, virt_mac_sandbox_skip_exec, "mac-sandbox-skip-exec", false);
+ 
++/*
++ * k27: k27-sandbox-native=1 turns mac-sandbox-permissive (and with it mac-sandbox-skip-exec) off again, for the 27 Sandbox kext with
++ * 27's own profiles: droidvm-app.py puts mac-sandbox-permissive=1 first on the command line and the first occurrence wins.
++ */
++static TUNABLE(bool, k27_sandbox_native, "k27-sandbox-native", false);
++
++__startup_func
++static void
++k27_sandbox_native_init(void)
++{
++	if (k27_sandbox_native) {
++		virt_mac_sandbox_permissive = false;
++	}
++}
++STARTUP(TUNABLES, STARTUP_RANK_LAST, k27_sandbox_native_init);
++
+ int
+ virt_mac_filter_slow(struct mac_policy_conf *mpc, int error)
+ {

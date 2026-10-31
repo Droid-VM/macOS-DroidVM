@@ -1,7 +1,7 @@
 From 6136ce7f19d104e2a97876aef023f71173583cb4 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sun, 25 Oct 2026 13:28:49 -0400
-Subject: [PATCH] idle: end every idle path in WFI on the virtual machine
+Subject: [PATCH 21/48] idle: end every idle path in WFI on the virtual machine
  boards, and report the idle loop's branches from pc-sample
 
 Gunyah traps WFI (the vCPU blocks and the host gets the physical core back) but runs WFE in the guest. The idle loop polls with
@@ -190,6 +190,3 @@ index aa18433..6de7c03 100644
  	/* the short waits' stacks: their tasks are named with the sampled ones */
  	struct virt_wait_stack waits[VIRT_WAIT_STACKS];
  	spl_t s = splsched();
--- 
-2.53.0
-

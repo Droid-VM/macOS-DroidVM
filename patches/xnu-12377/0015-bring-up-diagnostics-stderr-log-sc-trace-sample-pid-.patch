@@ -1,7 +1,7 @@
 From ba207d7757c23962c22ff85ca8d866d8728fdcf8 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 9/9] bring-up diagnostics: stderr-log, sc-trace, sample-pid
+Subject: [PATCH 15/48] bring-up diagnostics: stderr-log, sc-trace, sample-pid
  helpers, crash-log registers, port_crumb/port_exc breadcrumbs
 
 ---
@@ -532,6 +532,3 @@ index 1e553d6..5e60de8 100644
  }
  
  MARK_AS_FIXUP_TEXT void
--- 
-2.53.0
-

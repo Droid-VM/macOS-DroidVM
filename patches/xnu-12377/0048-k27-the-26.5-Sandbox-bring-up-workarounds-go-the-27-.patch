@@ -1,0 +1,324 @@
+From 23a75dfe18b1bec8536fa9db687a06cfa645dc98 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 12:56:57 -0400
+Subject: [PATCH 48/48] k27: the 26.5 Sandbox bring-up workarounds go; the 27
+ Sandbox kext runs with 27's profiles natively
+
+Removed: mac-sandbox-permissive (every Sandbox denial dropped by the MAC check filter, failed Sandbox calls 0/1/22/264 ignored),
+mac-sandbox-skip-exec, sandbox-call-shift/sandbox-call-first, sandbox-translate (the allow-all 198-operation profile and the skipped
+call 68), and k27-sandbox-native, which turned the permissive mode off. The boot arguments are ignored now. mac-amfi-launch-permissive
+stays. Verified without k27-sandbox-native: desktop, no crashes, the same denials as with it.
+---
+ security/mac_base.c     | 141 +---------------------------------------
+ security/mac_internal.h |  21 +-----
+ security/mac_process.c  |   2 +-
+ security/mac_vfs.c      |  20 +++---
+ 4 files changed, 15 insertions(+), 169 deletions(-)
+
+diff --git a/security/mac_base.c b/security/mac_base.c
+index eed70dc..280712d 100644
+--- a/security/mac_base.c
++++ b/security/mac_base.c
+@@ -1563,56 +1563,6 @@ mac_proc_check_mac_syscall(proc_t p, const char *target, int callnum)
+  *                !0                      Not success
+  *
+  */
+-/* bring-up: the macOS 27 userland numbers the Sandbox calls differently from the 26.5 kext (boot-arg sandbox-call-shift) */
+-extern int virt_sandbox_call_shift, virt_sandbox_call_first;
+-/* k27 (the 27 Sandbox kext takes 27's 204-operation profiles and call 68): sandbox-translate=1 brings back the 26.5 workarounds */
+-extern bool virt_sandbox_translate;
+-
+-/*
+- * Bring-up (mac-sandbox-permissive=1): macOS 27 compiles profiles for 204 operations, the 26.5 kext takes 198 ("operation count
+- * mismatch (204 vs 198)") and fails call 0 (set profile) EINVAL; the process then ran unsandboxed, and an app-sandboxed XPC service
+- * (every app extension) traps in libxpc's _xpc_objc_main ("XPC service requested sandbox, but is not sandboxed!"). The filter numbering
+- * changed too (the kext's filter switch grew from 105 to 112 cases), so the profile is not translated: the call goes on with a 26.5
+- * profile allowing every operation (one terminal node, flags 0) and the caller's container. Returns the user address of the
+- * replacement arguments (a page of the caller's map, freed after the call) or 0 to forward the call as it is.
+- */
+-#define VIRT_SANDBOX_OPS_KEXT 198
+-#define VIRT_SANDBOX_OPS_USER 204
+-
+-static mach_vm_address_t
+-virt_sandbox_allow_all_profile(proc_t p, user_addr_t arg)
+-{
+-	/* syscall_set_userland_profile's arguments: profile, its size, container, its length */
+-	uint64_t args[4];
+-	uint8_t header[16];
+-	if (!proc_is64bit(p) || copyin(arg, args, sizeof(args)) || args[1] < sizeof(header) ||
+-	    copyin((user_addr_t)args[0], header, sizeof(header)) || header[4] != VIRT_SANDBOX_OPS_USER) {
+-		return 0;
+-	}
+-	/* a 16-byte header with no tables, the operation table (2-byte entries in 8-byte units from the node base), the node */
+-	const size_t ops_end = sizeof(header) + 2 * VIRT_SANDBOX_OPS_KEXT;
+-	const size_t node = (ops_end + 7) & ~(size_t)7;
+-	uint8_t profile[node + 8];
+-	bzero(profile, sizeof(profile));
+-	profile[2] = 1;                         /* node area: one 8-byte node */
+-	profile[4] = VIRT_SANDBOX_OPS_KEXT;
+-	profile[node] = 1;                      /* terminal, no deny flags (0x1401), no modifiers */
+-
+-	mach_vm_address_t page = 0;
+-	if (mach_vm_allocate_kernel(current_map(), &page, PAGE_SIZE, VM_MAP_KERNEL_FLAGS_ANYWHERE()) != KERN_SUCCESS) {
+-		return 0;
+-	}
+-	uint64_t replaced[4] = { page + sizeof(replaced), sizeof(profile), args[2], args[3] };
+-	if (copyout(replaced, (user_addr_t)page, sizeof(replaced)) ||
+-	    copyout(profile, (user_addr_t)(page + sizeof(replaced)), sizeof(profile))) {
+-		mach_vm_deallocate(current_map(), page, PAGE_SIZE);
+-		return 0;
+-	}
+-	printf("sandbox-call: pid %d %s call 0: a %u-operation profile, applied as allow-all\n", proc_pid(p), proc_best_name(p),
+-	    header[4]);
+-	return page;
+-}
+-
+ int
+ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ {
+@@ -1634,28 +1584,6 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ 		return error;
+ 	}
+ 
+-	int virt_call = uap->call;
+-	if (virt_sandbox_call_shift && virt_call >= virt_sandbox_call_first && strcmp(target, "Sandbox") == 0) {
+-		virt_call -= virt_sandbox_call_shift;
+-	}
+-	/*
+-	 * Call 68 (syspolicyd's bastion profile registration): the 26.5 kext cannot construct the macOS 27 profile, and its
+-	 * failure path destroys it as a builtin one ("unexpected destruction of builtin profile" panic). Not forwarded.
+-	 */
+-	if (virt_mac_sandbox_permissive && virt_sandbox_translate && uap->call == 68 && strcmp(target, "Sandbox") == 0) {
+-		printf("sandbox-call: pid %d %s call 68 skipped\n", proc_pid(p), proc_best_name(p));
+-		return 0;
+-	}
+-
+-	user_addr_t virt_arg = uap->arg;
+-	mach_vm_address_t virt_allow_all = 0;
+-	if (virt_mac_sandbox_permissive && virt_sandbox_translate && uap->call == 0 && strcmp(target, "Sandbox") == 0) {
+-		virt_allow_all = virt_sandbox_allow_all_profile(p, uap->arg);
+-		if (virt_allow_all) {
+-			virt_arg = (user_addr_t)virt_allow_all;
+-		}
+-	}
+-
+ 	error = ENOPOLICY;
+ 
+ 	for (i = 0; i < mac_policy_list.staticmax; i++) {
+@@ -1667,7 +1595,7 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ 		if (strcmp(mpc->mpc_name, target) == 0 &&
+ 		    mpc->mpc_ops->mpo_policy_syscall != NULL) {
+ 			error = mpc->mpc_ops->mpo_policy_syscall(p,
+-			    virt_call, virt_arg);
++			    uap->call, uap->arg);
+ 			goto done;
+ 		}
+ 	}
+@@ -1681,7 +1609,7 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ 			if (strcmp(mpc->mpc_name, target) == 0 &&
+ 			    mpc->mpc_ops->mpo_policy_syscall != NULL) {
+ 				error = mpc->mpc_ops->mpo_policy_syscall(p,
+-				    virt_call, virt_arg);
++				    uap->call, uap->arg);
+ 				break;
+ 			}
+ 		}
+@@ -1689,35 +1617,6 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ 	}
+ 
+ done:
+-	if (virt_allow_all) {
+-		mach_vm_deallocate(current_map(), virt_allow_all, PAGE_SIZE);
+-	}
+-	/*
+-	 * Bring-up (mac-sandbox-permissive=1): a macOS daemon names its own profile in sandbox_init(); the iPadOS Sandbox kext does not
+-	 * know it: call 22 (profile lookup) answers ENOENT and the follow-up call 1 (apply) EINVAL, after which the daemon aborts. Report
+-	 * the failed Sandbox call and let the process run unsandboxed.
+-	 */
+-	if (error != 0 && virt_mac_sandbox_permissive && strcmp(target, "Sandbox") == 0) {
+-		/* calls 1 (apply) and 264 (a storage-class check dirhelper makes on the new folder, unknown to the 26.5 kext) answer ENOTSUP: "sandbox initialization failed: Operation not supported", the daemon exits 1 */
+-		bool ignore = ((error == ENOENT || error == EINVAL) && (uap->call == 0 || uap->call == 1 || uap->call == 22)) || (error == ENOTSUP && (uap->call == 1 || uap->call == 264));
+-		/* each (pid, call, error) once: cfprefsd repeats call 4 / EPERM on every preference read and floods the console */
+-		static struct { int pid, call, error; } reported[16];
+-		static unsigned int reported_next;
+-		bool seen = false;
+-		for (unsigned int r = 0; r < 16 && !seen; r++) {
+-			seen = reported[r].pid == proc_pid(p) && reported[r].call == uap->call && reported[r].error == error;
+-		}
+-		if (!seen) {
+-			reported[reported_next % 16].pid = proc_pid(p);
+-			reported[reported_next % 16].call = uap->call;
+-			reported[reported_next % 16].error = error;
+-			reported_next++;
+-			printf("sandbox-call: pid %d %s call %d error %d%s\n", proc_pid(p), proc_best_name(p), uap->call, error, ignore ? " (ignored)" : "");
+-		}
+-		if (ignore) {
+-			error = 0;
+-		}
+-	}
+ 	return error;
+ }
+ 
+@@ -1932,40 +1831,4 @@ mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __
+ 
+ #endif /* !MAC */
+ 
+-TUNABLE(int, virt_sandbox_call_shift, "sandbox-call-shift", 0);
+-TUNABLE(bool, virt_sandbox_translate, "sandbox-translate", false);
+-TUNABLE(int, virt_sandbox_call_first, "sandbox-call-first", 1);
+-TUNABLE_WRITEABLE(bool, virt_mac_sandbox_permissive, "mac-sandbox-permissive", false);
+ TUNABLE_WRITEABLE(bool, virt_mac_amfi_launch_permissive, "mac-amfi-launch-permissive", false);
+-TUNABLE_WRITEABLE(bool, virt_mac_sandbox_skip_exec, "mac-sandbox-skip-exec", false);
+-
+-/*
+- * k27: k27-sandbox-native=1 turns mac-sandbox-permissive (and with it mac-sandbox-skip-exec) off again, for the 27 Sandbox kext with
+- * 27's own profiles: droidvm-app.py puts mac-sandbox-permissive=1 first on the command line and the first occurrence wins.
+- */
+-static TUNABLE(bool, k27_sandbox_native, "k27-sandbox-native", false);
+-
+-__startup_func
+-static void
+-k27_sandbox_native_init(void)
+-{
+-	if (k27_sandbox_native) {
+-		virt_mac_sandbox_permissive = false;
+-	}
+-}
+-STARTUP(TUNABLES, STARTUP_RANK_LAST, k27_sandbox_native_init);
+-
+-int
+-virt_mac_filter_slow(struct mac_policy_conf *mpc, int error)
+-{
+-	if (mpc->mpc_name != NULL && strcmp(mpc->mpc_name, "Sandbox") == 0) {
+-		return 0;
+-	}
+-	return error;
+-}
+-
+-bool
+-virt_mac_skip_exec_hook(struct mac_policy_conf *mpc)
+-{
+-	return virt_mac_sandbox_permissive && virt_mac_sandbox_skip_exec && mpc->mpc_name != NULL && strcmp(mpc->mpc_name, "Sandbox") == 0;
+-}
+diff --git a/security/mac_internal.h b/security/mac_internal.h
+index 7789413..f0b46f6 100644
+--- a/security/mac_internal.h
++++ b/security/mac_internal.h
+@@ -261,32 +261,15 @@ enum mac_iterate_types {
+  * request.  Note that it returns its value via 'error' in the scope
+  * of the caller.
+  */
+-/*
+- * Bring-up: the Sandbox policy of the iPadOS kext set has no profiles for macOS binaries (boot-arg mac-sandbox-permissive=1),
+- * and AMFI's launch constraints name macOS launch categories (mac-amfi-launch-permissive=1). The matching policy's denials are
+- * dropped; every other policy is untouched.
+- */
+-extern bool virt_mac_sandbox_permissive;
++/* Bring-up (boot-arg mac-amfi-launch-permissive=1): AMFI's launch constraints name macOS launch categories; its denials there are dropped. */
+ extern bool virt_mac_amfi_launch_permissive;
+-extern int virt_mac_filter_slow(struct mac_policy_conf *mpc, int error);
+-extern bool virt_mac_sandbox_skip_exec;
+-/* boot-arg mac-sandbox-skip-exec=1: the iPadOS Sandbox kext kills macOS daemons in its exec hook (container upcall); leave it out of exec. */
+-extern bool virt_mac_skip_exec_hook(struct mac_policy_conf *mpc);
+-static inline int
+-virt_mac_filter(struct mac_policy_conf *mpc, int error)
+-{
+-	if (__improbable(error != 0 && virt_mac_sandbox_permissive)) {
+-		return virt_mac_filter_slow(mpc, error);
+-	}
+-	return error;
+-}
+ 
+ #define MAC_CHECK(check, args...) do {                                   \
+     error = 0;                                                           \
+     MAC_POLICY_ITERATE({                                                 \
+ 	    if (mpc->mpc_ops->mpo_ ## check != NULL) {                   \
+ 	            MAC_CHECK_CALL(check, mpc);                          \
+-	            int __step_err = virt_mac_filter(mpc, mpc->mpc_ops->mpo_ ## check (args)); \
++	            int __step_err = mpc->mpc_ops->mpo_ ## check (args);         \
+ 	            MAC_CHECK_RSLT(check, mpc);                          \
+ 	            error = mac_error_select(__step_err, error);         \
+ 	    }                                                            \
+diff --git a/security/mac_process.c b/security/mac_process.c
+index 24fa275..f86e54a 100644
+--- a/security/mac_process.c
++++ b/security/mac_process.c
+@@ -88,7 +88,7 @@ virt_mac_launch_filter(struct mac_policy_conf *mpc, int error)
+ 	if (__improbable(error != 0 && virt_mac_amfi_launch_permissive) && mpc->mpc_name != NULL && strcmp(mpc->mpc_name, "AMFI") == 0) {
+ 		return 0;
+ 	}
+-	return virt_mac_filter(mpc, error);
++	return error;
+ }
+ #include <security/mac_mach_internal.h>
+ 
+diff --git a/security/mac_vfs.c b/security/mac_vfs.c
+index 48e7f9f..9c5561d 100644
+--- a/security/mac_vfs.c
++++ b/security/mac_vfs.c
+@@ -833,8 +833,8 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
+ 			size_t spawnattrlen = 0;
+ 			void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
+ 
+-			error = mac_error_select(virt_mac_filter(mpc, hook(cred, new, vfs_context_proc(ctx), vp, offset, scriptvp,
+-			    mac_vnode_label(vp), scriptvnodelabel, execl, csflags, spawnattr, spawnattrlen, disjoint)),
++			error = mac_error_select(hook(cred, new, vfs_context_proc(ctx), vp, offset, scriptvp,
++			    mac_vnode_label(vp), scriptvnodelabel, execl, csflags, spawnattr, spawnattrlen, disjoint),
+ 			    error);
+ 		}
+ 		if (mac_policy_list_conditional_busy() != 0) {
+@@ -852,8 +852,8 @@ mac_cred_label_update_execve(vfs_context_t ctx, kauth_cred_t new, struct vnode *
+ 				size_t spawnattrlen = 0;
+ 				void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
+ 
+-				error = mac_error_select(virt_mac_filter(mpc, hook(cred, new, vfs_context_proc(ctx), vp, offset, scriptvp,
+-				    mac_vnode_label(vp), scriptvnodelabel, execl, csflags, spawnattr, spawnattrlen, disjoint)),
++				error = mac_error_select(hook(cred, new, vfs_context_proc(ctx), vp, offset, scriptvp,
++				    mac_vnode_label(vp), scriptvnodelabel, execl, csflags, spawnattr, spawnattrlen, disjoint),
+ 				    error);
+ 			}
+ 			mac_policy_list_unbusy();
+@@ -904,7 +904,7 @@ mac_cred_check_label_update_execve(vfs_context_t ctx, struct vnode *vp, off_t of
+ 			size_t spawnattrlen = 0;
+ 			void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
+ 
+-			result = result || (!virt_mac_skip_exec_hook(mpc) && hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen));
++			result = result || hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
+ 		}
+ 		if (mac_policy_list_conditional_busy() != 0) {
+ 			for (; i <= mac_policy_list.maxindex; i++) {
+@@ -921,7 +921,7 @@ mac_cred_check_label_update_execve(vfs_context_t ctx, struct vnode *vp, off_t of
+ 				size_t spawnattrlen = 0;
+ 				void *spawnattr = exec_spawnattr_getmacpolicyinfo(macextensions, mpc->mpc_name, &spawnattrlen);
+ 
+-				result = result || (!virt_mac_skip_exec_hook(mpc) && hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen));
++				result = result || hook(cred, vp, offset, scriptvp, mac_vnode_label(vp), scriptvnodelabel, execlabel, p, spawnattr, spawnattrlen);
+ 			}
+ 			mac_policy_list_unbusy();
+ 		}
+@@ -1256,10 +1256,10 @@ mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
+ 			void *spawnattr = exec_spawnattr_getmacpolicyinfo(&imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen);
+ 
+ 			error = mac_error_select(
+-				virt_mac_filter(mpc, virt_mac_skip_exec_hook(mpc) ? 0 : hook(cred,
++				hook(cred,
+ 				vp, imgp->ip_scriptvp, mac_vnode_label(vp), imgp->ip_scriptlabelp,
+ 				imgp->ip_execlabelp, &imgp->ip_ndp->ni_cnd, &imgp->ip_csflags,
+-				spawnattr, spawnattrlen)), error);
++				spawnattr, spawnattrlen), error);
+ 		}
+ 		if (mac_policy_list_conditional_busy() != 0) {
+ 			for (; i <= mac_policy_list.maxindex; i++) {
+@@ -1277,10 +1277,10 @@ mac_vnode_check_exec(vfs_context_t ctx, struct vnode *vp,
+ 				void *spawnattr = exec_spawnattr_getmacpolicyinfo(&imgp->ip_px_smpx, mpc->mpc_name, &spawnattrlen);
+ 
+ 				error = mac_error_select(
+-					virt_mac_filter(mpc, virt_mac_skip_exec_hook(mpc) ? 0 : hook(cred,
++					hook(cred,
+ 					vp, imgp->ip_scriptvp, mac_vnode_label(vp), imgp->ip_scriptlabelp,
+ 					imgp->ip_execlabelp, &imgp->ip_ndp->ni_cnd, &imgp->ip_csflags,
+-					spawnattr, spawnattrlen)), error);
++					spawnattr, spawnattrlen), error);
+ 			}
+ 			mac_policy_list_unbusy();
+ 		}

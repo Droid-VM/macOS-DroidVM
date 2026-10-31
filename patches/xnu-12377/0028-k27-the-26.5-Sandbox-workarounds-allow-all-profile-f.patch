@@ -1,0 +1,48 @@
+From 15f7877b228a558e9ba37b64dee8262cec6cb8e7 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 01:52:49 -0400
+Subject: [PATCH 28/48] k27: the 26.5 Sandbox workarounds (allow-all profile
+ for 204 operations, call 68 skipped) only with sandbox-translate=1
+
+---
+ security/mac_base.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/security/mac_base.c b/security/mac_base.c
+index 07241a9..8fadf97 100644
+--- a/security/mac_base.c
++++ b/security/mac_base.c
+@@ -1565,6 +1565,8 @@ mac_proc_check_mac_syscall(proc_t p, const char *target, int callnum)
+  */
+ /* bring-up: the macOS 27 userland numbers the Sandbox calls differently from the 26.5 kext (boot-arg sandbox-call-shift) */
+ extern int virt_sandbox_call_shift, virt_sandbox_call_first;
++/* k27 (the 27 Sandbox kext takes 27's 204-operation profiles and call 68): sandbox-translate=1 brings back the 26.5 workarounds */
++extern bool virt_sandbox_translate;
+ 
+ /*
+  * Bring-up (mac-sandbox-permissive=1): macOS 27 compiles profiles for 204 operations, the 26.5 kext takes 198 ("operation count
+@@ -1640,14 +1642,14 @@ __mac_syscall(proc_t p, struct __mac_syscall_args *uap, int *retv __unused)
+ 	 * Call 68 (syspolicyd's bastion profile registration): the 26.5 kext cannot construct the macOS 27 profile, and its
+ 	 * failure path destroys it as a builtin one ("unexpected destruction of builtin profile" panic). Not forwarded.
+ 	 */
+-	if (virt_mac_sandbox_permissive && uap->call == 68 && strcmp(target, "Sandbox") == 0) {
++	if (virt_mac_sandbox_permissive && virt_sandbox_translate && uap->call == 68 && strcmp(target, "Sandbox") == 0) {
+ 		printf("sandbox-call: pid %d %s call 68 skipped\n", proc_pid(p), proc_best_name(p));
+ 		return 0;
+ 	}
+ 
+ 	user_addr_t virt_arg = uap->arg;
+ 	mach_vm_address_t virt_allow_all = 0;
+-	if (virt_mac_sandbox_permissive && uap->call == 0 && strcmp(target, "Sandbox") == 0) {
++	if (virt_mac_sandbox_permissive && virt_sandbox_translate && uap->call == 0 && strcmp(target, "Sandbox") == 0) {
+ 		virt_allow_all = virt_sandbox_allow_all_profile(p, uap->arg);
+ 		if (virt_allow_all) {
+ 			virt_arg = (user_addr_t)virt_allow_all;
+@@ -1931,6 +1933,7 @@ mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __
+ #endif /* !MAC */
+ 
+ TUNABLE(int, virt_sandbox_call_shift, "sandbox-call-shift", 0);
++TUNABLE(bool, virt_sandbox_translate, "sandbox-translate", false);
+ TUNABLE(int, virt_sandbox_call_first, "sandbox-call-first", 1);
+ TUNABLE_WRITEABLE(bool, virt_mac_sandbox_permissive, "mac-sandbox-permissive", false);
+ TUNABLE_WRITEABLE(bool, virt_mac_amfi_launch_permissive, "mac-amfi-launch-permissive", false);
