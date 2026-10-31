@@ -125,6 +125,13 @@ LOCAL_EDITS = [
       mesa_loge("NativeAdreno: retired BO collection failed (%d)", result);
    return result;
 '''),
+    # The kernel reports cached coherent memory (DroidVMGpu with droidvm-gpu-wc=0 on an IO-coherent host import): its BOs are the
+    # guest's cacheable pages, which the GPU maps write-back coherent, so the CPU maps them write-back too (the default cache mode)
+    # instead of write-combined, a mismatched alias of the same pages.
+    ('tu_knl_darwin.cc', '''   uint32_t options = (placed_addr ? 0 : kIOMapAnywhere) | kIOMapWriteCombineCache;
+''', '''   uint32_t options = (placed_addr ? 0 : kIOMapAnywhere) |
+                      (dev->physical_device->has_cached_coherent_memory ? kIOMapDefaultCache : kIOMapWriteCombineCache);
+'''),
     # An image over host allocations (VK_EXT_external_memory_host) binds at an offset of the allocation like any image: only an image
     # for export or import of a buffer object asks its own allocation. metal2vulkan's textures over IOSurfaces and no-copy buffers (each
     # imported as one host allocation) were refused their linear images for asking one, and became shadows copied in before each pass

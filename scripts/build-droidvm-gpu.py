@@ -127,6 +127,18 @@ views = 'enum {MaxViews=1024};'
 if publish.count(views) != 1:
     sys.exit(f'{scope["staged"]}: the view cache changed')
 publish = publish.replace(views, 'enum {MaxViews=4096};   /* NativeAdrenoClientMaxObjects (build-droidvm-gpu.py raises it) */')
+# removeMappingForDescriptor hands back a retained map, which dropViews never released: the user PTEs outlived clientClose. An exiting
+# task closes its connections before its address space goes (task_terminate_internal: ipc_space_terminate, then the map), so releaseAll
+# freed BO pages a user mapping still held and pmap_assert_free panicked the exit. The pool hid it (its pages never go back to the VM);
+# without one (droidvm-gpu-pool-mib=0) the first exit of a GPU client panicked, a frozen guest on screen.
+leak = '        while(removeMappingForDescriptor(view))native_adreno_metal_diag.forced_unmaps=native_adreno_metal_diag.forced_unmaps+1;\n'
+if publish.count(leak) != 1:
+    sys.exit(f'{scope["staged"]}: dropViews changed')
+publish = publish.replace(leak,
+    '        while(IOMemoryMap *map=removeMappingForDescriptor(view)) {   /* build-droidvm-gpu.py: unmap and drop the retained map */\n'
+    '            map->unmap();map->release();\n'
+    '            native_adreno_metal_diag.forced_unmaps=native_adreno_metal_diag.forced_unmaps+1;\n'
+    '        }\n')
 for header, old, new in [(adreno / 'NativeAdrenoVm.h', 'NativeAdrenoVmMaxObjects=1024}', 'NativeAdrenoVmMaxObjects=8192}'),
                          (adreno / 'NativeAdrenoUserClient.h', 'NativeAdrenoClientMaxObjects=1024,', 'NativeAdrenoClientMaxObjects=4096,')]:
     text = header.read_text()
@@ -204,6 +216,34 @@ for old, new in [('Binding *gBindings;   // NativeAdrenoVm::attach allocates it\
     if board.count(old) != 1:
         sys.exit('kits/droidvm/DroidVMGpu.cpp: the mapping lookups changed: ' + old[:60])
     board = board.replace(old, new)
+# Without the pool (droidvm-gpu-pool-mib=0, every BO imported on its own): whether the host's KGSL imports guest pages IO-coherent
+# was only learned from the pool's import. A page of its own asks it now. And with write combining off (droidvm-gpu-wc=0) the GPU's
+# own BOs are cacheable on the CPU side too, so the GPU maps them write-back coherent as it does imports (NativeAdrenoUserClient.cpp)
+# and the device reports cached coherent memory, which Turnip maps write-back (build-turnip-macos.py) instead of write-combined.
+for old, new in [
+        ('    native_adreno_io_coherent = gPoolObject && gPoolCoherent ? 1 : 0;\n',
+         '    native_adreno_io_coherent = gPoolObject && gPoolCoherent ? 1 : 0;\n'
+         '    if (!gPoolObject) {\n'
+         '        NativeAdrenoMemory probe;\n'
+         '        if (!probe.allocate(4096, output_bits, true, 4096, false) && probe.spanCount() == 1) {\n'
+         '            const droidvm_gpu_range range = {probe.spans()[0].physical, 4096};\n'
+         '            uint32_t object = 0;\n'
+         '            bool coherent = false;\n'
+         '            if (!importRanges(&range, 1, DROIDVM_GPU_IMPORT_COHERENT, &object, &coherent)) {\n'
+         '                (void)freeObject(object);\n'
+         '                native_adreno_io_coherent = coherent ? 1 : 0;\n'
+         '            }\n'
+         '        }\n'
+         '        (void)probe.release();\n'
+         '        IOLog("droidvm-gpu: without a pool, imports are %s; BOs %s\\n", native_adreno_io_coherent ? "IO-coherent" : "not coherent",\n'
+         '              native_adreno_wc_enabled ? "write-combined" : "cacheable");\n'
+         '    }\n'),
+        ('info.highest_bank_bit ? info.highest_bank_bit : 16, 6, 1, 4, NativeAdrenoDeviceClientIova, 0};\n',
+         'info.highest_bank_bit ? info.highest_bank_bit : 16, 6, 1, 4,\n'
+         '                   uint32_t(NativeAdrenoDeviceClientIova | (!native_adreno_wc_enabled && native_adreno_io_coherent ? NativeAdrenoDeviceCachedCoherent : 0)), 0};\n')]:
+    if board.count(old) != 1:
+        sys.exit('kits/droidvm/DroidVMGpu.cpp: the coherence setup changed: ' + old[:60])
+    board = board.replace(old, new)
 staged_board = scope['staged'].parent / 'DroidVMGpu.cpp'
 staged_board.write_text(board)
 # Bring-up: memory pinned outside the pool, in bytes live: [0] imported (the owners' pages, wired while the GPU maps them), [1] allocated
@@ -225,6 +265,128 @@ for old, new in [('extern "C" {volatile uint32_t native_adreno_pool_stats[8];}',
     if memory.count(old) != 1:
         sys.exit('NativeAdrenoMemory.cpp: the pinned-memory accounting no longer applies: ' + old[:60])
     memory = memory.replace(old, new)
+# An allocation the pool cannot hold falls back to IOBufferMemoryDescriptor with the GPU's physical mask, which XNU serves through
+# vm_page_find_contiguous: with the guest's memory fragmented each 64 MiB request scanned all 1.2 million pages, ran zone_gc and
+# found none, and the icon agent's first login retried one five times a second (the whole guest stalled). A BO that need not be
+# contiguous takes any pages there (no physical mask, so no contiguous search); a contiguous fallback that failed refuses the same
+# size or larger at once for two seconds, one that succeeds at that size again ending it. Only contiguous ones: a large BO tries a
+# contiguous run first (NativeAdrenoUserClient prefer_contiguous) and then scattered pages, which the backoff must not refuse.
+old = ('    descriptor_=IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,options,bytes,(limit-1)&~UINT64_C(4095));\n'
+       '    if(!descriptor_)return kIOReturnNoMemory;\n')
+if memory.count(old) != 1:
+    sys.exit('NativeAdrenoMemory.cpp: the allocation fallback changed')
+memory = memory.replace(old,
+    '    static uint64_t fallback_failed_at,fallback_failed_bytes;   /* build-droidvm-gpu.py: back off a failing fallback */\n'
+    '    const uint64_t fallback_now=mach_absolute_time();\n'
+    '    uint64_t fallback_backoff=0;nanoseconds_to_absolutetime(2000000000ull,&fallback_backoff);\n'
+    '    if(contiguous && native_adreno_pool_only)return kIOReturnNoMemory;   /* a contiguous run preferred, not required: from the pool or none */\n'
+    '    if(contiguous && fallback_failed_bytes && bytes>=fallback_failed_bytes && fallback_now-fallback_failed_at<fallback_backoff)return kIOReturnNoMemory;\n'
+    '    /* A BO that need not be contiguous takes any pages (the loop below still refuses one past the GPU\'s reach). */\n'
+    '    descriptor_=contiguous?IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,options,bytes,(limit-1)&~UINT64_C(4095)):\n'
+    '        IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,options,bytes,4096);\n'
+    '    if(!descriptor_) {\n'
+    '        if(contiguous) {\n'
+    '            if(!fallback_failed_bytes || bytes<fallback_failed_bytes || fallback_now-fallback_failed_at>=fallback_backoff)fallback_failed_bytes=bytes;\n'
+    '            fallback_failed_at=fallback_now;\n'
+    '        }\n'
+    '        return kIOReturnNoMemory;\n'
+    '    }\n'
+    '    if(contiguous && bytes>=fallback_failed_bytes)fallback_failed_bytes=0;\n')
+memory = memory.replace('#include <kern/task.h>\n', '#include <kern/task.h>\n#include <kern/clock.h>\n', 1)
+# User BOs outside the pool take pages from the VM with no kernel mapping (when the CPU views are not write-combined). An
+# IOBufferMemoryDescriptor maps its buffer into the kernel's DATA_SHARED range, 1.5 GiB for every kext: without a pool the GPU's
+# kernel tag peaked at 973 MiB at a first login, kmem_alloc_guard answered KERN_NO_SPACE even for 4 MiB with physical memory to
+# spare, WindowServer asserted on the refused textures and the session went back to the lock screen. The GPU reaches the pages
+# through their spans, the client through its physical-range view; the kernel cleans and invalidates them through the physical
+# aperture (maintainImported), and zeroes them as it hands them out (KMA_ZERO).
+header = adreno / 'NativeAdrenoMemory.h'
+text = header.read_text()
+for old, new in [('    void *mapping_=nullptr;\n', '    void *mapping_=nullptr;\n    void *pages_=nullptr;   /* vm_page list of an unmapped BO (allocateUnmapped) */\n'),
+                 ('    IOReturn maintainImported(size_t offset,size_t bytes,NativeAdrenoCacheOperation);\n',
+                  '    IOReturn maintainImported(size_t offset,size_t bytes,NativeAdrenoCacheOperation);\n'
+                  '    IOReturn allocateUnmapped(size_t bytes,uint64_t limit);\n'),
+                 ('    bool backed() const {return descriptor_ || imported_ || pooled_;}\n',
+                  '    bool backed() const {return descriptor_ || imported_ || pooled_ || pages_;}\n')]:
+    if text.count(new) != 1:   # the export is kept between runs: an earlier run's edit stays
+        if text.count(old) != 1:
+            sys.exit(f'{header}: {old.strip()} changed')
+        text = text.replace(old, new)
+header.write_text(text)
+for old, new in [
+    # the scattered path of a user BO, after the pool had no room
+    ('    IOOptionBits options=static_cast<IOOptionBits>(kIODirectionInOut)|static_cast<IOOptionBits>(kIOMemoryMapperNone);\n',
+     '    if(pooled && !contiguous && !native_adreno_wc_enabled)return allocateUnmapped(bytes,limit);\n'
+     '    IOOptionBits options=static_cast<IOOptionBits>(kIODirectionInOut)|static_cast<IOOptionBits>(kIOMemoryMapperNone);\n'),
+    ('    if(descriptor_) {\n        if(prepared_) {\n            native_adreno_trace_stage=31;\n',
+     '    if(pages_) {\n'
+     '        vm_page_free_list(static_cast<vm_page_t>(pages_),false);pages_=nullptr;\n'
+     '        if(prepared_) {prepared_=false;native_adreno_pinned_bytes[1]=native_adreno_pinned_bytes[1]-bytes_;}\n'
+     '    }\n'
+     '    if(descriptor_) {\n        if(prepared_) {\n            native_adreno_trace_stage=31;\n'),
+    ('    if(imported_)return maintainImported(offset,bytes,writes?NativeAdrenoCleanInvalidate:NativeAdrenoClean);\n',
+     '    if(imported_ || pages_)return maintainImported(offset,bytes,writes?NativeAdrenoCleanInvalidate:NativeAdrenoClean);\n'),
+    ('    if(imported_)return maintainImported(offset,bytes,NativeAdrenoCleanInvalidate);\n',
+     '    if(imported_ || pages_)return maintainImported(offset,bytes,NativeAdrenoCleanInvalidate);\n'),
+    ('IOReturn NativeAdrenoMemory::makeWriteCombined()\n',
+     'IOReturn NativeAdrenoMemory::allocateUnmapped(size_t bytes,uint64_t limit)\n'
+     '{\n'
+     '    vm_page_t list=nullptr;\n'
+     '    if(vm_page_alloc_list(bytes/4096,0x80 /* KMA_ZERO */,&list)!=KERN_SUCCESS)return kIOReturnNoMemory;\n'
+     '    pages_=list;bytes_=bytes;prepared_=true;\n'
+     '    native_adreno_pinned_bytes[1]=native_adreno_pinned_bytes[1]+bytes;\n'
+     '    IOReturn status=kIOReturnNoMemory;\n'
+     '    span_capacity_=bytes/4096;\n'
+     '    spans_=IONewData(NativeAdrenoPhysicalSpan,span_capacity_);\n'
+     '    if(!spans_)goto failed;\n'
+     '    {\n'
+     '        size_t offset=0;\n'
+     '        for(vm_page_t page=list;page;page=*reinterpret_cast<vm_page_t *>(page),offset+=4096) {   /* vmp_snext, the first word */\n'
+     '            const uint64_t physical=uint64_t(vm_page_get_phys_page(page))<<12;\n'
+     '            if(offset>=bytes || !physical || physical>=limit || 4096>limit-physical) {status=kIOReturnUnsupported;goto failed;}\n'
+     '            if(span_count_ && physical==spans_[span_count_-1].physical+spans_[span_count_-1].bytes)spans_[span_count_-1].bytes+=4096;\n'
+     '            else spans_[span_count_++]={offset,physical,4096};\n'
+     '        }\n'
+     '        if(offset!=bytes) {status=kIOReturnInternalError;goto failed;}\n'
+     '    }\n'
+     '    /* The zeroes went through the cacheable aperture: to the point of coherency before a device that does not snoop sees them. */\n'
+     '    status=maintainImported(0,bytes,NativeAdrenoClean);\n'
+     '    if(status)goto failed;\n'
+     '    native_adreno_pool_stats[5]=native_adreno_pool_stats[5]+1;native_adreno_pool_stats[6]=native_adreno_pool_stats[6]+(uint32_t)span_count_;\n'
+     '    return kIOReturnSuccess;\n'
+     'failed:\n'
+     '    (void)release();return status;\n'
+     '}\n'
+     'IOReturn NativeAdrenoMemory::makeWriteCombined()\n'),
+    ('#include <kern/clock.h>\n',
+     '#include <kern/clock.h>\n'
+     'extern "C" {\n'
+     'extern volatile uint32_t native_adreno_wc_enabled;\n'
+     '/* XNU\'s own page allocator (vm_pageout_xnu.h): wired pages in no object, linked through vmp_snext; vm_page_free_list(list, false) takes them back. */\n'
+     'typedef struct vm_page *vm_page_t;\n'
+     'kern_return_t vm_page_alloc_list(vm_size_t page_count,uint32_t kma_flags,vm_page_t *list);\n'
+     'void vm_page_free_list(vm_page_t list,bool prepare_object);\n'
+     'ppnum_t vm_page_get_phys_page(vm_page_t page);\n'
+     '}\n')]:
+    if memory.count(old) != 1:
+        sys.exit(f'NativeAdrenoMemory.cpp: {old.strip()[:60]} changed')
+    memory = memory.replace(old, new)
+memory = memory.replace('extern "C" {volatile uint32_t native_adreno_pool_stats[8];',
+                        'extern "C" {bool native_adreno_pool_only;}   /* set around a preferred contiguous try (NativeAdrenoUserClient.cpp) */\n'
+                        'extern "C" {volatile uint32_t native_adreno_pool_stats[8];', 1)
+# A large BO that need not be contiguous tries one contiguous run first (fewer GPU spans) and then scattered pages. That first try
+# takes the pool's run only: outside the pool it was the contiguous search above, which with the pool full ran every two seconds.
+client = scope.get('staged_client', adreno / 'NativeAdrenoUserClient.cpp').read_text()
+old = '        status=entry->memory.allocate((size_t)request->bytes,output_bits_,true,(size_t)request->bytes,true);\n'
+if client.count(old) != 1:
+    sys.exit('NativeAdrenoUserClient.cpp: the preferred contiguous try changed')
+client = client.replace(old, '        native_adreno_pool_only=true;\n' + old + '        native_adreno_pool_only=false;\n')
+client = 'extern "C" {extern bool native_adreno_pool_only;}\n' + client
+old = '    const bool coherent=entry->memory.imported() && native_adreno_io_coherent;\n'
+if client.count(old) != 1:
+    sys.exit('NativeAdrenoUserClient.cpp: the coherent mapping test changed')
+client = client.replace(old, '    const bool coherent=(entry->memory.imported() || !native_adreno_wc_enabled) && native_adreno_io_coherent;\n')
+scope['staged_client'] = scope['staged'].parent / 'NativeAdrenoUserClient.cpp'
+scope['staged_client'].write_text(client)
 staged_memory = scope['staged'].parent / 'NativeAdrenoMemory.cpp'
 staged_memory.write_text(memory)
 publish = publish.replace('extern "C" volatile uint32_t native_adreno_pool_stats[8];   // [3] pool MiB used, [4] its peak\n',
