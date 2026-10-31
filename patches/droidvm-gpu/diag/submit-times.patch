@@ -1,0 +1,66 @@
+Diagnostics (DROIDVM_GPU_SUBMIT_TIMES=1, research/debug-2026-10-28): where a submission's kernel call goes, logged every 2000 of them in
+microseconds a submission: hold (validate, retire, hold the BOs), wc (write-combine re-assertion and audit), publish (cache maintenance,
+TLB), peek (the IB log), ring (the host round trip), and the slowest round trip. On top of patches/droidvm-gpu/NativeAdreno.
+
+--- a/NativeAdrenoSubmit.cpp
++++ b/NativeAdrenoSubmit.cpp
+@@ -2,6 +2,8 @@
+ #include "NativeAdrenoSubmit.h"
+ #include "AdrenoPM4.h"
+ #include <IOKit/IOLib.h>
++#include <kern/clock.h>
++static uint64_t gSubmitTimes[7];   // submissions, then the phases' and the slowest round trip's ticks
+ 
+ /* CP_INDIRECT_BUFFER is opcode 0x3f with a 3-word payload: 64-bit GPU address
+  * and IB_SIZE in dwords (bits 0..19), exactly as the pinned adreno_pm4.xml
+@@ -101,6 +103,7 @@
+         for(size_t j=0;j<handle_count;++j)if(handles[j]==buffer.handle) {known=true;break;}
+         if(!known)handles[handle_count++]=buffer.handle;
+     }
++    const uint64_t t0=mach_absolute_time();
+     for(auto &done:jobs_)
+         if(done.active && ring_->completedFence()-done.fence<0x80000000u) {
+             const IOReturn status=release(done);
+@@ -122,6 +125,7 @@
+         }
+         ++stats_.references_held;
+     }
++    const uint64_t t1=mach_absolute_time();
+     uint32_t value=0;
+     /* int-070: the first IB word as the kernel's cacheable alias and DRAM see it before any maintenance, then DRAM after the CPU
+      * caches over every mapped BO are cleaned and invalidated. The board shows the last submission's record on a stall. */
+@@ -160,6 +164,7 @@
+             native_adreno_wc_distrusted=native_adreno_coherence[0]+1;
+         }
+     }
++    const uint64_t t2=mach_absolute_time();
+     (void)vm_->sampleWord(buffers[0].iova,&cached,&before);
+     IOReturn status=vm_->publishMapped();
+     if(!status) {
+@@ -178,6 +183,7 @@
+         for(size_t i=0;i<handle_count;++i) {vm_->retireJobAfterCompletion(handles[i]);++stats_.references_retired;}
+         return status;
+     }
++    const uint64_t t3=mach_absolute_time();
+     {
+         const uint32_t slot=native_adreno_ib_log_count&3;uint32_t head[28];
+         (void)vm_->peekWords(buffers[0].iova,head,28);
+@@ -186,7 +192,18 @@
+         for(unsigned i=0;i<28;++i)native_adreno_ib_log[slot][4+i]=head[i];
+         native_adreno_ib_log_count=native_adreno_ib_log_count+1;
+     }
++    const uint64_t t4=mach_absolute_time();
+     status=ring_->submitFramed(words,word_count,&value);
++    {
++        const uint64_t t5=mach_absolute_time();
++        gSubmitTimes[0]++;gSubmitTimes[1]+=t1-t0;gSubmitTimes[2]+=t2-t1;gSubmitTimes[3]+=t3-t2;gSubmitTimes[4]+=t4-t3;
++        gSubmitTimes[5]+=t5-t4;if(t5-t4>gSubmitTimes[6])gSubmitTimes[6]=t5-t4;
++        if(gSubmitTimes[0]==2000) {
++            uint64_t us[6];for(unsigned i=0;i<6;i++){absolutetime_to_nanoseconds(gSubmitTimes[1+i],&us[i]);us[i]/=i<5?2000*1000/10:1000;}
++            IOLog("droidvm-gpu: submit x0.1us hold %llu wc %llu publish %llu peek %llu ring %llu, slowest ring %llu us\n",us[0],us[1],us[2],us[3],us[4],us[5]);
++            for(auto &t:gSubmitTimes)t=0;
++        }
++    }
+     if(status) {
+         /* A poisoned ring may already have consumed the WPTR write, so the
+          * referenced buffers cannot be retired here. */
