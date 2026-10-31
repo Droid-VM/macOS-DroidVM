@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       device:
-        description: device repository (sheng = upstream UniXNU-sheng, droidvm = device/UniXNU-droidvm of this repo)
-        default: droidvm
+        description: device repository (sheng = upstream UniXNU-sheng)
+        default: sheng
         type: choice
-        options: [droidvm, sheng]
+        options: [sheng]
       defconfig:
         description: defconfig name (empty = <device>_defconfig)
         default: ''
@@ -27,15 +27,14 @@ on:
       runner:
         description: macOS runner image
         default: macos-26
-  # Manual only: the DroidVM mainline (Droid-VM/UniXNU-droidvm) is built by mainline.yml; device/UniXNU-droidvm here is the
-  # earlier virtio-pci port, kept for reference.
+  # Manual only: the DroidVM mainline (Droid-VM/UniXNU-droidvm) is built by mainline.yml.
 
 jobs:
   kernel:
     runs-on: ${{ inputs.runner || 'macos-26' }}
     timeout-minutes: 300
     env:
-      DEVICE: ${{ inputs.device || 'droidvm' }}
+      DEVICE: ${{ inputs.device || 'sheng' }}
       UNIXNU_REF: ${{ inputs.unixnu_ref || 'fb2bb310564ce66779e472a021881cf7c5764919' }}
       SHENG_REF: ${{ inputs.sheng_ref || '7562a779ebdbdedc17c4c7274ba993acbbec8188' }}
       XCODE: ${{ inputs.xcode }}
@@ -63,16 +62,9 @@ jobs:
           git clone --filter=blob:none https://github.com/UniXNU/UniXNU.git UniXNU
           git -C UniXNU checkout "$UNIXNU_REF"
           git -C UniXNU submodule update --init --recursive --filter=blob:none
-          if [ "$DEVICE" = sheng ]; then
-            git clone --filter=blob:none https://github.com/UniXNU/UniXNU-sheng.git device
-            git -C device checkout "$SHENG_REF"
-            git -C device submodule update --init --recursive --filter=blob:none
-          else
-            cp -R ci/device/UniXNU-$DEVICE device
-            # A device patches/xnu replaces the UniXNU one as a module: carry the UniXNU patches beside ours.
-            if [ -d device/patches/xnu ]; then cp -n UniXNU/patches/xnu/*.patch device/patches/xnu/; fi
-            ls device/patches/xnu
-          fi
+          git clone --filter=blob:none https://github.com/UniXNU/UniXNU-sheng.git device
+          git -C device checkout "$SHENG_REF"
+          git -C device submodule update --init --recursive --filter=blob:none
           # Local overrides of UniXNU modules (drivers/<name>, kits/<name>, scripts/...): the same layout as UniXNU.
           if [ -d ci/local ]; then echo "UNIXNU_LOCAL=--local $PWD/ci/local" >> "$GITHUB_ENV"; fi
           git -C UniXNU log --oneline -1

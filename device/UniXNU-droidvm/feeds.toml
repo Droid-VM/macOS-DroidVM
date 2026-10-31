@@ -1,9 +1,0 @@
-# Sources of the virtual machine board, in addition to the feeds.toml of UniXNU.
-
-# Public Darwin 23 IOStorageFamily: headers for NativeVirtioBlock and the reference object of the storage audit.
-[[source]]
-name = "IOStorageFamily"
-kind = "refer"
-git = "https://github.com/apple-oss-distributions/IOStorageFamily.git"
-ref = "IOStorageFamily-315"
-commit = "e45fbe30a7879e0b16e26dddb78538f1b00e0bff"
