@@ -1,0 +1,57 @@
+Bring-up logging: WindowServer's command stream allocation failed with nothing logged, then wrote through its null pointer
+(tu_cs_reserve_space's callers ignore its result). Logs a failed BO array or BO allocation or map in tu_cs_add_bo, a GPU address the
+darwin backend could not find, and a failed retired BO collection.
+
+diff --git a/src/freedreno/vulkan/tu_cs.cc b/src/freedreno/vulkan/tu_cs.cc
+index 47e1939..5577585 100644
+--- a/src/freedreno/vulkan/tu_cs.cc
++++ b/src/freedreno/vulkan/tu_cs.cc
+@@ -155,8 +155,10 @@ tu_cs_add_bo(struct tu_cs *cs, uint32_t size)
+       uint32_t new_capacity = MAX2(4, 2 * bos->bo_capacity);
+       struct tu_bo **new_bos = (struct tu_bo **)
+          realloc(bos->bos, new_capacity * sizeof(struct tu_bo *));
+-      if (!new_bos)
++      if (!new_bos) {
++         mesa_loge("tu_cs_add_bo: %s: BO array of %u failed", cs->name, new_capacity);
+          return VK_ERROR_OUT_OF_HOST_MEMORY;
++      }
+ 
+       bos->bo_capacity = new_capacity;
+       bos->bos = new_bos;
+@@ -171,11 +173,13 @@ tu_cs_add_bo(struct tu_cs *cs, uint32_t size)
+                                               TU_BO_ALLOC_ALLOW_DUMP),
+                      cs->name);
+    if (result != VK_SUCCESS) {
++      mesa_loge("tu_cs_add_bo: %s: %u bytes failed (%d)", cs->name, size * (uint32_t)sizeof(uint32_t), result);
+       return result;
+    }
+ 
+    result = tu_bo_map(cs->device, new_bo, NULL);
+    if (result != VK_SUCCESS) {
++      mesa_loge("tu_cs_add_bo: %s: map of %u bytes failed (%d)", cs->name, size * (uint32_t)sizeof(uint32_t), result);
+       tu_bo_finish(cs->device, new_bo);
+       return result;
+    }
+diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
+index b03c6ee..291c7ae 100644
+--- a/src/freedreno/vulkan/tu_knl_darwin.cc
++++ b/src/freedreno/vulkan/tu_knl_darwin.cc
+@@ -248,6 +248,9 @@ darwin_allocate_iova(struct tu_device *dev, uint64_t size, uint64_t client_iova,
+       *iova = util_vma_heap_alloc(&dev->vma, size, os_page_size);
+    }
+    mtx_unlock(&dev->vma_mutex);
++   if (!*iova)
++      mesa_loge("NativeAdreno: no GPU address for %" PRIu64 " bytes (flags %#x, window %#" PRIx64 "+%#" PRIx64 ")", size,
++                (unsigned)flags, dev->physical_device->va_start, dev->physical_device->va_size);
+    return *iova ? VK_SUCCESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
+ }
+ 
+@@ -317,6 +320,8 @@ darwin_collect_retired(struct tu_device *dev)
+    pthread_mutex_lock(&retire->lock);
+    VkResult result = darwin_reap_locked(dev, retire);
+    pthread_mutex_unlock(&retire->lock);
++   if (result != VK_SUCCESS)
++      mesa_loge("NativeAdreno: retired BO collection failed (%d)", result);
+    return result;
+ }
+ 
