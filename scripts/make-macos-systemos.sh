@@ -10,11 +10,11 @@
 #   - the Cryptex1,SystemOS content (CRYPTEX, the raw APFS member: arm64e dyld shared cache, ...), also reachable as
 #     /System/Volumes/Preboot/Cryptexes/OS;
 #   - the read-only firmlink targets of the macOS Data template (/System/Library/Templates/Data of OS_IMAGE): assets,
-#     CoreTypes, Speech, cups, snmp; and its bulky read-only /Library parts under /System/Volumes/Data/Library, which
+#     CoreTypes, Speech, cups, snmp; and its bulky read-only /Library parts under /System/Library/DroidVMData/Library, which
 #     the Data seed links to;
-#   - private/var (the Data mount point), private/etc and private/tmp, and symbolic links in place of the writable
-#     firmlinks (/Library, /Users, /Applications, /Volumes, /cores, /opt, /usr/local, /System/Library/Caches) into
-#     /private/var/.data, which make-macos-data-seed.sh fills.
+#   - empty directories for macOS's writable firmlinks (/private, /Library, /Users, /Applications, /Volumes, /cores, /opt,
+#     /usr/local, /System/Library/Caches, /System/Volumes/Hardware) and the Data mount point /System/Volumes/Data: the k27
+#     kernel mounts the Data volume (make-macos-data-seed.sh) there and sets the firmlinks into it.
 # Sign it with make-virt-root.py like the iOS SystemOS member.
 set -euo pipefail
 APFSPROGS=$1
@@ -60,6 +60,23 @@ sudo rsync -aH --exclude='/System/Library/dyld/dyld_shared_cache_x86_64*' --excl
   "$CXM/" "$MNT/"
 sudo mkdir -p "$MNT/System/Volumes/Preboot/Cryptexes"
 sudo ln -s / "$MNT/System/Volumes/Preboot/Cryptexes/OS"
+# APP_CRYPTEX (default artifacts/TAG/app-cryptex/*.dmg beside OS_IMAGE): Cryptex1,AppOS, the raw APFS member of the IPSW (not encrypted).
+# macOS 13 and later keep Safari there: /Applications/Safari.app links to /System/Cryptexes/App/System/Applications/Safari.app, and
+# /System/Cryptexes/App to /System/Volumes/Preboot/Cryptexes/App, where a Mac mounts the cryptex. Its trust cache goes into the boot's
+# trust bundle (make-trust-bundle.py EXTRA).
+APP_CRYPTEX=${APP_CRYPTEX:-$(ls "$(dirname "$OS_IMAGE")"/app-cryptex/*.dmg 2>/dev/null | head -1)}
+if [ -n "$APP_CRYPTEX" ]; then
+  APP_LOOP=$(sudo losetup --find --show --read-only "$APP_CRYPTEX")
+  APPM=$(mktemp -d)
+  sudo mount -t apfs -o ro "$APP_LOOP" "$APPM"
+  sudo mkdir -p "$MNT/System/Volumes/Preboot/Cryptexes/App"
+  sudo rsync -aH "$APPM/" "$MNT/System/Volumes/Preboot/Cryptexes/App/"
+  sudo umount "$APPM"
+  rmdir "$APPM"
+  sudo losetup -d "$APP_LOOP"
+else
+  echo "no App cryptex (APP_CRYPTEX): Safari will be missing" >&2
+fi
 for path in System/Library/Assets System/Library/AssetsV2 System/Library/PreinstalledAssets \
             System/Library/PreinstalledAssetsV2 System/Library/Speech \
             System/Library/CoreServices/CoreTypes.bundle/Contents/Library usr/libexec/cups usr/share/snmp; do
@@ -69,22 +86,21 @@ for path in System/Library/Assets System/Library/AssetsV2 System/Library/Preinst
   fi
 done
 for path in Library/Apple "Library/Application Support/Apple" Library/Documentation Library/WebServer; do
-  sudo mkdir -p "$MNT/System/Volumes/Data/$(dirname "$path")"
-  sudo rsync -aH "$TEMPLATE/$path" "$MNT/System/Volumes/Data/$(dirname "$path")/"
+  sudo mkdir -p "$MNT/System/Library/DroidVMData/$(dirname "$path")"
+  sudo rsync -aH "$TEMPLATE/$path" "$MNT/System/Library/DroidVMData/$(dirname "$path")/"
 done
-for path in Library Users Applications Volumes cores opt usr/local System/Library/Caches; do
-  sudo mkdir -p "$MNT/$(dirname "$path")"
-  sudo ln -s "/private/var/.data/$path" "$MNT/$path"
+for path in Library Users Applications Volumes cores opt usr/local System/Library/Caches System/Volumes/Hardware System/Volumes/Data; do
+  sudo mkdir -p "$MNT/$path"
 done
+# State directories cryptexd opens with O_NOFOLLOW on the read-only root (k27/TODO.md try40-43).
+sudo mkdir -p "$MNT/System/Volumes/Preboot/com.apple.security.cryptexd/Cryptexes"
 # Bring-up shims (overlay/systemos-shims, the tree is copied over the volume): launchd's boot jobs fsck and mount-phase-1/2 do not
 # work against the iPadOS Sandbox policy and the read-only container; /sbin/mount stays reachable as mount.real.
 SHIMS=$(cd "$(dirname "$0")/.." && pwd)/overlay/systemos-shims
 sudo mkdir -p "$MNT/sbin"
 sudo install -m 755 "$OSM/sbin/mount" "$MNT/sbin/mount.real"
 sudo cp -a "$SHIMS/." "$MNT/"
-sudo mkdir -p "$MNT/private/var"
-sudo ln -s var/.data/private/etc "$MNT/private/etc"
-sudo ln -s var/tmp "$MNT/private/tmp"
+sudo mkdir -p "$MNT/private/var" "$MNT/private/etc" "$MNT/private/tmp"   # under the /private firmlink; /private/var is the OS volume's until then
 # The union does not show the OS volume's root symbolic links /var, /etc and /tmp (macOS 27: lookup of /var and /etc fails with
 # ENOENT while /private/var/... resolves; tzinit then cannot create /var/db/timezone/zoneinfo): provide them in this layer.
 sudo ln -s private/var "$MNT/var"

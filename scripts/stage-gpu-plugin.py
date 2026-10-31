@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Stage Metal plugin bundles for a boot: a copy of the Data seed with the bundles in /Library/GPUBundles (the first directory IOGPU
-searches for <MetalPluginName>.bundle; /Library is a link into the Data volume's .data, make-macos-systemos.sh), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
+searches for <MetalPluginName>.bundle; /Library is a firmlink into the Data volume, make-macos-data-seed.sh), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
 make-owner-trust-bundle.py).
 
     stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
@@ -55,36 +55,40 @@ TAG = os.environ.get('MACOS_TAG', '27.0.1')
 ARTIFACTS = ROOT / f'artifacts/{TAG}'
 OUT = ROOT / 'out/metal/stage'
 LC_CODE_SIGNATURE = 0x1d
-GPU_BUNDLES = '.data/Library/GPUBundles'
-PROBE_DIR = '.data/usr/local/libexec'                  # /usr/local is a link into .data as well
-PROBE_JOB = '.data/Library/LaunchDaemons/org.droidvm.metal-probe.plist'
-LOG_JOB = '.data/Library/LaunchDaemons/org.droidvm.log-stream.plist'
-LOG_PREFS = '.data/Library/Preferences/Logging/Subsystems'   # only --log-debug writes there
-TOP_JOB = '.data/Library/LaunchDaemons/org.droidvm.top.plist'
-RUN_JOB = '.data/Library/LaunchDaemons/org.droidvm.run.{}.plist'
-SETUP_DONE = 'db/.AppleSetupDone'                      # the Data volume is /private/var
+GPU_BUNDLES = 'Library/GPUBundles'
+PROBE_DIR = 'usr/local/libexec'                  # /usr/local is a firmlink into the Data volume as well
+PROBE_JOB = 'Library/LaunchDaemons/org.droidvm.metal-probe.plist'
+LOG_JOB = 'Library/LaunchDaemons/org.droidvm.log-stream.plist'
+LOG_PREFS = 'Library/Preferences/Logging/Subsystems'   # only --log-debug writes there
+TOP_JOB = 'Library/LaunchDaemons/org.droidvm.top.plist'
+RUN_JOB = 'Library/LaunchDaemons/org.droidvm.run.{}.plist'
+SETUP_DONE = 'private/var/db/.AppleSetupDone'
 # A new user's first login runs Setup Assistant again (its per-user panes); the managed preference skips them.
-SETUP_SKIP = '.data/Library/Managed Preferences/com.apple.SetupAssistant.managed.plist'
+SETUP_SKIP = 'Library/Managed Preferences/com.apple.SetupAssistant.managed.plist'
 # Keyboard Setup Assistant asks to identify any keyboard whose type is not known: DroidVMInput (virtio vendor 0x1af4, product 0x1052) is
 # an ANSI one (keyboard type 40), keyed "product-vendor-0".
-KEYBOARD_TYPE = '.data/Library/Preferences/com.apple.keyboardtype.plist'
+KEYBOARD_TYPE = 'Library/Preferences/com.apple.keyboardtype.plist'
 # --reduce-transparency: Accessibility's Reduce transparency as a managed preference (the computer's, and --user's), which holds before
 # the user's home exists. Not shown to change a window drag yet: kc254 drew the same 53 passes a frame as kc253 (22% fewer draws).
-MANAGED_PREFS = '.data/Library/Managed Preferences'
+MANAGED_PREFS = 'Library/Managed Preferences'
 # --user's home: loginwindow would make it on the first login, and then the new account runs Setup Assistant's MiniBuddy (MiniLauncherPlugin
 # sets MiniBuddyLaunch), which with every pane skipped never finishes, so loginwindow never launches the workspace (Dock, Finder,
 # SystemUIServer). A home with .skipbuddy in it before that login skips MiniBuddy. createhomedir copies the user template but cannot
-# give it to the user: /Users is a symbolic link here (a firmlink on a Mac) and it opens the copies without following links (ELOOP).
-USER_HOME_JOB = '.data/Library/LaunchDaemons/org.droidvm.user-home.plist'
+# give it to the user when /Users is a symbolic link (the 23G93 layout; k27 has a firmlink) and it opens the copies without following links (ELOOP).
+USER_HOME_JOB = 'Library/LaunchDaemons/org.droidvm.user-home.plist'
+# The Data template's relative links climb out of the firmlinked directories to the volume's root:
+# Applications/Safari.app -> ../System/Cryptexes/App/System/Applications/Safari.app. This takes them to the cryptexes (as
+# make-macos-data-seed.sh does for a new seed; an older seed lacks it).
+CRYPTEXES_LINK = 'System/Cryptexes'
 SETUP_SKIP_ITEMS = ['Accessibility', 'AdditionalPrivacySettings', 'Appearance', 'AppleID', 'AppStore', 'Biometric', 'Diagnostics',
                     'DisplayTone', 'EnableLockdownMode', 'FileVault', 'iCloudDiagnostics', 'iCloudStorage', 'Intelligence', 'Location',
                     'OSShowcase', 'Privacy', 'Restore', 'Safety', 'ScreenTime', 'Siri', 'SoftwareUpdate', 'TermsOfAddress', 'TextSize',
                     'TOS', 'TouchIDPrompt', 'UnlockWithWatch', 'Wallpaper', 'Welcome']
-LAUNCHD_DISABLED = 'db/com.apple.xpc.launchd/disabled.plist'
+LAUNCHD_DISABLED = 'private/var/db/com.apple.xpc.launchd/disabled.plist'
 # MobileGestalt's answers are cached on the Data volume: an ADT change (vmm-present, artwork-display-gamut) reaches IsVirtualDevice
 # or HasExtendedColorDisplay only once the cache is gone, so it is removed from every seed.
-MOBILEGESTALT_CACHE = 'containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist'
-DSLOCAL = 'db/dslocal/nodes/Default'
+MOBILEGESTALT_CACHE = 'private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobilegestaltcache/Library/Caches/com.apple.MobileGestalt.plist'
+DSLOCAL = 'private/var/db/dslocal/nodes/Default'
 
 
 def add_user(dslocal, name, password, uid=501):
@@ -326,9 +330,12 @@ def main():
                                    stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(keyboard)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(keyboard)], check=True)
+                cryptexes = mount / CRYPTEXES_LINK
+                if not cryptexes.is_symlink():
+                    subprocess.run(['sudo', 'ln', '-s', '/System/Cryptexes', str(cryptexes)], check=True)
                 for item in args.file:
                     source, dest = item.split(':', 1)
-                    target = mount / dest.lstrip('/')
+                    target = mount / 'private/var' / dest.lstrip('/')
                     subprocess.run(['sudo', 'mkdir', '-p', str(target.parent)], check=True)
                     subprocess.run(['sudo', 'cp', source, str(target)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(target)], check=True)

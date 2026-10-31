@@ -34,7 +34,9 @@ for old, new in [
      '                                 access("/private/var/ngpu/debug/encode-thread",F_OK)==0);'),
     # The runtime converts a two-plane YCbCr texture on the CPU at every encoder that uses it (planes copied to staging, then a
     # dispatch): WindowServer's 4096x2160 wallpaper frames (YCBCR8_444_2P) took the 4 GiB guest into jetsam. Above 1 Mpx it is
-    # refused, and the server draws the wallpaper its other way; the small backdrop samples (512x512) are made.
+    # refused here; the server has no other way to draw the wallpaper (refused, the desktop is never repainted where windows moved
+    # off it), so the 8-bit formats are converted once per surface contents before this (the frontend's convertedYCbCrTexture) and
+    # only the others still reach this refusal; the small backdrop samples (512x512) are made.
     (' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),',
      ' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n'
      ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024){\n'

@@ -67,8 +67,8 @@ DTB = FOLDER + '/generated.dtb'
 GPU = os.environ.get('MACOS_GPU') == '1'
 # WindowServer's frame pacing: CA triple buffering, the plugin's nextWakeupTime (updates a refresh apart, not on the VBL grid) and
 # magazine malloc without zeroing on free; a heavy window drag 60 to ~118 frames a second with them (kc283 to kc292)
-GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1',
-            'exec-env=WindowServer:MallocZeroOnFree=0']
+GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1']
+GPU_EXEC_ENV = ['WindowServer:MallocZeroOnFree=0']
 # MACOS_VIRTIO_GPU=1: the display is crosvm's virtio-gpu on virtio-mmio (--virtio-mmio-gpu, the last virtio-mmio window) instead of
 # simplefb. The daemon builds its --gpu (virglrenderer, context-types=drm, udmabuf) and the gpu-0 screen's display service from the
 # gpu_* fields and screens; the guest scans out IOSurface pages as guest-handle blobs, which the host blits (zero copy in the guest).
@@ -88,6 +88,11 @@ REQUIRED_ARGS = ['mac-sandbox-permissive=1', 'mac-amfi-launch-permissive=1', 'un
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
 # vCPU the busy host did not run for that long while holding one panicked the guest at launchd's spawn storms; 40 times is 10 s
 REQUIRED_ARGS.append('ml-timeout-lock-scale=40')
+# MACOS_DROP_ARGS=NAME[,NAME]: leave those of the arguments above (and of GPU_ARGS) out (k27: mac-sandbox-* are gone from its kernel)
+REQUIRED_ARGS = [a for a in REQUIRED_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')]
+# exec-env (one boot argument, groups split by ';'): WebKit's WebContent reserves a 64 GiB Gigacage aligned to 64 GiB, which the 39-bit
+# user space (the GPU carveout at 64-448 GiB) cannot hold; without the cage Safari's pages load instead of WebContent crashing at launch
+EXEC_ENV = ['com.apple.WebKit.WebContent:GIGACAGE_ENABLED=no']
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
 adb, sh = ios.adb, ios.sh
@@ -153,14 +158,23 @@ def boot_disk(args):
     """Build the boot disk from the FDT the daemon's crosvm dumped for this very VM and push it."""
     OUT.mkdir(parents=True, exist_ok=True)
     fdt = OUT / 'generated.dtb'
-    adb('pull', DTB, str(fdt), timeout=60)
+    # The VM stopped just before (xnu12377-smoke.sh) may still be going down while the daemon rewrites the FDT: the pull fails then
+    for attempt in range(10):
+        try:
+            adb('pull', DTB, str(fdt), timeout=60)
+            break
+        except subprocess.CalledProcessError:
+            if attempt == 9:
+                raise
+            time.sleep(3)
     adt = OUT / 'kernel.macho.adt'
     # Below the shim's RAM base (0x600000 of firmware window), the framebuffer and the pools at the top of RAM (0xA00000 before:
     # the window and a 1280x800 framebuffer's 4 MiB)
     run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None, gpu=GPU,
                  virtio_gpu=VIRTIO_GPU, net=NET)   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
-    line = run.kernel_args(REQUIRED_ARGS + (GPU_ARGS if GPU else []) + args.kernel_arg)
+    line = run.kernel_args(REQUIRED_ARGS + ([a for a in GPU_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')] if GPU else []) +
+                           ['exec-env=' + ';'.join(EXEC_ENV + (GPU_EXEC_ENV if GPU else []))] + args.kernel_arg)
     local = OUT / 'boot'
     if local.exists():
         subprocess.run(['rm', '-rf', str(local)], check=True)
