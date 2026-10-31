@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NativeAES for k27 (objects in out/x12377/native-kexts/k27-NativeAES, described by k27/kext/NativeAES.json): the UniXNU driver plus
+# NativeAES for k27 (objects in out/x12377/native-kexts/NativeAES, described by overlay/kext/NativeAES.json): the UniXNU driver plus
 # the device key selector 2212, with which macOS 27's AppleImage4 entangles the nonce slots it resets (_darwin_el2_entangle_nonce,
 # "panic: encryption failed: 0xe00002c7" when the accelerator refuses it). The VM has no UID key; selector 2212 encrypts with a fixed
 # software key (no secret: the nonces live in this VM only), the same on every boot. The source stays untouched: it is copied to
@@ -40,4 +40,4 @@ swap("""      (key->bits != 128 && key->bits != 192 && key->bits != 256)) return
 open(p, 'w').write(s)
 E
 cd $M
-python3 scripts/build-native-kext.py k27-NativeAES $S/NativeAES.cpp overlay/kext/NativeKextGlue.cpp -I $M/overlay/kext/NativeAES --obj k27-obj
+python3 scripts/build-native-kext.py NativeAES $S/NativeAES.cpp overlay/kext/NativeKextGlue.cpp -I $M/overlay/kext/NativeAES --obj k27-obj

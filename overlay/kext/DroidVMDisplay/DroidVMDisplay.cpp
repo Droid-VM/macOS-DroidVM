@@ -36,29 +36,31 @@
 extern "C" task_t kernel_task;
 extern "C" vm_offset_t ml_io_map(vm_offset_t, vm_size_t);   // machine_routines.h declares it to the kernel's own files only
 
-// IOMobileFramebufferLegacy (instance 0x1af8)
-static constexpr size_t kCurrentSwap = 6032;       // the swap being programmed (swap_begin_gated 0x...dba5c, clean_queue_gated)
-static constexpr size_t kSwapQueueFirst = 6040;    // TAILQ head of the pending swaps
-static constexpr size_t kSwapQueueLast = 6048;     // its tqh_last
-static constexpr size_t kDisplayWidth = 6400;      // display_width() / display_height() (set_digital_out_mode block 0x...d6a60)
-static constexpr size_t kDisplayHeight = 6404;
-static constexpr size_t kSystemPowerState = 6428;  // u32: setPowerState's state (do_power_state_change_action_gated, request type 0)
-static constexpr size_t kAPIPowerState = 6432;     // u32: setAPIPowerState's state (power_state_change_interrupt, request type 1)
-static constexpr size_t kHardwarePowered = 6436;   // u32: the display is powered ("PowerStates-Cntr" in swap_wait_gated's report); with
+// macOS 27's offsets. The addresses in these comments are those of the 26.5 collection where each was first found; k27/TODO.md
+// names the same instruction of the same function in 27's.
+// IOMobileFramebufferLegacy (instance 0x1dd8)
+static constexpr size_t kCurrentSwap = 6720;       // the swap being programmed (swap_begin_gated 0x...dba5c, clean_queue_gated)
+static constexpr size_t kSwapQueueFirst = 6728;    // TAILQ head of the pending swaps
+static constexpr size_t kSwapQueueLast = 6736;     // its tqh_last
+static constexpr size_t kDisplayWidth = 7152;      // display_width() / display_height() (set_digital_out_mode block 0x...d6a60)
+static constexpr size_t kDisplayHeight = 7156;
+static constexpr size_t kSystemPowerState = 7180;  // u32: setPowerState's state (do_power_state_change_action_gated, request type 0)
+static constexpr size_t kAPIPowerState = 7184;     // u32: setAPIPowerState's state (power_state_change_interrupt, request type 1)
+static constexpr size_t kHardwarePowered = 7188;   // u32: the display is powered ("PowerStates-Cntr" in swap_wait_gated's report); with
                                                    // kHardwareStarted set, swap_wait fails kIOReturnOffline while it is 0 (0x...2d1e4)
-static constexpr size_t kSwapInfoHeld = 6902;      // u16: swap info notifications are held (notify_swap_done_gated 0x...d9430)
+static constexpr size_t kSwapInfoHeld = 7634;      // u16: swap info notifications are held (notify_swap_done_gated 0x...d9430)
 static constexpr size_t kSwapInfoTime = 264;       // the swap info's time (notify_swap_done_gated 0x...d93f0)
 // IOMobileFramebuffer (instance 144): set before power management in AppleParavirtDisplay's start_hardware block (0x...d8e90)
 static constexpr size_t kHardwareStarted = 140;
 // IOMFBSwapIORequest
-static constexpr size_t kSwapLayers = 824;         // bit 0: main surface, bit 1: cursor surface (program_hardware_gated 0x...db858)
-static constexpr size_t kSwapDropReasons = 844;    // programmed when nothing but bit 3 is set, else dropped (swap_begin_gated 0x...dbac0)
-static constexpr size_t kSwapInfoA = 752;         // swap info words 3 and 4 (notify_swap_done_gated 0x...d93f4)
-static constexpr size_t kSwapInfoB = 816;
-static constexpr size_t kSwapMainSurface = 2752;   // layer i's surface at + 8 * i
+static constexpr size_t kSwapLayers = 984;         // bit 0: main surface, bit 1: cursor surface (program_hardware_gated 0x...db858)
+static constexpr size_t kSwapDropReasons = 1004;    // programmed when nothing but bit 3 is set, else dropped (swap_begin_gated 0x...dbac0)
+static constexpr size_t kSwapInfoA = 912;         // swap info words 3 and 4 (notify_swap_done_gated 0x...d93f4)
+static constexpr size_t kSwapInfoB = 976;
+static constexpr size_t kSwapMainSurface = 2944;   // layer i's surface at + 8 * i
 static constexpr unsigned kSwapLayerCount = 4;
-static constexpr size_t kSwapNext = 3192;          // TAILQ entry of the queue
-static constexpr size_t kSwapPrev = 3200;
+static constexpr size_t kSwapNext = 3384;          // TAILQ entry of the queue
+static constexpr size_t kSwapPrev = 3392;
 // IOMFBNotifyRequest
 static constexpr size_t kNotifyAsyncReference = 24;   // OSAsyncReference64 of the user client (do_swap_info_notify_gated 0x...d9370)
 static constexpr size_t kNotifyMask = 120;            // which swap info words the client wants; bit 31: as 32-bit halves
@@ -99,24 +101,6 @@ OSObject *ioavColorWithCapabilities(uint32_t standardType, uint32_t depth, uint3
                                     const OSSet *)
     __asm("__ZN21IOAVVideoColorElement16withCapabilitiesE16IOAVStandardTypej22IOAVVideoPixelEncoding26IOAVVideoColorDynamicRange"
           "18IOAVVideoColorEOTF20IOAVVideoColorimetrybPK12OSDictionaryS7_S7_PK5OSSet");
-
-// macOS 27's IOMobileFramebuffer.framework submits a 1760-byte swap record (kern_SwapEnd: IOMobileFramebufferUserClient selector 5)
-// and the 26.5 family of the collection checks for 1416 bytes. The two agree up to 0x51e; 27 has 16 more bytes there (its per-layer
-// fields at 0x52e and 0x544 are 26.5's 0x51e and 0x534) and its other additions at the end, which the legacy family has no use for.
-static constexpr uint32_t kSwapSubmitSelector = 5, kSwapRecord27 = 1760, kSwapRecord265 = 1416;
-static constexpr uint32_t kSwapRecordSplit = 0x51e, kSwapRecordInserted = 16;
-extern const char iomfbUserClientMetaClass[] __asm("__ZN29IOMobileFramebufferUserClient10gMetaClassE");
-extern "C" void virt_set_external_method_hook(void (*)(IOUserClient *, IOExternalMethodArguments *));   // xnu-m IOUserClient.cpp
-
-static void convertSwapRecord(IOUserClient *client, IOExternalMethodArguments *args)
-{
-    if (args->selector != kSwapSubmitSelector || args->structureInputSize != kSwapRecord27 ||
-        !client->metaCast(reinterpret_cast<const OSMetaClass *>(iomfbUserClientMetaClass)))
-        return;
-    auto *record = const_cast<uint8_t *>(static_cast<const uint8_t *>(args->structureInput));   // the MIG request's inband buffer
-    memmove(record + kSwapRecordSplit, record + kSwapRecordSplit + kSwapRecordInserted, kSwapRecord265 - kSwapRecordSplit);
-    args->structureInputSize = kSwapRecord265;
-}
 
 // The virtio-gpu of /arm-io/virtio-gpu (crosvm --virtio-mmio-gpu), as the iOS board's DroidVMVirtioGpu.cpp drives it, for one user:
 // the display's copy thread sends one command at a time and polls for its answer (the queues are NO_INTERRUPT), so one request and
@@ -527,14 +511,12 @@ bool DroidVMDisplay::start(IOService *provider)
         OSSafeReleaseNULL(fScanoutMap);
         return false;
     }
-    virt_set_external_method_hook(convertSwapRecord);
     IOLog("DroidVMDisplay: started, display %ux%u at %u Hz\n", display_width(), display_height(), fRefreshHz);
     return true;
 }
 
 void DroidVMDisplay::stop(IOService *provider)
 {
-    virt_set_external_method_hook(nullptr);
     IOMobileFramebufferLegacy::stop(provider);
     stopCopies();
     releaseSurfaceMaps();
@@ -689,20 +671,20 @@ IOReturn DroidVMDisplay::swap_begin_gated()
 
 // CoreAnimation asks swap_wait, without blocking, whether its last swaps are done before it composes the next frame
 // (IOMFBDisplay::can_update_); after three swaps WindowServer found the display unready for good.
-// The family answers kIOReturnBusy for the last completed swap (+6412, swap_complete_gated) as long as no later one replaces it: a
+// The family answers kIOReturnBusy for the last completed swap (+7164, swap_complete_gated) as long as no later one replaces it: a
 // display controller is still scanning out its surface (swap_wait_gated 0x...d3dc). Here the swap's surface was copied to the
 // scanout when it was programmed, so it is free; WindowServer, told it is busy, waited for its next display update to ask again,
 // and the screen updated at about 10 frames a second however little it drew.
 IOReturn DroidVMDisplay::swap_wait(IOMobileFramebufferUserClient *client, unsigned int swapID, unsigned int options, unsigned int timeout)
 {
     IOReturn result = IOMobileFramebufferLegacy::swap_wait(client, swapID, options, timeout);
-    if (result == kIOReturnBusy && (options & 0x7fffffffu) == 0 && swapID == at<uint32_t>(this, 6412)) {
+    if (result == kIOReturnBusy && (options & 0x7fffffffu) == 0 && swapID == at<uint32_t>(this, 7164)) {
         fWaitReleased++;
         return kIOReturnSuccess;
     }
     if (result != kIOReturnSuccess && (++fWaitFailures <= 20 || fWaitFailures % 1000 == 0))
-        IOLog("DroidVMDisplay: swap_wait(%u, 0x%x, %u) = 0x%x (%llu failures): +6412 %u power %u/%u +6436 %u +140 0x%x current %p queue %p\n",
-              swapID, options, timeout, result, fWaitFailures, at<uint32_t>(this, 6412), at<uint32_t>(this, kSystemPowerState),
+        IOLog("DroidVMDisplay: swap_wait(%u, 0x%x, %u) = 0x%x (%llu failures): +7164 %u power %u/%u +7188 %u +140 0x%x current %p queue %p\n",
+              swapID, options, timeout, result, fWaitFailures, at<uint32_t>(this, 7164), at<uint32_t>(this, kSystemPowerState),
               at<uint32_t>(this, kAPIPowerState), at<uint32_t>(this, kHardwarePowered), at<uint8_t>(this, kHardwareStarted),
               at<IOMFBSwapIORequest *>(this, kCurrentSwap), at<IOMFBSwapIORequest *>(this, kSwapQueueFirst));
     return result;
@@ -736,7 +718,7 @@ IOReturn DroidVMDisplay::do_power_state_change_gated()
 void DroidVMDisplay::program_hardware_gated()
 {
     IOMFBSwapIORequest *swap = at<IOMFBSwapIORequest *>(this, kCurrentSwap);
-    uint64_t &submitted = fSubmitTime[at<uint32_t>(swap, 820) % 16];
+    uint64_t &submitted = fSubmitTime[at<uint32_t>(swap, 980) % 16];
     if (submitted) {
         uint64_t waited = 0;
         absolutetime_to_nanoseconds(mach_absolute_time() - submitted, &waited);

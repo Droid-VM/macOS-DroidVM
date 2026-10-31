@@ -14,8 +14,8 @@ DI_KEXTS="com.apple.driver.DiskImages com.apple.driver.DiskImages.FileBackingSto
 [ $# -gt 0 ] || set -- $(cat configs/kc-keep.txt) $([ "${K27_DI:-1}" = 1 ] && echo $DI_KEXTS)   # hdiutil's IOHDIXController; K27_DI=0 leaves them out
 export MACOS_LP_SIP0=${MACOS_LP_SIP0-0x2}
 export MACOS_BOOT_MANIFEST_HASH=${MACOS_BOOT_MANIFEST_HASH-1}   # /chosen/boot-manifest-hash, which 27's Image4 needs (scripts/run-macos-vm.py)
-NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json k27/kext/NativeAES.json overlay/kext/NativeRamBlock.json}   # k27's NativeAES: k27/build-native-aes.sh
-[ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/ARMPlatformStandIn.json k27/kext/DroidVMDisplay.json overlay/kext/DroidVMEthernet.json overlay/kext/DroidVMInput.json"
+NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json overlay/kext/NativeAES.json overlay/kext/NativeRamBlock.json}   # NativeAES: k27/build-native-aes.sh
+[ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/ARMPlatformStandIn.json overlay/kext/DroidVMDisplay.json overlay/kext/DroidVMEthernet.json overlay/kext/DroidVMInput.json"
 [ "${MACOS_GPU:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMGpu.json"
 K=out/k27/kernel-k27.macho; KC=out/k27/kc-k27.bin; export MACOS_KERNEL=$PWD/$KC
 mkdir -p out/rig; llvm-nm -n --defined-only $K > out/rig/kc-k27.nm
