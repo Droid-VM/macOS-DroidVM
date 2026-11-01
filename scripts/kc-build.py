@@ -268,6 +268,11 @@ def build(args):
             if len(found) == 1:
                 return found[0]
             found = [private[library][symbol] for library in current['libraries'] if symbol in private.get(library, {})]
+            if len(found) == 1:
+                return found[0]
+            # an external symbol of a native kext linked before this one, if only one defines it (DroidVMGpu's NativeAdreno calls
+            # DroidVMDisplay's virtio-gpu 3D methods, droidvm_virtgpu_call)
+            found = native_exports.get(symbol, [])
             return found[0] if len(found) == 1 else None
 
         used = [(new_off(s['va']), new_off(s['va']) + s['size']) for s in placed]
@@ -294,7 +299,7 @@ def build(args):
             used.append((cursor, cursor + size))
             return NEW_BASE + cursor
 
-        current = {}
+        current, native_exports = {}, {}
         for spec in natives:
             current = spec   # resolve() also takes locals of the kexts this one links against
             objects = json.loads(Path(spec['objects']).read_text())
@@ -302,6 +307,8 @@ def build(args):
                 linked = kc_native.link(objects, resolve, allocate, NATIVE_HEADER_RESERVE, 0xd0, spec['start'], spec['stop'])
             except kc_native.LinkError as problem:
                 raise SystemExit(f'{spec["bundle"]}: {problem}')
+            for name, va in linked['symbols'].items():
+                native_exports.setdefault(name, []).append(va)
             segs = linked['segments']
             for seg in segs.values():
                 at = new_off(seg['va'])

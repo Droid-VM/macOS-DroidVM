@@ -1,7 +1,7 @@
 From 9f0f8605db0efc80f63d95a313e18a38aac4d69f Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 31 Oct 2026 07:11:23 -0400
-Subject: [PATCH 1/3] DroidVM: the staged edits of UniXNU-droidvm bf7fc44's
+Subject: [PATCH 1/9] DroidVM: the staged edits of UniXNU-droidvm bf7fc44's
  scripts/build-droidvm-gpu.py
 
 The clients' windows are offsets from droidvm_gpu_window_base() (the KGSL VBO the host reserved) instead of absolute addresses of

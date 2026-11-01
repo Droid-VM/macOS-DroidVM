@@ -19,6 +19,7 @@
 // Offsets into IOMobileFramebufferLegacy and its swap requests are those AppleParavirtDisplay of the same kernelcache (kc265)
 // uses; the addresses noted are its code (research/re/apd/).
 #include "IOMobileFramebufferABI.h"
+#include "DroidVMVirtioGpu.h"
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -102,194 +103,44 @@ OSObject *ioavColorWithCapabilities(uint32_t standardType, uint32_t depth, uint3
     __asm("__ZN21IOAVVideoColorElement16withCapabilitiesE16IOAVStandardTypej22IOAVVideoPixelEncoding26IOAVVideoColorDynamicRange"
           "18IOAVVideoColorEOTF20IOAVVideoColorimetrybPK12OSDictionaryS7_S7_PK5OSSet");
 
-// The virtio-gpu of /arm-io/virtio-gpu (crosvm --virtio-mmio-gpu), as the iOS board's DroidVMVirtioGpu.cpp drives it, for one user:
-// the display's copy thread sends one command at a time and polls for its answer (the queues are NO_INTERRUPT), so one request and
-// one response buffer do.
-struct VirtioGpuHeader {uint32_t type, flags; uint64_t fence; uint32_t context; uint8_t ring, padding[3];};
-struct VirtioGpuEntry {uint64_t address; uint32_t length, padding;};
+// The virtio-gpu of /arm-io/virtio-gpu (crosvm --virtio-mmio-gpu): the DroidVM board's transport (DroidVMVirtioGpu.cpp, exported by
+// k27/build-native-display.sh), one control queue shared by the display and the 3D contexts of DroidVMVirtioGpu3D.cpp, which serve
+// the GPU's user clients (NativeAdreno's methods 0x7200 on); this class is the display's view of it.
+using VirtioGpuHeader = DroidVMVirtioGpu::Header;
+using VirtioGpuEntry = DroidVMVirtioGpu::Entry;
 struct VirtioGpuRect {uint32_t x, y, width, height;};
-static_assert(sizeof(VirtioGpuHeader) == 24 && sizeof(VirtioGpuEntry) == 16, "virtio-gpu wire ABI");
+extern "C" volatile uint64_t droidvm_virtio_gpu_commands;
 
 class VirtioGpu {
 public:
-    static constexpr uint32_t kRequestBytes = 131072;   // a blob's page list: 8 K entries
+    static constexpr uint32_t kRequestBytes = DroidVMVirtioGpu::MaxCommand;   // a blob's page list: 8 K entries
     static constexpr uint32_t kMaxEntries = (kRequestBytes - 64) / sizeof(VirtioGpuEntry);
-    const char *start();
-    bool ready() const {return fRegisters && !fBroken;}
-    uint64_t features() const {return fFeatures;}
+    const char *start() {return DroidVMVirtioGpu::start() ? nullptr : "the transport did not start (see virtio-gpu: lines)";}
+    bool ready() const {return DroidVMVirtioGpu::ready();}
+    uint64_t features() const {return DroidVMVirtioGpu::features();}
     IOReturn command(const void *, uint32_t, const void *extra = nullptr, uint32_t extraSize = 0, bool fenced = true);
-    uint64_t commands() const {return fCommands;}
-
-private:
-    struct Desc {uint64_t address; uint32_t length; uint16_t flags, next;};
-    static constexpr uint32_t kQueueSize = 2, kAvail = 1024, kUsed = 2048, kQueueBytes = 4096;   // per queue in fRings
-    uint32_t rd(unsigned offset) const
-    {
-        uint32_t v;
-        __asm__ volatile("ldr %w0, [%1]" : "=r"(v) : "r"(fRegisters + offset) : "memory");
-        return v;
-    }
-    void wr(unsigned offset, uint32_t v) const {__asm__ volatile("str %w0, [%1]\n\tdsb oshst" :: "r"(v), "r"(fRegisters + offset) : "memory");}
-    void wr64(unsigned offset, uint64_t v) const
-    {
-        wr(offset, static_cast<uint32_t>(v));
-        wr(offset + 4, static_cast<uint32_t>(v >> 32));
-    }
-    static void barrier() {__asm__ volatile("dmb osh" ::: "memory");}
-    static IOBufferMemoryDescriptor *contiguous(uint32_t bytes, uint64_t *physical);
-
-    uintptr_t fRegisters;
-    IOBufferMemoryDescriptor *fRings, *fRequest, *fResponse;
-    uint8_t *fRingBytes, *fRequestBytes, *fResponseBytes;
-    uint64_t fRingsPA, fRequestPA, fResponsePA, fFeatures, fFence, fCommands, fErrors;
-    uint16_t fAvailable, fUsed;
-    bool fBroken;
+    uint64_t commands() const {return droidvm_virtio_gpu_commands;}
 };
-
-// As DroidVMInput's: one physically contiguous buffer, zeroed.
-IOBufferMemoryDescriptor *VirtioGpu::contiguous(uint32_t bytes, uint64_t *physical)
-{
-    IOBufferMemoryDescriptor *memory = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
-        static_cast<IOOptionBits>(kIODirectionInOut) | static_cast<IOOptionBits>(kIOMemoryPhysicallyContiguous), bytes, 4096);
-    IOByteCount length = 0;
-    *physical = memory ? memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone) : 0;
-    if (!*physical || length < bytes) {
-        OSSafeReleaseNULL(memory);
-        return nullptr;
-    }
-    bzero(memory->getBytesNoCopy(), bytes);
-    return memory;
-}
-
-// Finds /arm-io/virtio-gpu, maps it and brings the device up with blob resources on guest pages; returns why it cannot, or null.
-const char *VirtioGpu::start()
-{
-    DTEntry armio, node;
-    const void *value;
-    unsigned size;
-    uint64_t ranges[3], reg[2];
-    if (SecureDTLookupEntry(nullptr, "/arm-io/virtio-gpu", &node) != kSuccess)
-        return "no /arm-io/virtio-gpu";
-    if (SecureDTLookupEntry(nullptr, "/arm-io", &armio) != kSuccess ||
-        SecureDTGetProperty(armio, "ranges", &value, &size) != kSuccess || size < sizeof(ranges))
-        return "no /arm-io ranges";
-    memcpy(ranges, value, sizeof(ranges));
-    if (SecureDTGetProperty(node, "reg", &value, &size) != kSuccess || size != sizeof(reg))
-        return "no virtio-gpu reg";
-    memcpy(reg, value, sizeof(reg));
-    if (reg[0] < ranges[0] || reg[1] < 0x100 || reg[1] > ranges[2] || reg[0] - ranges[0] > ranges[2] - reg[1])
-        return "virtio-gpu reg outside /arm-io";
-    fRings = contiguous(2 * kQueueBytes, &fRingsPA);
-    fRequest = contiguous(kRequestBytes, &fRequestPA);
-    fResponse = contiguous(4096, &fResponsePA);
-    if (!fRings || !fRequest || !fResponse)
-        return "no command buffers";
-    fRingBytes = static_cast<uint8_t *>(fRings->getBytesNoCopy());
-    fRequestBytes = static_cast<uint8_t *>(fRequest->getBytesNoCopy());
-    fResponseBytes = static_cast<uint8_t *>(fResponse->getBytesNoCopy());
-    fRegisters = ml_io_map(static_cast<vm_offset_t>(reg[0] - ranges[0] + ranges[1]), 0x1000);
-    if (!fRegisters)
-        return "cannot map the virtio-gpu registers";
-    if (rd(0) != 0x74726976 || rd(4) != 2 || rd(8) != 16) {
-        fRegisters = 0;
-        return "not a modern virtio-mmio GPU";
-    }
-    fBroken = true;   // until DRIVER_OK
-    wr(0x70, 0);
-    for (unsigned i = 0; rd(0x70); i++) {
-        if (i == 1000)
-            return "reset timeout";
-        IODelay(1000);
-    }
-    wr(0x70, 3);
-    wr(0x14, 1);
-    uint32_t high = rd(0x10);
-    if (!(high & 1))
-        return "no VIRTIO_F_VERSION_1";
-    high &= 3;   // VERSION_1 and ACCESS_PLATFORM (pseudo-unprotected crosvm offers it; DMA addresses stay guest physical)
-    wr(0x14, 0);
-    uint32_t low = rd(0x10) & (1u << 3 | 1u << 6);   // RESOURCE_BLOB, CREATE_GUEST_HANDLE
-    fFeatures = static_cast<uint64_t>(high) << 32 | low;
-    wr(0x24, 0);
-    wr(0x20, low);
-    wr(0x24, 1);
-    wr(0x20, high);
-    wr(0x70, 11);
-    if (!(rd(0x70) & 8))
-        return "features refused";
-    for (unsigned queue = 0; queue < 2; queue++) {   // the control queue, and the cursor queue the device wants enabled too
-        uint64_t pa = fRingsPA + queue * kQueueBytes;
-        wr(0x30, queue);
-        if (rd(0x44) || rd(0x34) < kQueueSize)
-            return "queue unavailable or too small";
-        *reinterpret_cast<uint16_t *>(fRingBytes + queue * kQueueBytes + kAvail) = 1;   // VIRTQ_AVAIL_F_NO_INTERRUPT: polled
-        wr(0x38, kQueueSize);
-        wr64(0x80, pa);
-        wr64(0x90, pa + kAvail);
-        wr64(0xa0, pa + kUsed);
-        wr(0x44, 1);
-    }
-    barrier();
-    wr(0x70, 15);
-    if ((rd(0x70) & 0x4f) != 15)
-        return "device not ready";
-    fBroken = false;
-    return nullptr;
-}
 
 // Sends a command (and the entries that follow it) and waits for its answer. Fenced, as the iOS board's: the host answers once it has
 // done the command; a fenced RESOURCE_FLUSH, once the host's blit to the window has finished (crosvm defers it to the display fence).
-// A device that does not answer in a second keeps the buffers it was given and is not used again.
+// Unfenced, it answers once it has taken the command.
 IOReturn VirtioGpu::command(const void *data, uint32_t size, const void *extra, uint32_t extraSize, bool fenced)
 {
     if (!ready())
         return kIOReturnNotReady;
-    if (size < sizeof(VirtioGpuHeader) || extraSize > kRequestBytes - size)
+    VirtioGpuHeader reply;
+    if (fenced)
+        return DroidVMVirtioGpu::command(data, size, extra, extraSize, &reply, sizeof(reply));
+    uint8_t copy[256];
+    if (size < sizeof(VirtioGpuHeader) || size > sizeof(copy))
         return kIOReturnBadArgument;
-    memcpy(fRequestBytes, data, size);
-    if (extraSize)
-        memcpy(fRequestBytes + size, extra, extraSize);
-    auto *header = reinterpret_cast<VirtioGpuHeader *>(fRequestBytes);
-    header->flags = fenced ? (header->flags | 1) & ~2u : header->flags & ~3u;
-    header->fence = fenced ? ++fFence : 0;
-    bzero(fResponseBytes, sizeof(VirtioGpuHeader));
-    auto *desc = reinterpret_cast<Desc *>(fRingBytes);
-    desc[0] = {fRequestPA, size + extraSize, 1, 1};
-    desc[1] = {fResponsePA, 4096, 2, 0};
-    auto *avail = reinterpret_cast<volatile uint16_t *>(fRingBytes + kAvail);
-    auto *used = reinterpret_cast<volatile uint16_t *>(fRingBytes + kUsed);
-    avail[2 + fAvailable % kQueueSize] = 0;
-    barrier();
-    avail[1] = ++fAvailable;
-    barrier();
-    wr(0x50, 0);
-    uint64_t begin = mach_absolute_time(), ns = 0;
-    for (;;) {
-        barrier();
-        if (used[1] != fUsed)
-            break;
-        absolutetime_to_nanoseconds(mach_absolute_time() - begin, &ns);
-        if (ns >= 1000000000) {
-            fBroken = true;
-            IOLog("DroidVMDisplay: virtio-gpu command %#x timed out; the device is not used again\n", header->type);
-            return kIOReturnTimeout;
-        }
-        if (ns < 2000000)   // spin for the usual answer (tens of microseconds), then let the vCPU idle
-            IODelay(10);
-        else
-            IOSleep(1);
-    }
-    fUsed++;
-    if (uint32_t interrupts = rd(0x60) & 3)
-        wr(0x64, interrupts);
-    fCommands++;
-    auto *reply = reinterpret_cast<const VirtioGpuHeader *>(fResponseBytes);
-    if (reply->type < 0x1100 || reply->type >= 0x1200) {
-        if (++fErrors <= 20)
-            IOLog("DroidVMDisplay: virtio-gpu command %#x answered %#x\n", header->type, reply->type);
-        return kIOReturnIOError;
-    }
-    return kIOReturnSuccess;
+    memcpy(copy, data, size);
+    reinterpret_cast<VirtioGpuHeader *>(copy)->flags &= ~3u;
+    uint32_t ticket = 0;
+    if (IOReturn status = DroidVMVirtioGpu::post(copy, size, extra, extraSize, sizeof(reply), false, &ticket))
+        return status;
+    return DroidVMVirtioGpu::wait(ticket, 1000000, &reply, sizeof(reply));
 }
 
 class AppleParavirtGPU : public IOService {
@@ -493,6 +344,7 @@ bool DroidVMDisplay::start(IOService *provider)
         IOLog("DroidVMDisplay: virtio-gpu scanout %s%s (features %#llx)\n", why ? "off: " : "on", why ? why : "", fGpu.features());
         if (why)
             fGpu = VirtioGpu();
+        DroidVMVirtioGpu::selftest3D();   // vgpu-selftest=1: one DRM context through the host's drm2kgsl
     }
     fCopyLock = IOLockAlloc();
     thread_t copier = nullptr;

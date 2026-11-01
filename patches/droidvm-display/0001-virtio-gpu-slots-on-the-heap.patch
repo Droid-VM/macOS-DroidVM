@@ -1,0 +1,25 @@
+The transport's command slots come from the heap with its buffers (DROIDVM_VIRTIO_GPU_DYNAMIC): the macOS kernel collection
+leaves the native kexts' __DATA too little room for them beside DroidVMGpu. On UniXNU-droidvm package/DroidVMVirtioGpu.cpp (k27/build-native-display.sh VGPU_REF).
+
+--- a/DroidVMVirtioGpu.cpp	2026-11-01 14:26:04.491978521 -0500
++++ b/DroidVMVirtioGpu.cpp	2026-11-01 14:26:04.512258078 -0500
+@@ -69,7 +69,11 @@
+ #endif
+ uint64_t hugeRequestPA;
+ uint32_t hugeOwner = Slots;   // the slot the buffer is lent to; Slots when free
++#if DROIDVM_VIRTIO_GPU_DYNAMIC
++Slot *slots;   // allocateBuffers: 18 KiB more than the macOS kernel collection leaves the native kexts' __DATA
++#else
+ Slot slots[Slots];
++#endif
+ uintptr_t registers;
+ uint64_t negotiated, nextFence, lastReturnUs;
+ uint32_t nextResource;
+@@ -158,6 +162,7 @@
+ // One physically contiguous, wired allocation for the queues and command buffers, each region 16 KiB aligned.
+ bool allocateBuffers() {
+     if (buffers) return true;
++    if (!slots && !(slots = IONewZero(Slot, Slots))) return false;
+     const uint64_t sizes[] = {sizeof(*queues) * 2, sizeof(*requests) * Large, sizeof(*responses) * Large,
+                               sizeof(*largeRequest) * LargeSlots, sizeof(*largeResponse) * LargeSlots, HugeRequest};
+     uint64_t at[6], total = 0;

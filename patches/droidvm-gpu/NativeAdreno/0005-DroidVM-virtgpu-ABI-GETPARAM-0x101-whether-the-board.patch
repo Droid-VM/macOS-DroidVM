@@ -1,0 +1,25 @@
+From aae4e92bc901be1df7df97c598e1b4364d0cc98e Mon Sep 17 00:00:00 2001
+From: HuJK <gh@hujk.org>
+Date: Sun, 25 Oct 2026 12:42:25 +0800
+Subject: [PATCH 5/9] DroidVM virtgpu ABI: GETPARAM 0x101, whether the board
+ makes this the default 3D path
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012Camiwa7VsPwkhfyscKQ6S
+(cherry picked from commit a75247546964f542c702a28621b88014c380a2e5)
+---
+ DroidVMVirtgpuABI.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/DroidVMVirtgpuABI.h b/DroidVMVirtgpuABI.h
+index b3613a4..669ea09 100644
+--- a/DroidVMVirtgpuABI.h
++++ b/DroidVMVirtgpuABI.h
+@@ -40,6 +40,7 @@ enum {
+     DROIDVM_VIRTGPU_PARAM_SUPPORTED_CAPSET_IDS = 7,
+     DROIDVM_VIRTGPU_PARAM_CREATE_GUEST_HANDLE = 9,
+     DROIDVM_VIRTGPU_PARAM_ABI_VERSION = 0x100,
++    DROIDVM_VIRTGPU_PARAM_DEFAULT_3D = 0x101,   /* 1: the board makes this the default 3D path (boot-arg vgpu-3d=1) */
+ 
+     DROIDVM_VIRTGPU_BLOB_MEM_HOST3D = 2,
+     DROIDVM_VIRTGPU_BLOB_MEM_HOST3D_GUEST = 3,

@@ -208,7 +208,11 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         assert text.count(marker) == 1
         text = text.replace(marker, "                for address, size in gpu],\n"
                                     "              *[node('virtio-gpu', [('compatible', b'droidvm,virtio-gpu\\0'),"
-                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b'')])"
+                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b''),"
+                                    # drm-host-pool: the FDT's drm2kgsl_host pool (absolute GPA, size), where the host carves the 3D
+                                    # contexts' shmem (DroidVMVirtioGpu3D.cpp; as the upstream tool's)
+                                    " *[('drm-host-pool', struct.pack('<QQ', *reg_pairs(props['reg'])[0])) for path, props in fdt_nodes.items()"
+                                    " if path.startswith('/reserved-memory/drm2kgsl_host@')]])"
                                     " for address, size in vm['virtio_mmio'] if address == args.virtio_gpu_mmio],\n"
                                     # net (crosvm --virtio-mmio-net): /arm-io/net, DroidVMEthernet's virtio-net (as the upstream tool's --net-mmio)
                                     "              *[node('net', [('compatible', b'droidvm,net\\0'),"

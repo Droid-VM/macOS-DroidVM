@@ -1,0 +1,46 @@
+From 09d4f451dec08e99fc6bb358ca111db7924b2ce5 Mon Sep 17 00:00:00 2001
+From: HuJK <gh@hujk.org>
+Date: Sun, 25 Oct 2026 12:05:02 +0800
+Subject: [PATCH 4/9] DroidVM virtgpu ABI: CREATE_BLOB_USER, a guest blob over
+ the caller's own pages
+
+Op 9 takes [address, address + size) of the calling task (an IOSurface's pages, VK_EXT_external_memory_host) and a GEM_NEW
+ccmd; the kernel wires the pages until GEM_CLOSE and the caller keeps its own mapping.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012Camiwa7VsPwkhfyscKQ6S
+(cherry picked from commit 37cb42169597180666dfb2b3fc9aa21accf310d0)
+---
+ DroidVMVirtgpuABI.h | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/DroidVMVirtgpuABI.h b/DroidVMVirtgpuABI.h
+index d2263e4..b3613a4 100644
+--- a/DroidVMVirtgpuABI.h
++++ b/DroidVMVirtgpuABI.h
+@@ -27,7 +27,8 @@ enum {
+     DROIDVM_VIRTGPU_WAIT_FENCE = 6,
+     DROIDVM_VIRTGPU_RESOURCE_INFO = 7,
+     DROIDVM_VIRTGPU_GEM_CLOSE = 8,
+-    DROIDVM_VIRTGPU_OPS = 9,
++    DROIDVM_VIRTGPU_CREATE_BLOB_USER = 9,
++    DROIDVM_VIRTGPU_OPS = 10,
+ 
+     /* GETPARAM: the VIRTGPU_PARAM_* numbers, and this ABI's version. */
+     DROIDVM_VIRTGPU_PARAM_3D_FEATURES = 1,
+@@ -59,7 +60,14 @@ struct droidvm_virtgpu_create_blob {                                          /*
+     uint64_t size, blob_id;
+     uint32_t cmd_size, pad;
+ };
+-struct droidvm_virtgpu_create_blob_reply { uint32_t handle, resource_id; };
++struct droidvm_virtgpu_create_blob_reply { uint32_t handle, resource_id; };   /* CREATE_BLOB, CREATE_BLOB_USER */
++/* CREATE_BLOB_USER: a HOST3D_GUEST blob over the caller's own pages, [address, address + size), 4 KiB aligned (an IOSurface's:
++ * VK_EXT_external_memory_host). The kernel wires them until GEM_CLOSE; the caller keeps its own mapping, so it is not MAPped.
++ * Followed by cmd_size bytes of ccmd (the GEM_NEW that gives the BO its address). */
++struct droidvm_virtgpu_create_blob_user {
++    uint64_t address, size, blob_id;
++    uint32_t blob_flags, cmd_size;
++};
+ struct droidvm_virtgpu_handle { uint32_t handle, pad; };                      /* MAP, RESOURCE_INFO, GEM_CLOSE */
+ struct droidvm_virtgpu_map_reply { uint64_t address, size; };
+ struct droidvm_virtgpu_execbuffer { uint32_t flags, ring_idx, size, pad; };   /* followed by size bytes of commands */

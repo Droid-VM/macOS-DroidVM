@@ -1,0 +1,106 @@
+From 293c7a409c06e4828ed16b6c3ae9dfc58ec36e1e Mon Sep 17 00:00:00 2001
+From: HuJK <gh@hujk.org>
+Date: Sun, 25 Oct 2026 05:40:58 +0800
+Subject: [PATCH 6/9] Carry virtio-gpu 3D methods for the DroidVM board's DRM
+ contexts
+
+Methods 0x7200-0x72ff go to droidvm_virtgpu_call (the DroidVM board's
+DroidVMVirtioGpu3D.cpp, weakly imported; unsupported elsewhere), which
+gives mesa's vdrm what Linux's virtgpu ioctls give it: capsets, a DRM
+context per connection, blobs mapped into the caller, execbuffers and
+their fences. clientClose ends the connection's context first.
+
+Open type 0x4149 is a connection for those methods alone: no GPU core,
+no KGSL proxy slot, no scanout, granted past the sandbox as the plugin's
+own opens are. A tunnel input longer than IOKit passes inline (4096
+bytes, a long virtgpu command) arrives as the caller's memory and is
+read here, up to 64 KiB.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012Camiwa7VsPwkhfyscKQ6S
+(cherry picked from commit 9fcf95f95c0d54edc2265c59175aedc9e8e80add)
+---
+ NativeAdrenoPublish.cpp | 42 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/NativeAdrenoPublish.cpp b/NativeAdrenoPublish.cpp
+index e8377bb..895b92b 100644
+--- a/NativeAdrenoPublish.cpp
++++ b/NativeAdrenoPublish.cpp
+@@ -62,6 +62,15 @@ enum : UInt32 {NativeAdrenoExportMethod=0x7100,NativeAdrenoExportMaxPiece=3968};
+ extern "C" int boot_log_export_put(uint32_t generation,uint32_t total,uint32_t offset,const void *data,uint32_t size) __attribute__((weak_import));
+ extern "C" {volatile uint32_t native_adreno_export_stats[4];}   /* [0] pieces taken, [1] refused, [2] last generation, [3] its total bytes */
+ extern "C" IOMemoryDescriptor *native_gop_handoff_memory(void);
++/* virtio-gpu 3D for user space (the DroidVM board's DroidVMVirtioGpu3D.cpp, DroidVMVirtgpuABI.h): methods 0x7200 on carry Linux's
++ * virtgpu ioctls for mesa's vdrm, one DRM context per connection. Open type 0x4149 is a connection for them alone: no GPU core, no
++ * KGSL proxy slot, no scanout, and granted past the sandbox as the plugin's own opens are, since the Metal plugin makes it in the
++ * same sandboxed clients. Absent on boards without it. */
++enum : UInt32 {NativeAdrenoVirtgpuBase=0x7200,NativeAdrenoVirtgpuLast=0x72ff,NativeAdrenoTunnelMaxInput=65536+64,
++               NativeAdrenoVirtgpuOpenType=0x4149};
++extern "C" IOReturn droidvm_virtgpu_call(void *connection,uint32_t op,task_t task,const void *in,size_t inSize,void *out,size_t outSize)
++    __attribute__((weak_import));
++extern "C" void droidvm_virtgpu_close(void *connection) __attribute__((weak_import));
+ 
+ /* Mailbox: a last-resort command channel for a sandbox that admits no external-method selector at all. It is one shared page (memory
+  * type NativeAdrenoMailboxType through IOConnectMapMemory64, which the selector filter does not cover) and a kernel poller that runs
+@@ -279,6 +288,7 @@ void AGXDeviceUserClient::dropViews(uint32_t token)
+ }
+ IOReturn AGXDeviceUserClient::clientClose()
+ {
++    if(droidvm_virtgpu_close)droidvm_virtgpu_close(this);
+     dropViews(0);
+     IOLockLock(g.lock);
+     IOReturn status=kIOReturnSuccess;
+@@ -456,6 +466,9 @@ static IOReturn runCore(AGXDeviceUserClient *connection,uint32_t method,const vo
+ }
+ IOReturn AGXDeviceUserClient::run(uint32_t method,const void *input,size_t input_size,void *output,size_t output_size)
+ {
++    if(method>=NativeAdrenoVirtgpuBase && method<=NativeAdrenoVirtgpuLast)
++        return droidvm_virtgpu_call?droidvm_virtgpu_call(this,method-NativeAdrenoVirtgpuBase,current_task(),input,input_size,output,output_size):
++            kIOReturnUnsupported;
+     if(method>=NativeAdrenoHandoffBase && method<=NativeAdrenoHandoffLast)
+         return native_gop_handoff_call(method-NativeAdrenoHandoffBase,current_task(),input,input_size,output,output_size);
+     if(method==NativeAdrenoExportMethod) {
+@@ -529,6 +542,26 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,IOExternalMethodA
+      * so which selector numbers reach this object is decided outside the driver. A tunnel call carries the real ABI method in its
+      * first eight bytes and may use ANY admitted selector: {magic, method, payload...} in, the method's exact output out. Method
+      * 0xffffffff is a probe that only proves the selector was admitted. */
++    /* An input longer than IOKit passes inline (4096 bytes: a virtgpu command) arrives as memory of the caller's: read it here. */
++    if(arguments && !arguments->structureInput && arguments->structureInputDescriptor) {
++        IOMemoryDescriptor *memory=arguments->structureInputDescriptor;
++        const IOByteCount size=memory->getLength();
++        if(size<8 || size>NativeAdrenoTunnelMaxInput)return kIOReturnBadArgument;
++        uint8_t *copy=IONewData(uint8_t,size);
++        if(!copy)return kIOReturnNoMemory;
++        IOReturn status=memory->prepare();
++        if(!status) {
++            status=memory->readBytes(0,copy,size)==size?kIOReturnSuccess:kIOReturnVMError;
++            memory->complete();
++        }
++        const uint32_t *header=reinterpret_cast<const uint32_t *>(copy);
++        if(!status)status=header[0]==NativeAdrenoTunnelMagic?run(header[1],copy+8,size-8,arguments->structureOutput,arguments->structureOutputSize):
++            kIOReturnBadArgument;
++        IODeleteData(copy,uint8_t,size);
++        native_adreno_metal_diag.tunnel_calls=native_adreno_metal_diag.tunnel_calls+1;
++        native_adreno_metal_diag.ext_status=uint32_t(status);
++        return status;
++    }
+     if(arguments && arguments->structureInput && arguments->structureInputSize>=8 &&
+         static_cast<const uint32_t *>(arguments->structureInput)[0]==NativeAdrenoTunnelMagic) {
+         const uint32_t *header=static_cast<const uint32_t *>(arguments->structureInput);
+@@ -638,6 +671,15 @@ extern "C" IOReturn native_adreno_new_user_client(IOService *provider,task_t own
+         record.type=type;record.macf=macf;record.res=resolver;record.attach=attach_state;record.foreign=type!=NativeAdrenoPluginOpenType;
+         native_adreno_open_log_count=native_adreno_open_log_count+1;
+     }
++    if(type==NativeAdrenoVirtgpuOpenType) {
++        if(!droidvm_virtgpu_call) {connection->release();return kIOReturnUnsupported;}
++        if(owningTask!=kernel_task && (macf || resolver!=uint32_t(kIOReturnSuccess))) {
++            connection->setProperty("NativeSandboxGrant",kOSBooleanTrue);
++            native_adreno_metal_diag.grants=native_adreno_metal_diag.grants+1;
++        }
++        *handler=connection;
++        return kIOReturnSuccess;
++    }
+     if(type==NativeAdrenoHandoffOpenType) {
+         connection->setHandoffOnly();
+         *handler=connection;

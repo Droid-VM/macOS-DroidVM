@@ -1,7 +1,7 @@
 From 27d05e9bb32f319c80c4aee66c0448358a928fda Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 31 Oct 2026 07:11:59 -0400
-Subject: [PATCH 2/3] DroidVM macOS: WindowServer as render server, 24 clients,
+Subject: [PATCH 2/9] DroidVM macOS: WindowServer as render server, 24 clients,
  raised object limits, 64-entry submissions, no-pool BOs
 
 What scripts/build-droidvm-gpu.py of the macOS VM did to the staged sources as string edits, now the sources themselves.
