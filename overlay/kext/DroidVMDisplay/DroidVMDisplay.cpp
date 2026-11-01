@@ -242,7 +242,7 @@ private:
     // Scheduling latency in the guest: the copy thread from its wakeup to running, the VBL timer past its period.
     uint64_t fCopyRequestTime, fWakeMaxNs, fWakeLate, fVBLDue, fVBLLateMaxNs, fVBLLate;
     uint64_t fSubmitTime[16], fFenceWaits, fFenceWaitNs, fFenceWaitMaxNs;   // diagnostic: swap submitted -> programmed (IOSurface fences)
-    uint32_t fNextResource, fScanoutResource;
+    uint32_t fScanoutResource;
     unsigned fScanoutFailures;
 
     PE_Video fVideo;
@@ -832,7 +832,7 @@ DroidVMDisplay::ScanoutResource *DroidVMDisplay::scanoutResource(IOSurface *surf
         }
         at += length;
     }
-    uint32_t id = ++fNextResource;
+    uint32_t id = DroidVMVirtioGpu::resourceId();   // the 3D contexts' blobs take theirs from the same counter
     struct {VirtioGpuHeader h; uint32_t id, memory, flags, count; uint64_t blob, size;}
         create = {{0x10c, 0, 0, 0, 0, {}}, id, 1 /* VIRTIO_GPU_BLOB_MEM_GUEST */, 8 /* crosvm: a guest handle */, count, 0, bytes};
     if (IOReturn status = fGpu.command(&create, sizeof(create), fEntries, count * sizeof(VirtioGpuEntry))) {
