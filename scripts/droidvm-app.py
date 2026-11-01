@@ -67,7 +67,10 @@ DTB = FOLDER + '/generated.dtb'
 GPU = os.environ.get('MACOS_GPU') == '1'
 # WindowServer's frame pacing: CA triple buffering, the plugin's nextWakeupTime (updates a refresh apart, not on the VBL grid) and
 # magazine malloc without zeroing on free; a heavy window drag 60 to ~118 frames a second with them (kc283 to kc292)
-GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1']
+# No BO pool and no write combining: BOs are the VM's pages as the GPU needs them (the pool held 1 GiB resident whether used or not),
+# cacheable on the CPU, the GPU mapping them write-back coherent (cebad87); MACOS_DROP_ARGS=droidvm-gpu-pool-mib,droidvm-gpu-wc for the pool
+GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1', 'droidvm-gpu-pool-mib=0',
+            'droidvm-gpu-wc=0']
 GPU_EXEC_ENV = ['WindowServer:MallocZeroOnFree=0']
 # MACOS_VIRTIO_GPU=1: the display is crosvm's virtio-gpu on virtio-mmio (--virtio-mmio-gpu, the last virtio-mmio window) instead of
 # simplefb. The daemon builds its --gpu (virglrenderer, context-types=drm, udmabuf) and the gpu-0 screen's display service from the
