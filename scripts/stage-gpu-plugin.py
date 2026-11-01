@@ -24,6 +24,12 @@ processes) every SECONDS, all on its stdout, so in the kernel's log too.
 (no MiniBuddy, which would keep loginwindow from launching the Dock and Finder).
 --file SOURCE:DEST copies a host file to DEST on the Data volume (/private/var: m2vsim/x is /private/var/m2vsim/x; not tmp/, which
 the boot empties), e.g. a bridge call trace for tools/m2vsim's replay in the guest.
+--base SEED --store STORE: change the Data volume the guest has written instead of making a new seed. STORE is a copy of the phone's
+data store (scripts/data_store.py), SEED the seed it was made against (the boot disk's); the store's pages are folded into SEED, the
+changes made, and every page that came out different is written into STORE's overlay, SEED kept. A new seed would leave the phone's
+store stale (it only applies to the exact seed it was made against: an empty Data volume), and a used one does not fit the packed
+seed format (256 MiB). Output: STORE changed in place and out/metal/stage/store-patch.{bin,txt}, the written blocks for the phone
+(scripts/droidvm-app.py store-patch).
 --data-size-mib makes the Data volume's container that large (the seed's is 1 GiB, which the first login's caches fill to 91%).
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
@@ -50,6 +56,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'sources/UniXNU/drivers/DarwinBoot/Test'))
 import packed_ramdisk  # noqa: E402
+from data_store import PAGE, Store  # noqa: E402
 
 TAG = os.environ.get('MACOS_TAG', '27.0.1')
 ARTIFACTS = ROOT / f'artifacts/{TAG}'
@@ -199,8 +206,12 @@ def main():
     parser.add_argument('--data-size-mib', type=int)
     parser.add_argument('--reduce-transparency', action='store_true')
     parser.add_argument('--file', metavar='SOURCE:DEST', action='append', default=[])
+    parser.add_argument('--base', type=Path, default=ARTIFACTS / 'data-seed/scratch-data.img')
+    parser.add_argument('--store', type=Path)
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
+    if args.store and args.data_size_mib:
+        raise SystemExit('--data-size-mib makes a new seed: not with --store')
     bundles = [b.resolve() for b in args.bundles]
     if any(not (b / 'Contents/Info.plist').is_file() for b in bundles):
         raise SystemExit('a bundle needs Contents/Info.plist (the macOS layout)')
@@ -212,7 +223,7 @@ def main():
     trust.write_bytes(trust_bundle(hashes, (ARTIFACTS / 'boot/kernel.macho.trustcache').read_bytes()))
     print(f'{trust}: {len(hashes)} CDHashes ' + ' '.join(h.hex() for h in hashes))
 
-    logical, extents = packed_ramdisk.regions((ARTIFACTS / 'data-seed/scratch-data.img').read_bytes())
+    logical, extents = packed_ramdisk.regions(args.base.read_bytes())
     with tempfile.TemporaryDirectory(prefix='data-seed-', dir=str(OUT)) as scratch:
         raw = Path(scratch) / 'seed.raw'
         with raw.open('wb') as handle:
@@ -220,6 +231,10 @@ def main():
             for offset, data in extents:
                 handle.seek(offset)
                 handle.write(data)
+            store = Store(args.store, writable=True) if args.store else None
+            if store:
+                store.check(logical, extents)
+                print(f'{args.store}: {store.fold_into(handle)} pages folded in')
         mount = Path(scratch) / 'mount'
         mount.mkdir()
         if subprocess.run(['grep', '-q', '^apfs ', '/proc/modules']).returncode:
@@ -354,6 +369,16 @@ def main():
                 subprocess.run(['sudo', 'umount', str(mount)], check=True)
         finally:
             subprocess.run(['sudo', 'losetup', '-d', loop], check=True)
+        if store:
+            store.refresh(raw, extents)
+            runs = store.runs()
+            with (OUT / 'store-patch.bin').open('wb') as patch:
+                for first, count in runs:
+                    patch.write(store.map[first * PAGE:(first + count) * PAGE])
+            (OUT / 'store-patch.txt').write_text(''.join(f'{first} {count}\n' for first, count in runs))
+            store.close()
+            print(f'{args.store}: {sum(c for _, c in runs)} blocks written in {len(runs)} runs (out/metal/stage/store-patch.*); seed kept: {args.base}')
+            return
         seed = OUT / 'scratch-data.img'
         seed.unlink(missing_ok=True)
         packed_ramdisk.pack(raw, seed)

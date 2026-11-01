@@ -11,6 +11,8 @@
   droidvm-app.py register                                (re)write the vms.json entry through the daemon's config transaction
   droidvm-app.py net                                     only switch the registered VM's network (MACOS_NET) and dump its new FDT,
                                                          keeping every other setting made in the app; then boot
+  droidvm-app.py store-patch                             write out/metal/stage/store-patch.{bin,txt} (stage-gpu-plugin.py --store) into
+                                                         the stopped VM's Data store, the blocks it replaces saved beside it first
   droidvm-app.py start|stop|status
 
 The daemon plumbing (IPC, configuration transaction, VM template) is the iOS tool's (ios/tools/droidvm-app.py, imported and
@@ -96,6 +98,8 @@ REQUIRED_ARGS = [a for a in REQUIRED_ARGS if a.split('=')[0] not in os.environ.g
 # exec-env (one boot argument, groups split by ';'): WebKit's WebContent reserves a 64 GiB Gigacage aligned to 64 GiB, which the 39-bit
 # user space (the GPU carveout at 64-448 GiB) cannot hold; without the cage Safari's pages load instead of WebContent crashing at launch
 EXEC_ENV = ['com.apple.WebKit.WebContent:GIGACAGE_ENABLED=no']
+# MACOS_EXEC_ENV=NAME:VAR=VALUE[;...]: more groups (e.g. metal-probe:TU_DARWIN_VIRTGPU=1, Turnip on virtio-gpu 3D for one process)
+EXEC_ENV += [g for g in os.environ.get('MACOS_EXEC_ENV', '').split(';') if g]
 # Everything the iOS functions read as module state: the VM identity, the folder (also its ownership reference), the output directory.
 ios.FOLDER, ios.VM_NAME, ios.VM_ID, ios.MEM_MB, ios.OUT, ios.BOOT = FOLDER, VM_NAME, VM_ID, MEM_MB, OUT, BOOT
 adb, sh = ios.adb, ios.sh
@@ -233,12 +237,30 @@ def net(args):
     dump_fdt()
 
 
+def store_patch(args):
+    """The blocks stage-gpu-plugin.py --store wrote into a copy of the Data store, written into the phone's (in place: the file is
+    17 GiB, mostly holes). The blocks they replace go to data-store.undo.{bin,txt} first; the same loop with the undo files puts
+    them back."""
+    row = ios.find_vm(ios.Ipc())
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    stage = ROOT / 'out/metal/stage'
+    for name in ('store-patch.bin', 'store-patch.txt'):
+        adb('push', str(stage / name), f'{FOLDER}/{name}', timeout=600)
+    store, patch, undo = run.STORE, f'{FOLDER}/store-patch', f'{FOLDER}/data-store.undo'
+    sh(f'cp {patch}.txt {undo}.txt && rm -f {undo}.bin && at=0 && while read first count; do '
+       f'dd if={store} of={undo}.bin bs=4096 skip=$first seek=$at count=$count conv=notrunc 2>/dev/null || exit 1; '
+       f'dd if={patch}.bin of={store} bs=4096 skip=$at seek=$first count=$count conv=notrunc 2>/dev/null || exit 1; '
+       f'at=$((at + count)); done < {patch}.txt && rm {patch}.bin {patch}.txt && sync', timeout=600)
+    print(sh(f'ls -la {store} {undo}.bin'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
-    for name in ('push', 'register', 'net', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'net', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -251,6 +273,8 @@ def main():
         prepare(args)
     elif args.cmd == 'net':
         net(args)
+    elif args.cmd == 'store-patch':
+        store_patch(args)
     else:
         {'register': ios.register, 'start': ios.start}[args.cmd](args)
 
