@@ -308,6 +308,24 @@ static id deviceForPort(io_service_t port)
         IORegistryEntryGetRegistryEntryID(port, &registryID);
         // Turnip's darwin backend opens the accelerator itself, by class (its default is the iOS IOAcceleratorES) with the plugin's type.
         setenv("TU_DARWIN_SERVICE", "AGXAccelerator", 1);
+        // The runtime's pooled blocks (the board's patches/metal2vulkan/0019): 16 MiB, not the runtime's 64, unless
+        // /private/var/ngpu/debug/block-mib holds another size for a test. Every block is wired guest memory, and at 64 MiB WindowServer
+        // held about 180 MiB of empty blocks, every other client's allocations then failing (45c8294). Upstream's iPadOS board went
+        // back to 64 MiB after 16 MiB blocks hung its render server's GPU context on 3 of 5 app open/close cycles (NativeMetal 8f735a2);
+        // the macOS VM has run at 16 MiB without a hang.
+        {
+            char text[16] = {};
+            if (FILE *file = fopen("/private/var/ngpu/debug/block-mib", "r")) {
+                if (!fgets(text, sizeof text, file)) text[0] = 0;
+                fclose(file);
+            }
+            setenv("METAL2VULKAN_BLOCK_MIB", text[0] ? text : "16", 0);
+        }
+        // The render server's queue at a high global priority (the board's patches/metal2vulkan/0012, as upstream's plugin does for
+        // backboardd): a Vulkan queue's priority is fixed when the device opens, and the board's Turnip moves the process's ring to it
+        // (patches/mesa/turnip-darwin-queue-priority.patch), so WindowServer's frames do not wait on the GPU behind an app's.
+        if (!strcmp(getprogname(), "WindowServer"))
+            setenv("METAL2VULKAN_QUEUE_PRIORITY", "high", 0);
         // The frontend's refusals (a texture it does not make, with the reason) on stderr too, where stderr-log=1 shows them.
         setenv("NMB_LOG_STDERR", "1", 1);
         // The display takes plain rows: no Apple framebuffer or IOSurface compression, which this GPU does not write.

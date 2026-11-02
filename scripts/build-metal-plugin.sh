@@ -10,6 +10,8 @@ if [ "${1:-}" != --no-deps ]; then
   python3 scripts/build-turnip-macos.py
   python3 scripts/build-metal-bridge-macos.py
 fi
+# NativeMetal: local branch macos-hackintosh, Droid-VM/NativeMetal wip/hackintosh f4ce342 (the AdrenoMetal Droid-VM/UniXNU wip/droidvm
+# 803a014 pins, see build-turnip-macos.py) with a9531ab (two-plane YCbCr surface textures converted once per contents) on top
 U=sources/UniXNU/drivers/NativeMetal
 O=out/metal/plugin
 B=$O/NativeAdrenoMetal.bundle/Contents

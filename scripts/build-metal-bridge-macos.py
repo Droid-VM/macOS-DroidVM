@@ -26,9 +26,13 @@ TRIPLE = 'arm64e-apple-darwin'
 # pacibsp/retab, signed static function pointers) for cfg(target_abi = "pauthtest") only, so this is the built-in target with that ABI;
 # init-fini off: dyld signs Mach-O initializers itself.
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
-# NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan, none since NativeMetal wip/hackintosh
-# carries them), in the order its build-native-metal-bridge.py applies.
-PATCHES = sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch')) + sorted((UNIXNU / 'patches/metal2vulkan').glob('*.patch'))
+# NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan, from the sources/UniXNU-turnip worktree at
+# the commit that pins this NativeMetal: see build-turnip-macos.py), in the order its build-adreno-metal-bridge.py applies. As there, not
+# NativeMetal's 0020-written-host-page-textures-in-place-at-any-size.patch: it needs upstream Turnip's render-mode patch, which is not
+# in the board's Mesa.
+BOARD = ROOT / 'sources/UniXNU-turnip'
+PATCHES = [patch for patch in sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch'))
+           if patch.name != '0020-written-host-page-textures-in-place-at-any-size.patch'] + sorted((BOARD / 'patches/metal2vulkan').glob('*.patch'))
 
 pin = json.loads((UNIXNU / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:
