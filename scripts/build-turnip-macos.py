@@ -4,7 +4,14 @@ arm64e on Linux: the ios branch of UniXNU's scripts/build-turnip-darwin.py with 
 
     build-turnip-macos.py [--configure-only]
 
-Source: sources/UniXNU/.cache/mesa-work at the pin of scripts/data/adreno-compiler-inputs.json with its recorded patches applied.
+Source: sources/UniXNU-turnip/.cache/mesa-work at the pin of that tree's scripts/data/adreno-compiler-inputs.json with its recorded
+patches applied. sources/UniXNU-turnip is a worktree of sources/UniXNU at Droid-VM/UniXNU wip/droidvm (803a014, 2026-11-02: Droid-VM/mesa
+cecc0e9 and 17 patches, the virtio GPU backend and its queue priority, deadline queue and BO cache budget among them), apart from
+the board's own UniXNU checkout (whose NativeMetal and other pins stay):
+    git -C sources/UniXNU worktree add --detach ../UniXNU-turnip 803a014
+    git -C sources/UniXNU/.cache/mesa-work fetch --depth 1 https://github.com/Droid-VM/mesa cecc0e96d7193c72356a31abb0cc589e4fc0415e
+    git -C sources/UniXNU/.cache/mesa-work worktree add --detach $PWD/sources/UniXNU-turnip/.cache/mesa-work cecc0e96d7193c72356a31abb0cc589e4fc0415e
+    then git apply each of the pins' "patches" there, in order.
 The darwin backend's ABI header is the NativeAdreno the kernel's DroidVMGpu is built from (out/x12377/src-gpu, scripts/build-droidvm-gpu.py).
 Compiles with LLVM 21 (arm64e-apple-macos14.0, MacOSX26.1.sdk) and links with Apple's ld-classic (scripts/apple-ld.py --raw).
 Output: out/metal/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib"""
@@ -16,7 +23,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-UNIXNU = ROOT / 'sources/UniXNU'
+UNIXNU = ROOT / 'sources/UniXNU-turnip'
 SOURCE = UNIXNU / '.cache/mesa-work'
 OUT = ROOT / 'out/metal/mesa-tu'
 SDK = ROOT / 'toolchains/sdks/MacOSX26.1.sdk'

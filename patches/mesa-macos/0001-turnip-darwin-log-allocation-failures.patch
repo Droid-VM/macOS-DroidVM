@@ -1,6 +1,6 @@
 Bring-up logging: WindowServer's command stream allocation failed with nothing logged, then wrote through its null pointer
-(tu_cs_reserve_space's callers ignore its result). Logs a failed BO array or BO allocation or map in tu_cs_add_bo, a GPU address the
-darwin backend could not find, and a failed retired BO collection.
+(tu_cs_reserve_space's callers ignore its result). Logs a failed BO array or BO allocation or map in tu_cs_add_bo (a GPU address
+the backend could not find is logged by upstream's turnip-darwin-va-exhausted-note.patch).
 
 diff --git a/src/freedreno/vulkan/tu_cs.cc b/src/freedreno/vulkan/tu_cs.cc
 index 47e1939..5577585 100644
@@ -32,26 +32,3 @@ index 47e1939..5577585 100644
        tu_bo_finish(cs->device, new_bo);
        return result;
     }
-diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
-index b03c6ee..291c7ae 100644
---- a/src/freedreno/vulkan/tu_knl_darwin.cc
-+++ b/src/freedreno/vulkan/tu_knl_darwin.cc
-@@ -248,6 +248,9 @@ darwin_allocate_iova(struct tu_device *dev, uint64_t size, uint64_t client_iova,
-       *iova = util_vma_heap_alloc(&dev->vma, size, os_page_size);
-    }
-    mtx_unlock(&dev->vma_mutex);
-+   if (!*iova)
-+      mesa_loge("NativeAdreno: no GPU address for %" PRIu64 " bytes (flags %#x, window %#" PRIx64 "+%#" PRIx64 ")", size,
-+                (unsigned)flags, dev->physical_device->va_start, dev->physical_device->va_size);
-    return *iova ? VK_SUCCESS : VK_ERROR_OUT_OF_DEVICE_MEMORY;
- }
- 
-@@ -317,6 +320,8 @@ darwin_collect_retired(struct tu_device *dev)
-    pthread_mutex_lock(&retire->lock);
-    VkResult result = darwin_reap_locked(dev, retire);
-    pthread_mutex_unlock(&retire->lock);
-+   if (result != VK_SUCCESS)
-+      mesa_loge("NativeAdreno: retired BO collection failed (%d)", result);
-    return result;
- }
- 
