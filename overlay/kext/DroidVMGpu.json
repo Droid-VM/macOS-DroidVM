@@ -18,8 +18,7 @@
     "DroidVMGpu": {
       "CFBundleIdentifier": "com.unixnu.driver.DroidVMGpu",
       "IOClass": "DroidVMGpuStarter",
-      "IOProviderClass": "IOPlatformDevice",
-      "IONameMatch": "droidvm,gpu",
+      "IOProviderClass": "IOResources",
       "IOProbeScore": 1000,
       "IOMatchCategory": "DroidVMGpu"
     },

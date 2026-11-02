@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// DroidVMGpu (UniXNU-droidvm package/DroidVMGpu.cpp) as a kext of the collection. On the iOS board the late display probe calls
-// sheng_gpu_power_probe(); here the IOPlatformDevice of /arm-io/gpu (compatible "droidvm,gpu") matches DroidVMGpuStarter, whose
-// start() makes that call (droidvm-gpu=1 still gates it). The iOS AGXAccelerator (droidvm-gpu-metal=1) is not built: its builder
-// binds addresses of the iOS IOAcceleratorES, so publishMetal() finds no accelerator and stops at its first stage. The macOS one is
-// AGXAccelerator below, an ordinary subclass of IOGraphicsFamily's IOAccelerator.
+// DroidVMGpu (UniXNU-droidvm package/DroidVMGpu.cpp, which only publishes NativeAdreno for the virtio GPU's 3D) as a kext of the
+// collection. On the iOS board the late display probe calls sheng_gpu_power_probe(); here IOResources matches DroidVMGpuStarter (no
+// device of its own: crosvm's droidvm-gpu is gone from the VM), whose start() makes that call, which publishes from a thread (start
+// runs inside IOResources' matching and must not wait). The macOS accelerator is AGXAccelerator below, an ordinary subclass of
+// IOGraphicsFamily's IOAccelerator, matching the published service.
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>

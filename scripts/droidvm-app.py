@@ -64,15 +64,12 @@ MEM_MB = int(os.environ.get('MACOS_MEM_MB') or 5120)   # MACOS_MEM_MB: the host'
 OUT = ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
-# MACOS_GPU=1: crosvm's --droidvm-gpu (the host's KGSL) as the last virtio-mmio device; the template changes, so register and
-# prepare again (the ADT must list the device), then boot. The guest side is DroidVMGpu with its CP_MEM_WRITE self-test only.
+# MACOS_GPU=1: Metal (DroidVMGpu's NativeAdreno, Turnip) on the virtio GPU's 3D (vgpu-3d=1, drm2kgsl on the host): needs
+# MACOS_VIRTIO_GPU=1. crosvm's --droidvm-gpu (the host's KGSL, the old route) is gone from the VM.
 GPU = os.environ.get('MACOS_GPU') == '1'
 # WindowServer's frame pacing: CA triple buffering, the plugin's nextWakeupTime (updates a refresh apart, not on the VBL grid) and
 # magazine malloc without zeroing on free; a heavy window drag 60 to ~118 frames a second with them (kc283 to kc292)
-# No BO pool and no write combining: BOs are the VM's pages as the GPU needs them (the pool held 1 GiB resident whether used or not),
-# cacheable on the CPU, the GPU mapping them write-back coherent (cebad87); MACOS_DROP_ARGS=droidvm-gpu-pool-mib,droidvm-gpu-wc for the pool
-GPU_ARGS = ['droidvm-gpu=1', 'droidvm-gpu-selftest=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1', 'droidvm-gpu-pool-mib=0',
-            'droidvm-gpu-wc=0']
+GPU_ARGS = ['vgpu-3d=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1']
 GPU_EXEC_ENV = ['WindowServer:MallocZeroOnFree=0']
 # MACOS_VIRTIO_GPU=1: the display is crosvm's virtio-gpu on virtio-mmio (--virtio-mmio-gpu, the last virtio-mmio window) instead of
 # simplefb. The daemon builds its --gpu (virglrenderer, context-types=drm, udmabuf) and the gpu-0 screen's display service from the
@@ -80,7 +77,7 @@ GPU_EXEC_ENV = ['WindowServer:MallocZeroOnFree=0']
 VIRTIO_GPU = os.environ.get('MACOS_VIRTIO_GPU') == '1'
 REFRESH_HZ = int(os.environ.get('MACOS_REFRESH_HZ') or 120)
 # MACOS_NET (default 1): the app's br-wifi network (a tap bridged to the phone's wlan0) as crosvm's virtio-net on virtio-mmio
-# (--virtio-mmio-net, between --droidvm-gpu's and --virtio-mmio-gpu's windows), /arm-io/net in the ADT, driven by DroidVMEthernet
+# (--virtio-mmio-net, before --virtio-mmio-gpu's window), /arm-io/net in the ADT, driven by DroidVMEthernet
 # (en0, DHCP from the Wi-Fi's router). The MAC is the one en0 had with no device behind it, so the Data volume's en0 stays en0.
 # MACOS_NET=0: no device, en0 drops every packet (it still exists for the TimeSync clock). The template changes: register and prepare.
 NET = os.environ.get('MACOS_NET', '1') == '1'
@@ -119,7 +116,7 @@ def template(persistent):
                'extra_options': ['--block', BOOT + ',lock=false', '--dump-device-tree-blob', DTB,
                                  '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
-                                 '--virtio-mmio-block', run.STORE + ',lock=false', *(['--droidvm-gpu'] if GPU else []),
+                                 '--virtio-mmio-block', run.STORE + ',lock=false',
                                  *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else [])]})
     if NET:
         vm['networks'] = [{'network_id': network_id(), 'mac_address': NET_MAC}]
@@ -177,7 +174,7 @@ def boot_disk(args):
     adt = OUT / 'kernel.macho.adt'
     # Below the shim's RAM base (0x600000 of firmware window), the framebuffer and the pools at the top of RAM (0xA00000 before:
     # the window and a 1280x800 framebuffer's 4 MiB)
-    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None, gpu=GPU,
+    run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None,
                  virtio_gpu=VIRTIO_GPU, net=NET)   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + ([a for a in GPU_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')] if GPU else []) +

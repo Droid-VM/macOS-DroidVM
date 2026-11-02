@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Build DroidVMGpu (crosvm --droidvm-gpu, the host's KGSL) as a native kext of the collection: overlay/kext/DroidVMGpu.json.
+"""Build DroidVMGpu (NativeAdreno published for Metal on the virtio GPU's 3D, vgpu-3d=1) as a native kext of the collection:
+overlay/kext/DroidVMGpu.json.
 
-    build-droidvm-gpu.py        DROIDVM_GPU_SUBMIT_TIMES=1 adds patches/droidvm-gpu/diag/submit-times.patch (diagnostics)
+    build-droidvm-gpu.py
 
 The sources, exported to out/x12377/src-gpu laid out as a UniXNU tree: NativeAdreno 805c7e4 (the commit UniXNU-droidvm bf7fc44 builds
-with) with patches/droidvm-gpu/NativeAdreno, and bf7fc44's package/DroidVMGpu.cpp and DroidVMGpuWire.h (the hardware classes
-NativeAdrenoVm/Ring/Timer and the wire of the phone's crosvm: the App's of 2026-10-22, external/crosvm drm-droidvm-mmio 7d1e255) with
-patches/droidvm-gpu/UniXNU-droidvm; AdrenoPM4 and ArmSmmu4K at the commits UniXNU's wip/droidvm pins. The patches are the commits of
+with) with patches/droidvm-gpu/NativeAdreno, and bf7fc44's package/DroidVMGpu.cpp and DroidVMGpuWire.h with
+patches/droidvm-gpu/UniXNU-droidvm (0002: the hardware classes NativeAdrenoVm/Ring/Timer never attached, the wire removed; the VM
+has no droidvm-gpu device); AdrenoPM4 and ArmSmmu4K at the commits UniXNU's wip/droidvm pins. The patches are the commits of
 branch droidvm-macos of sources/UniXNU/drivers/NativeAdreno and of sources/UniXNU-droidvm: after a commit there, export them again
-(git format-patch --no-signature 805c7e4..droidvm-macos, bf7fc44..droidvm-macos). overlay/kext/DroidVMGpuKext.cpp starts the device.
+(git format-patch --no-signature 805c7e4..droidvm-macos, bf7fc44..droidvm-macos). overlay/kext/DroidVMGpuKext.cpp starts the publish.
 """
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,8 +44,7 @@ for name in ('DroidVMGpu.cpp', 'DroidVMGpuWire.h'):
     (board / name).write_bytes(subprocess.run(['git', '-C', str(DROIDVM), 'show', f'{REF}:package/{name}'], capture_output=True,
                                               check=True).stdout)
 adreno = SRC / 'drivers/NativeAdreno'
-patch(adreno, sorted((PATCHES / 'NativeAdreno').glob('*.patch')) +
-      ([PATCHES / 'diag/submit-times.patch'] if os.environ.get('DROIDVM_GPU_SUBMIT_TIMES') == '1' else []), 1)
+patch(adreno, sorted((PATCHES / 'NativeAdreno').glob('*.patch')), 1)
 patch(board, sorted((PATCHES / 'UniXNU-droidvm').glob('*.patch')), 2)   # a/package/NAME
 
 sources = [adreno / 'NativeAdrenoSubmit.cpp', adreno / 'NativeAdrenoMemory.cpp', adreno / 'NativeAdrenoCpu.cpp',
