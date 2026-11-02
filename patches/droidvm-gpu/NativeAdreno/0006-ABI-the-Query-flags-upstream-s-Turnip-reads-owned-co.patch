@@ -1,7 +1,7 @@
-From 52bdf635ea4c2c074fab789775e3847da987e92f Mon Sep 17 00:00:00 2001
+From 53a1eff51f46050328908f6b5e4b99415ce4a59d Mon Sep 17 00:00:00 2001
 From: HuJK <gh@hujk.org>
 Date: Thu, 29 Oct 2026 13:38:49 +0800
-Subject: [PATCH 8/9] ABI: the Query flags upstream's Turnip reads
+Subject: [PATCH 6/6] ABI: the Query flags upstream's Turnip reads
  (owned-coherent BOs, BO pool pressure)
 
 As upstream's feat/ipados27-gpu-parity defines them (ccf5e91, 127dff2), without its driver changes: this board's 3D runs on
@@ -16,7 +16,7 @@ Claude-Session: https://claude.ai/code/session_01MmgVbdYzu7uPjUcpLVQMTq
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/NativeAdrenoABI.h b/NativeAdrenoABI.h
-index 966ac70..4fe2785 100644
+index 3ca23cd..86ff4e8 100644
 --- a/NativeAdrenoABI.h
 +++ b/NativeAdrenoABI.h
 @@ -41,7 +41,9 @@ struct NativeAdrenoAbiParams {

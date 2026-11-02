@@ -1,4 +1,4 @@
-From 54015f6e8c75f4ed6d1ebb55ae917f058eaf53f6 Mon Sep 17 00:00:00 2001
+From dadbba73378918256d887d919eb8dabe34922245 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Mon, 2 Nov 2026 09:45:54 -0500
 Subject: [PATCH 2/2] DroidVMGpu for the macOS VM: only NativeAdreno's publish,
@@ -10,13 +10,13 @@ hardware classes are defined as never attached, so the KGSL-style opens (0x4147)
 the transport, KGSL imports and binds, the BO pool, the ring over KGSL timestamps, the self-test, DroidVMGpuWire.h. The macOS
 accelerator is the kext's own AGXAccelerator (its personality matches the published service), so publishMetal goes too.
 ---
- package/DroidVMGpu.cpp   | 862 +++------------------------------------
+ package/DroidVMGpu.cpp   | 858 +++------------------------------------
  package/DroidVMGpuWire.h | 109 -----
- 2 files changed, 59 insertions(+), 912 deletions(-)
+ 2 files changed, 55 insertions(+), 912 deletions(-)
  delete mode 100644 package/DroidVMGpuWire.h
 
 diff --git a/package/DroidVMGpu.cpp b/package/DroidVMGpu.cpp
-index e78bd86..f3408ea 100644
+index e78bd86..471a2c0 100644
 --- a/package/DroidVMGpu.cpp
 +++ b/package/DroidVMGpu.cpp
 @@ -1,55 +1,26 @@
@@ -444,8 +444,7 @@ index e78bd86..f3408ea 100644
 -    return kIOReturnSuccess;
 -}
 -IOReturn NativeAdrenoVm::detach()
-+    const NativeAdrenoVmRegion *, size_t, unsigned)
- {
+-{
 -    if (!attached_ || objects_) return kIOReturnBusy;
 -    IODeleteData(mappings_, Mapping, NativeAdrenoVmMaxObjects);
 -    mappings_ = nullptr;
@@ -453,7 +452,8 @@ index e78bd86..f3408ea 100644
 -    return kIOReturnSuccess;
 -}
 -NativeAdrenoVm::Mapping *NativeAdrenoVm::find(uint64_t handle)
--{
++    const NativeAdrenoVmRegion *, size_t, unsigned)
+ {
 -    if (!handle || !mappings_) return nullptr;
 -    uint16_t &hint = gHandleSlots[handle % 4096];
 -    if (hint < gMappingEnd && mappings_[hint].memory && mappings_[hint].handle == handle) return &mappings_[hint];
@@ -614,7 +614,7 @@ index e78bd86..f3408ea 100644
  IOReturn NativeAdrenoVm::auditRange(uint64_t, size_t, uint32_t *lines, uint32_t *dirty, uint32_t *stale) const
  {
      if (lines) *lines = 0;
-@@ -578,152 +85,51 @@ IOReturn NativeAdrenoVm::sampleWord(uint64_t, uint32_t *cached, uint32_t *dram)
+@@ -578,152 +85,47 @@ IOReturn NativeAdrenoVm::sampleWord(uint64_t, uint32_t *cached, uint32_t *dram)
      *cached = *dram = ~0u;
      return kIOReturnUnsupported;
  }
@@ -774,17 +774,13 @@ index e78bd86..f3408ea 100644
  }
  
 -// ---- board: bring-up and publication ---------------------------------------------------------------------------------------
-+// ---- NativeAdrenoPublish's hook ---------------------------------------------------------------------------------------------
-+// The clients' GPU windows start at 0 (they were offsets into the droidvm-gpu device's KGSL VBO).
-+extern "C" uint64_t droidvm_gpu_window_base(void) {return 0;}
-+
 +// ---- board: publication -----------------------------------------------------------------------------------------------------
 +// For the host rig: NativeAdreno's publish status (~0 not yet).
 +extern "C" volatile uint32_t droidvm_gpu_publish = ~0u;
  namespace {
  NativeAdrenoVm gVm;
  NativeAdrenoRing gRing;
-@@ -731,7 +137,12 @@ NativeAdrenoSubmit gSubmit;
+@@ -731,7 +133,12 @@ NativeAdrenoSubmit gSubmit;
  NativeAdrenoTimer gTimer;
  NativeAdrenoAbiDeviceInfo gDeviceInfo;
  
@@ -798,7 +794,7 @@ index e78bd86..f3408ea 100644
  int ringIdle(void *)
  {
      IODelay(20);
-@@ -739,174 +150,19 @@ int ringIdle(void *)
+@@ -739,174 +146,19 @@ int ringIdle(void *)
  }
  const NativeAdrenoRingClock gClock = {nullptr, ringNow, ringIdle};
  

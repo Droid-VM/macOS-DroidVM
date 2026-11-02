@@ -5,7 +5,8 @@ overlay/kext/DroidVMGpu.json.
     build-droidvm-gpu.py
 
 The sources, exported to out/x12377/src-gpu laid out as a UniXNU tree: NativeAdreno 805c7e4 (the commit UniXNU-droidvm bf7fc44 builds
-with) with patches/droidvm-gpu/NativeAdreno, and bf7fc44's package/DroidVMGpu.cpp and DroidVMGpuWire.h with
+with) with patches/droidvm-gpu/NativeAdreno (Droid-VM/NativeAdreno's virtio-gpu 3D commits only: the KGSL proxy's edits went
+with the device), and bf7fc44's package/DroidVMGpu.cpp and DroidVMGpuWire.h with
 patches/droidvm-gpu/UniXNU-droidvm (0002: the hardware classes NativeAdrenoVm/Ring/Timer never attached, the wire removed; the VM
 has no droidvm-gpu device); AdrenoPM4 and ArmSmmu4K at the commits UniXNU's wip/droidvm pins. The patches are the commits of
 branch droidvm-macos of sources/UniXNU/drivers/NativeAdreno and of sources/UniXNU-droidvm: after a commit there, export them again

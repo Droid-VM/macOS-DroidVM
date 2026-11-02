@@ -1,7 +1,7 @@
-From aae4e92bc901be1df7df97c598e1b4364d0cc98e Mon Sep 17 00:00:00 2001
+From f3abfc81e0bd55f4ad838595e5e727d617ec893c Mon Sep 17 00:00:00 2001
 From: HuJK <gh@hujk.org>
 Date: Sun, 25 Oct 2026 12:42:25 +0800
-Subject: [PATCH 5/9] DroidVM virtgpu ABI: GETPARAM 0x101, whether the board
+Subject: [PATCH 3/6] DroidVM virtgpu ABI: GETPARAM 0x101, whether the board
  makes this the default 3D path
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

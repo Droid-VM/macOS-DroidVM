@@ -1,7 +1,7 @@
-From e3f2a51d6b7388982daef2847797acb773da8818 Mon Sep 17 00:00:00 2001
+From 814252ec352e52156e9de67334fad27b90d3d329 Mon Sep 17 00:00:00 2001
 From: HuJK <gh@hujk.org>
 Date: Sun, 25 Oct 2026 08:56:27 +0800
-Subject: [PATCH 3/9] Carry the DroidVM virtio-gpu DRM ABI that turnip and the
+Subject: [PATCH 1/6] Carry the DroidVM virtio-gpu DRM ABI that turnip and the
  board kernel share
 
 DroidVMVirtgpuABI.h moves here from the DroidVM board package: the methods NativeAdreno forwards to the board's virtio-gpu

@@ -1,7 +1,7 @@
-From d6b0253db4bb1018dc412ce1040125b2c8c79d20 Mon Sep 17 00:00:00 2001
+From 0c2a6c67385779d580fb6946efcb36eaf18e5908 Mon Sep 17 00:00:00 2001
 From: HuJK <gh@hujk.org>
 Date: Thu, 29 Oct 2026 11:03:18 +0800
-Subject: [PATCH 7/9] user client: take an input IOKit passed out of line (over
+Subject: [PATCH 5/6] user client: take an input IOKit passed out of line (over
  4096 bytes) by its descriptor alone
 
 is_io_connect_method points structureInput at the (empty) inband buffer even when the input came out
@@ -20,10 +20,10 @@ Claude-Session: https://claude.ai/code/session_01MmgVbdYzu7uPjUcpLVQMTq
  1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/NativeAdrenoPublish.cpp b/NativeAdrenoPublish.cpp
-index 895b92b..44898d2 100644
+index 929154f..1eeba11 100644
 --- a/NativeAdrenoPublish.cpp
 +++ b/NativeAdrenoPublish.cpp
-@@ -542,8 +542,12 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,IOExternalMethodA
+@@ -524,8 +524,12 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,IOExternalMethodA
       * so which selector numbers reach this object is decided outside the driver. A tunnel call carries the real ABI method in its
       * first eight bytes and may use ANY admitted selector: {magic, method, payload...} in, the method's exact output out. Method
       * 0xffffffff is a probe that only proves the selector was admitted. */

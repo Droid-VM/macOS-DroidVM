@@ -1,7 +1,7 @@
-From 09d4f451dec08e99fc6bb358ca111db7924b2ce5 Mon Sep 17 00:00:00 2001
+From 8e8e7ad27aa44210f9846831c0e7816ad9d263e4 Mon Sep 17 00:00:00 2001
 From: HuJK <gh@hujk.org>
 Date: Sun, 25 Oct 2026 12:05:02 +0800
-Subject: [PATCH 4/9] DroidVM virtgpu ABI: CREATE_BLOB_USER, a guest blob over
+Subject: [PATCH 2/6] DroidVM virtgpu ABI: CREATE_BLOB_USER, a guest blob over
  the caller's own pages
 
 Op 9 takes [address, address + size) of the calling task (an IOSurface's pages, VK_EXT_external_memory_host) and a GEM_NEW
