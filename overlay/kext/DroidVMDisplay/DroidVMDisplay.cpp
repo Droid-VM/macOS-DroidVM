@@ -110,6 +110,9 @@ using VirtioGpuHeader = DroidVMVirtioGpu::Header;
 using VirtioGpuEntry = DroidVMVirtioGpu::Entry;
 struct VirtioGpuRect {uint32_t x, y, width, height;};
 extern "C" volatile uint64_t droidvm_virtio_gpu_commands;
+// DroidVMVirtioGpu3D.cpp: the number of the latest fenced 3D submission of any client, and whether every one up to a number has finished.
+extern "C" uint64_t droidvm_virtgpu_submitted(void);
+extern "C" bool droidvm_virtgpu_finished(uint64_t);
 
 class VirtioGpu {
 public:
@@ -208,7 +211,7 @@ private:
     struct ScanoutResource;
     ScanoutResource *scanoutResource(IOSurface *, uint32_t format);
     bool releaseResource(ScanoutResource &);
-    void requestCopy(IOSurface *, bool refresh);
+    void requestCopy(IOSurface *, bool refresh, uint64_t work = 0);
     void copyLoop();
     static void copyThreadMain(void *, wait_result_t);
     const uint8_t *surfaceBytes(IOSurface *, IOMemoryDescriptor *);
@@ -242,6 +245,10 @@ private:
     // Scheduling latency in the guest: the copy thread from its wakeup to running, the VBL timer past its period.
     uint64_t fCopyRequestTime, fWakeMaxNs, fWakeLate, fVBLDue, fVBLLateMaxNs, fVBLLate;
     uint64_t fSubmitTime[16], fFenceWaits, fFenceWaitNs, fFenceWaitMaxNs;   // diagnostic: swap submitted -> programmed (IOSurface fences)
+    // A swap's GPU work: the 3D submissions made before it (droidvm_virtgpu_submitted at swap_submit). The host reads the surface for
+    // the screen in another context, which does not wait for the guest's renderers: shown before that work has finished, a frame came
+    // out half drawn (the wallpaper twitched). The copy thread waits for it; the waits, their time and the ones given up after 200 ms.
+    uint64_t fSubmitWork[16], fCopyWork, fGpuWaits, fGpuWaitNs, fGpuWaitMaxNs, fGpuLate;
     uint32_t fScanoutResource;
     unsigned fScanoutFailures;
 
@@ -508,6 +515,10 @@ IOReturn DroidVMDisplay::swap_begin_gated()
             IOLog("DroidVMDisplay: %llu swaps from submit to programmed mean %llu us max %llu us\n", fFenceWaits,
                   fFenceWaitNs / fFenceWaits / 1000, fFenceWaitMaxNs / 1000);
         fFenceWaits = fFenceWaitNs = fFenceWaitMaxNs = 0;
+        if (fGpuWaits)
+            IOLog("DroidVMDisplay: %llu frames waited for their GPU work, mean %llu us max %llu us, %llu given up\n", fGpuWaits,
+                  fGpuWaitNs / fGpuWaits / 1000, fGpuWaitMaxNs / 1000, fGpuLate);
+        fGpuWaits = fGpuWaitNs = fGpuWaitMaxNs = fGpuLate = 0;
         fPeakFps = 0;
         IOLog("DroidVMDisplay: scheduling: %llu copy wakeups over 20 ms (longest %llu ms), %llu VBL ticks over 20 ms late (latest by %llu ms)\n",
               fWakeLate, fWakeMaxNs / 1000000, fVBLLate, fVBLLateMaxNs / 1000000);
@@ -547,7 +558,10 @@ IOReturn DroidVMDisplay::swap_wait(IOMobileFramebufferUserClient *client, unsign
 IOReturn DroidVMDisplay::swap_submit(IOMFBSwapRec *rec, IOUserClient *client, unsigned int *out)
 {
     if (rec)
+    {
         fSubmitTime[reinterpret_cast<const uint32_t *>(rec)[38] % 16] = mach_absolute_time();
+        fSubmitWork[reinterpret_cast<const uint32_t *>(rec)[38] % 16] = droidvm_virtgpu_submitted();
+    }
     return IOMobileFramebufferLegacy::swap_submit(rec, client, out);
 }
 
@@ -571,6 +585,7 @@ void DroidVMDisplay::program_hardware_gated()
 {
     IOMFBSwapIORequest *swap = at<IOMFBSwapIORequest *>(this, kCurrentSwap);
     uint64_t &submitted = fSubmitTime[at<uint32_t>(swap, 980) % 16];
+    const uint64_t work = fSubmitWork[at<uint32_t>(swap, 980) % 16];
     if (submitted) {
         uint64_t waited = 0;
         absolutetime_to_nanoseconds(mach_absolute_time() - submitted, &waited);
@@ -628,7 +643,7 @@ void DroidVMDisplay::program_hardware_gated()
             if (gap > fFrameGapMaxNs)
                 fFrameGapMaxNs = gap;
         }
-        requestCopy(surface, false);
+        requestCopy(surface, false, work);
         if (surface != fShown) {
             reinterpret_cast<OSObject *>(surface)->retain();
             if (fShown)
@@ -657,7 +672,7 @@ static uint8_t halfToByte(uint16_t half)
     return static_cast<uint8_t>((scaled + (1u << (shift - 1))) >> shift);
 }
 
-void DroidVMDisplay::requestCopy(IOSurface *surface, bool refresh)
+void DroidVMDisplay::requestCopy(IOSurface *surface, bool refresh, uint64_t work)
 {
     reinterpret_cast<OSObject *>(surface)->retain();
     IOLockLock(fCopyLock);
@@ -669,6 +684,7 @@ void DroidVMDisplay::requestCopy(IOSurface *surface, bool refresh)
     }
     fCopyNext = surface;
     fCopyRefresh = refresh;
+    fCopyWork = work;
     if (!skipped)
         fCopyRequestTime = mach_absolute_time();
     IOLockWakeup(fCopyLock, &fCopyNext, true);
@@ -695,6 +711,7 @@ void DroidVMDisplay::copyLoop()
             continue;
         }
         bool refresh = fCopyRefresh;
+        const uint64_t work = fCopyWork;
         fCopyNext = nullptr;
         uint64_t waited = 0;
         absolutetime_to_nanoseconds(mach_absolute_time() - fCopyRequestTime, &waited);
@@ -703,6 +720,23 @@ void DroidVMDisplay::copyLoop()
             fWakeLate++;
             if (waited > fWakeMaxNs)
                 fWakeMaxNs = waited;
+        }
+        if (!droidvm_virtgpu_finished(work)) {
+            // Sleep in steps of 100 us (the vCPU goes idle; IOSleep's 1 ms would add half a millisecond a frame), 200 ms at most.
+            const uint64_t begin = mach_absolute_time();
+            uint64_t took = 0;
+            bool drawn = false;
+            while (!drawn && took < 200000000) {
+                delay_for_interval(100, NSEC_PER_USEC);
+                drawn = droidvm_virtgpu_finished(work);
+                absolutetime_to_nanoseconds(mach_absolute_time() - begin, &took);
+            }
+            fGpuWaits++;
+            fGpuWaitNs += took;
+            if (took > fGpuWaitMaxNs)
+                fGpuWaitMaxNs = took;
+            if (!drawn)
+                fGpuLate++;
         }
         if (!scanOut(surface))
             copySurface(surface, refresh);
