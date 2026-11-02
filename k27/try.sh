@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the KC from out/k27/kernel-k27.macho and kc27's kexts, boot it once.
-#   k27/try.sh SECONDS BOOTARGS... [-- BUNDLE_ID...]      (switches: NATIVE / MACOS_DISPLAY / MACOS_GPU)
+#   k27/try.sh SECONDS BOOTARGS... [-- BUNDLE_ID...]      (switches: NATIVE / MACOS_DISPLAY / MACOS_GPU / MACOS_VIDEO)
 # The kernel symbols go to out/rig/kc-k27.nm, where rig-dmesg.py (and so kc-panic.sh) looks for those of out/k27/kc-k27.bin.
 # rootauth=0 always: 27's APFS answers FSIOC_KERNEL_ROOTAUTH by validating the sealed root (26.5's let CSR_ALLOW_UNAUTHENTICATED_ROOT
 # through), which fails without a boot manifest ("rootvp not authenticated after mounting").
@@ -17,6 +17,7 @@ export MACOS_BOOT_MANIFEST_HASH=${MACOS_BOOT_MANIFEST_HASH-1}   # /chosen/boot-m
 NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json overlay/kext/NativeAES.json overlay/kext/NativeRamBlock.json}   # NativeAES: k27/build-native-aes.sh
 [ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/ARMPlatformStandIn.json overlay/kext/DroidVMDisplay.json overlay/kext/DroidVMEthernet.json overlay/kext/DroidVMInput.json"
 [ "${MACOS_GPU:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMGpu.json"
+[ "${MACOS_VIDEO:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/DroidVMVideo.json"   # k27/build-native-video.sh
 K=out/k27/kernel-k27.macho; KC=out/k27/kc-k27.bin; export MACOS_KERNEL=$PWD/$KC
 mkdir -p out/rig; llvm-nm -n --defined-only $K > out/rig/kc-k27.nm
 python3 k27/kc-build27.py out/kc/kc27.bin $K $KC --keep "$@" ${NATIVE:+--native $NATIVE} > out/k27/kc-build.log 2>&1

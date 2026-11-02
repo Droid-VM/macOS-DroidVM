@@ -1,0 +1,15 @@
+DroidVMVTHost.cpp finds IOSurfaceRoot by class: macOS 27 registers it under its class's name, iPadOS as IOCoreSurfaceRoot,
+so the name match found nothing and every frame's IOSurface lookup failed (stage 97).
+
+--- a/DroidVMVTHost.cpp
++++ b/DroidVMVTHost.cpp
+@@ -138,7 +138,8 @@
+ IOService *surfaceRoot() {
+     static IOService *root;
+     if (!root) {
+-        OSDictionary *matching = IOService::nameMatching("IOCoreSurfaceRoot");
++        // by class: iPadOS names the service IOCoreSurfaceRoot, macOS leaves it the class's name
++        OSDictionary *matching = IOService::serviceMatching("IOSurfaceRoot");
+         IOService *found = matching ? IOService::waitForMatchingService(matching, 1000000000ULL) : nullptr;
+         OSSafeReleaseNULL(matching);
+         if (found && !OSCompareAndSwapPtr(nullptr, found, &root)) found->release();

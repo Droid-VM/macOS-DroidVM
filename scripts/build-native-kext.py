@@ -21,10 +21,12 @@ parser.add_argument('sources', nargs='+')
 parser.add_argument('-I', dest='includes', action='append', default=[])
 parser.add_argument('-D', dest='defines', action='append', default=[], help='NAME[=VALUE], or U:NAME to undefine')
 parser.add_argument('--obj', default='e-obj', help='kernel object tree under out/x12377/build/xnu')
+parser.add_argument('--c-recipe', default='bsd/DEVELOPMENT/bsd_init.o.json',
+                    help="the kernel C file whose flags the C sources take (osfmk/DEVELOPMENT/startup.o.json for osfmk's private headers)")
 args = parser.parse_args()
 tree = X / 'build/xnu' / args.obj / 'DEVELOPMENT_ARM64_BCM2837'
 recipes = {suffix: json.JSONDecoder().raw_decode((tree / name).read_text())[0]   # C sources build like the kernel's C files
-           for suffix, name in (('.cpp', 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'), ('.c', 'bsd/DEVELOPMENT/bsd_init.o.json'))}
+           for suffix, name in (('.cpp', 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json'), ('.c', args.c_recipe))}
 out = X / 'native-kexts' / args.name
 out.mkdir(parents=True, exist_ok=True)
 objects = []

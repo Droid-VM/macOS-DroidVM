@@ -143,10 +143,12 @@ def fdt_framebuffer_bytes(fdt):
                if props.get('compatible', b'').startswith(b'simple-framebuffer\0') for _, size in module.reg_pairs(props['reg']))
 
 
-def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, virtio_gpu=False, net=False):
+def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, virtio_gpu=False, net=False, media=0):
     """cpu_regs: FDT CPU reg values to start, or None for every CPU of the FDT (ArmCpu starts at most eight).
     gpu: crosvm --droidvm-gpu is on; its window is the FDT's last virtio-mmio one (it follows the disks) and becomes /arm-io/gpu.
-    net: crosvm --virtio-mmio-net is on; crosvm puts its window after --droidvm-gpu's and before --virtio-mmio-gpu's: /arm-io/net."""
+    net: crosvm --virtio-mmio-net is on; crosvm puts its window after --droidvm-gpu's and before --virtio-mmio-gpu's: /arm-io/net.
+    media: how many crosvm --virtio-media devices --virtio-mmio-media puts on virtio-mmio; theirs are the last windows (after
+    --virtio-mmio-gpu's): /arm-io/virtio-media-N."""
     tool = ADT_TOOL
     if os.environ.get('MACOS_KERNEL'):
         # xnu-12377 asks the bootloader for 256 bytes of entropy (xnu-10063: 64); the tool of sources/ stays untouched.
@@ -199,11 +201,12 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         marker = "    parser.add_argument('--display-gamut',"
         assert text.count(marker) == 1
         text = text.replace(marker, "    parser.add_argument('--virtio-gpu-mmio', type=lambda value: int(value, 0), default=None)\n"
-                                    "    parser.add_argument('--net-mmio', type=lambda value: int(value, 0), default=None)\n" + marker)
+                                    "    parser.add_argument('--net-mmio', type=lambda value: int(value, 0), default=None)\n"
+                                    "    parser.add_argument('--media-mmio', type=lambda value: [int(v, 0) for v in value.split(',') if v], default=[])\n" + marker)
         marker = "if window[0] not in (args.data_store_mmio, args.gpu_mmio) and window[0] not in input_bases]"
         assert text.count(marker) == 1
         text = text.replace(marker, "if window[0] not in (args.data_store_mmio, args.gpu_mmio, args.virtio_gpu_mmio, args.net_mmio)"
-                                    " and window[0] not in input_bases]")
+                                    " and window[0] not in input_bases and window[0] not in args.media_mmio]")
         marker = "                for address, size in gpu]]),"
         assert text.count(marker) == 1
         text = text.replace(marker, "                for address, size in gpu],\n"
@@ -217,7 +220,15 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                                     # net (crosvm --virtio-mmio-net): /arm-io/net, DroidVMEthernet's virtio-net (as the upstream tool's --net-mmio)
                                     "              *[node('net', [('compatible', b'droidvm,net\\0'),"
                                     " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b'')])"
-                                    " for address, size in vm['virtio_mmio'] if address == args.net_mmio]]),")
+                                    " for address, size in vm['virtio_mmio'] if address == args.net_mmio],\n"
+                                    # virtio-media-N (crosvm --virtio-mmio-media): DroidVMVideo's decoder and encoder, with the FDT's
+                                    # media_host pool (absolute GPA, size) their MMAP buffers live in (as the upstream tool's --media-mmio)
+                                    "              *[node('virtio-media-%d' % index, [('compatible', b'droidvm,virtio-media\\0'),"
+                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b''),"
+                                    " *[('media-host-pool', struct.pack('<QQ', *reg_pairs(props['reg'])[0])) for path, props in fdt_nodes.items()"
+                                    " if path.startswith('/reserved-memory/media_host@')]])"
+                                    " for index, (address, size) in enumerate([window for base in args.media_mmio for window in vm['virtio_mmio']"
+                                    " if window[0] == base])]]),")
         # The CPU clusters (the kernel's BCM2837 board is AMP, sched_amp): each cpu's cluster-type is 'P' where the FDT's
         # capacity-dmips-mhz is the highest of the CPUs started (crosvm --cpu-capacity, from the app's topology), else 'E'; all 'P'
         # when they are equal or absent. The AMP kernel panics on a CPU without one; MACOS_AMP=0 leaves them out for an older kernel,
@@ -245,9 +256,10 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
                     '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
-                    *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt, int(virtio_gpu) + int(net)))] if gpu else []),
-                    *(['--net-mmio', hex(last_virtio_mmio(tool, fdt, int(virtio_gpu)))] if net else []),
-                    *(['--virtio-gpu-mmio', hex(last_virtio_mmio(tool, fdt))] if virtio_gpu else []),
+                    *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt, media + int(virtio_gpu) + int(net)))] if gpu else []),
+                    *(['--net-mmio', hex(last_virtio_mmio(tool, fdt, media + int(virtio_gpu)))] if net else []),
+                    *(['--virtio-gpu-mmio', hex(last_virtio_mmio(tool, fdt, media))] if virtio_gpu else []),
+                    *(['--media-mmio', ','.join(hex(last_virtio_mmio(tool, fdt, media - 1 - i)) for i in range(media))] if media else []),
                     # MACOS_GAMUT=sRGB: /product artwork-display-gamut sRGB. With the panel's P3, MobileGestalt's
                     # HasExtendedColorDisplay makes Core Animation compose into wide-color framebuffers ('b3a8'); the display copies
                     # 8-bit 'BGRA' best (scripts/stage-gpu-plugin.py removes the MobileGestalt cache that would keep the old answer).

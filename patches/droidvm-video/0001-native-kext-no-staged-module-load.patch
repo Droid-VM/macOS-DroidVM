@@ -1,0 +1,30 @@
+DroidVMVTParavirt.cpp as a class of a native kext of the macOS collection (DROIDVM_NATIVE_KEXT): the kext's classes are registered
+as it loads, so droidvm_vt_paravirt_attach does not stage its own OSMetaClass module load (the iOS board's late display archive
+does, through the file's static initializer).
+
+--- a/DroidVMVTParavirt.cpp
++++ b/DroidVMVTParavirt.cpp
+@@ -309,8 +309,10 @@
+     return result;
+ }
+ 
++#if !DROIDVM_NATIVE_KEXT
+ #define DROIDVM_LATE_INIT(file) extern "C" void droidvm_late_init_##file(void) __asm__("__GLOBAL__sub_I_" #file ".cpp");
+ DROIDVM_LATE_INIT(DroidVMVTParavirt)
++#endif
+ 
+ // Publishes the service on IOResources, once.
+ static int publish(void) {
+@@ -358,10 +360,12 @@
+ // classes are) and the sysctl, and with droidvm-vt-paravirt=1 publishes the service.
+ int droidvm_vt_paravirt_attach(void) {
+     if (droidvm_vtpv_stage) return -1;
++#if !DROIDVM_NATIVE_KEXT
+     void *module = OSMetaClass::preModLoad(g_kernel_kmod_info.name);
+     if (!module) return -1;
+     droidvm_late_init_DroidVMVTParavirt();
+     if (OSMetaClass::postModLoad(module)) return -1;
++#endif   // a native kext's classes are registered as it loads
+     droidvm_vtpv_stage = 1;
+     if (!(publishLock = IOLockAlloc())) return -1;
+     droidvm_vtpv_oid.oid_parent = &sysctl__kern_children;

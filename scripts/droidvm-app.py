@@ -11,6 +11,8 @@
   droidvm-app.py register                                (re)write the vms.json entry through the daemon's config transaction
   droidvm-app.py net                                     only switch the registered VM's network (MACOS_NET) and dump its new FDT,
                                                          keeping every other setting made in the app; then boot
+  droidvm-app.py media                                   only switch the registered VM's virtio-media codecs (MACOS_MEDIA) and dump
+                                                         its new FDT, keeping every other setting made in the app; then boot
   droidvm-app.py store-patch                             write out/metal/stage/store-patch.{bin,txt} (stage-gpu-plugin.py --store) into
                                                          the stopped VM's Data store, the blocks it replaces saved beside it first
   droidvm-app.py start|stop|status
@@ -83,6 +85,12 @@ REFRESH_HZ = int(os.environ.get('MACOS_REFRESH_HZ') or 120)
 NET = os.environ.get('MACOS_NET', '1') == '1'
 NET_MAC = '02:44:56:4d:00:01'
 NET_BRIDGE = 'br-wifi'
+# MACOS_MEDIA=1: VideoToolbox's paravirtualized codecs (DroidVMVideo) on the phone's MediaCodec: crosvm's virtio-media decoder and
+# encoder on virtio-mmio (--virtio-mmio-media; their windows are the last ones, after --virtio-mmio-gpu's), /arm-io/virtio-media-N in
+# the ADT, their buffers in the media_host pool (--pre-alloc media-host-mb=MACOS_MEDIA_POOL_MB, merged with the app's own --pre-alloc).
+# The backends run under the app's uid (the codec service refuses uid 0). The template changes: register, or media for the VM as it is.
+MEDIA = ['decoder', 'encoder'] if os.environ.get('MACOS_MEDIA') == '1' else []
+MEDIA_POOL_MB = int(os.environ.get('MACOS_MEDIA_POOL_MB') or 128)
 # The guest's display size is the boot console's (simplefb, the GOP DroidVMDisplay reads), so both screens carry it.
 WIDTH, HEIGHT = 1920, 1080
 FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
@@ -117,7 +125,8 @@ def template(persistent):
                                  '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
                                  '--virtio-mmio-block', run.STORE + ',lock=false',
-                                 *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else [])]})
+                                 *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else []),
+                                 *media_options()]})
     if NET:
         vm['networks'] = [{'network_id': network_id(), 'mac_address': NET_MAC}]
     if VIRTIO_GPU:
@@ -130,6 +139,27 @@ def template(persistent):
                          # simplefb stays (edk2's GOP, DarwinBoot and the boot console draw there) but is not shown
                          'simplefb': dict(vm['screens']['simplefb'], exporter='none', width=WIDTH, height=HEIGHT)}
     return vm
+
+
+def media_options():
+    if not MEDIA:
+        return []
+    uid = sh(f'stat -c %u {ios.APP}').strip()
+    return ['--pre-alloc', f'media-host-mb={MEDIA_POOL_MB}', *[o for kind in MEDIA for o in ('--virtio-media', f'kind={kind},uid={uid}')],
+            '--virtio-mmio-media']
+
+
+def strip_media(options):
+    """extra_options without what media_options() adds."""
+    kept, skip = [], False
+    for option in options:
+        if skip:
+            skip = False
+        elif option in ('--virtio-media', '--pre-alloc'):   # the app's own --pre-alloc is not among the extra options
+            skip = True
+        elif option != '--virtio-mmio-media':
+            kept.append(option)
+    return kept
 
 
 def network_id():
@@ -175,7 +205,7 @@ def boot_disk(args):
     # Below the shim's RAM base (0x600000 of firmware window), the framebuffer and the pools at the top of RAM (0xA00000 before:
     # the window and a 1280x800 framebuffer's 4 MiB)
     run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None,
-                 virtio_gpu=VIRTIO_GPU, net=NET)   # every vCPU the app gives the VM
+                 virtio_gpu=VIRTIO_GPU, net=NET, media=len(MEDIA))   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + ([a for a in GPU_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')] if GPU else []) +
                            ['exec-env=' + ';'.join(EXEC_ENV + (GPU_EXEC_ENV if GPU else []))] + args.kernel_arg)
@@ -234,6 +264,23 @@ def net(args):
     dump_fdt()
 
 
+def media(args):
+    """The registered VM with (MACOS_MEDIA=1) or without the virtio-media decoder and encoder, every other setting kept; their windows
+    come last, so the others stay where they were, but the FDT gains them: it is dumped again."""
+    ipc = ios.Ipc()
+    row = ios.find_vm(ipc)
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
+    vm['extra_options'] = strip_media(vm['extra_options']) + media_options()
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
+    print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
+    if not reply.get('success'):
+        raise SystemExit(1)
+    dump_fdt()
+
+
 def store_patch(args):
     """The blocks stage-gpu-plugin.py --store wrote into a copy of the Data store, written into the phone's (in place: the file is
     17 GiB, mostly holes). The blocks they replace go to data-store.undo.{bin,txt} first; the same loop with the undo files puts
@@ -257,7 +304,7 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
-    for name in ('push', 'register', 'net', 'store-patch', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'net', 'media', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -270,6 +317,8 @@ def main():
         prepare(args)
     elif args.cmd == 'net':
         net(args)
+    elif args.cmd == 'media':
+        media(args)
     elif args.cmd == 'store-patch':
         store_patch(args)
     else:
