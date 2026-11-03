@@ -89,8 +89,9 @@ NET_BRIDGE = 'br-wifi'
 # encoder on virtio-mmio (--virtio-mmio-media; their windows are the last ones, after --virtio-mmio-gpu's), /arm-io/virtio-media-N in
 # the ADT, their buffers in the media_host pool (--pre-alloc media-host-mb=MACOS_MEDIA_POOL_MB, merged with the app's own --pre-alloc).
 # The backends run under the app's uid (the codec service refuses uid 0). The template changes: register, or media for the VM as it is.
+# The pool only has to exist (crosvm refuses the device on gunyah without one): DroidVMVideo's buffers are guest memory (USERPTR).
 MEDIA = ['decoder', 'encoder'] if os.environ.get('MACOS_MEDIA') == '1' else []
-MEDIA_POOL_MB = int(os.environ.get('MACOS_MEDIA_POOL_MB') or 128)
+MEDIA_POOL_MB = int(os.environ.get('MACOS_MEDIA_POOL_MB') or 8)
 # The guest's display size is the boot console's (simplefb, the GOP DroidVMDisplay reads), so both screens carry it.
 WIDTH, HEIGHT = 1920, 1080
 FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
