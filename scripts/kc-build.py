@@ -295,7 +295,12 @@ def build(args):
                     break
                 cursor = (max(cursor, end) + align - 1) // align * align
             if cursor + size > high:
-                raise SystemExit(f'no room for a {size:#x}-byte native kext {segment}')
+                gaps, at = [], low
+                for start, end in sorted(used) + [(high, high)]:
+                    if start > at:
+                        gaps.append(min(start, high) - at)
+                    at = max(at, end)
+                raise SystemExit(f'no room for a {size:#x}-byte native kext {segment} (largest gap {max(gaps, default=0):#x})')
             used.append((cursor, cursor + size))
             return NEW_BASE + cursor
 

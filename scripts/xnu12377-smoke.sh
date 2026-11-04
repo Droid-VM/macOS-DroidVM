@@ -9,7 +9,8 @@ ARGS=(--kernel-arg=-v --kernel-arg=vm_compression_limit=1572864)
 for a in "$@"; do ARGS+=("--kernel-arg=$a"); done
 ID=3307dca0-8a10-59af-8abf-1a1501cd5b40
 python3 scripts/droidvm-app.py stop >/dev/null 2>&1
-python3 scripts/droidvm-app.py boot "${ARGS[@]}" | tail -1 | cut -c1-60
+BOOT_OUT=$(python3 scripts/droidvm-app.py boot "${ARGS[@]}" 2>&1) || { echo "$BOOT_OUT" | tail -5; echo "boot disk not built: the VM keeps its old one, not started"; exit 1; }
+echo "$BOOT_OUT" | tail -1 | cut -c1-60
 adb shell "su -c ': > /data/data/cn.classfun.droidvm/cache/console_${ID}_serial1.log'" >/dev/null 2>&1
 python3 scripts/droidvm-app.py start | tail -1
 sleep "$SECONDS_WAIT"

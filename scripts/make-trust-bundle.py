@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Bundle the unchanged static (OS) and System (Cryptex1,SystemOS) trust caches of the IPSW for DarwinBoot, on Linux.
 
-  make-trust-bundle.py STATIC.trustcache SYSTEM.trustcache OUTPUT.bundle
+  make-trust-bundle.py STATIC.trustcache SYSTEM.trustcache [EXTRA.trustcache ...] OUTPUT.bundle
 
 Port of UniXNU scripts/build-original-system-trust.py: both inputs are the IM4P members of the IPSW (StaticTrustCache and
 Cryptex1,SystemTrustCache, as `unixnu ipsw fetch` stores them). The bundle is `u32 count, u32 offsets[count], modules`,
 DarwinBoot's kernel.macho.trustcache sidecar. For 21H461 the result is the pinned 7416ca4f... of UniXNU-sheng board.toml.
+EXTRA: further trust caches of the IPSW, after those two (macOS 13 and later: Cryptex1,AppTrustCache, Safari's App cryptex).
 """
 import hashlib
 from pathlib import Path
@@ -44,13 +45,19 @@ def payload(path):
     return module
 
 
-if len(sys.argv) != 4:
+if len(sys.argv) < 4:
     raise SystemExit(__doc__)
 static, system = payload(sys.argv[1]), payload(sys.argv[2])
+extras = [payload(path) for path in sys.argv[3:-1]]
 for module, expected in zip((static, system), MODULES):
     if hashlib.sha256(module).hexdigest() != expected:
         print(f'warning: module sha256 {hashlib.sha256(module).hexdigest()} is not the 21H461 one', file=sys.stderr)
-bundle = struct.pack('<3I', 2, 12, 12 + len(static)) + static + system
-Path(sys.argv[3]).write_bytes(bundle)
+modules = [static, system, *extras]
+offsets, cursor = [], 4 + 4 * len(modules)
+for module in modules:
+    offsets.append(cursor)
+    cursor += len(module)
+bundle = struct.pack(f'<{len(modules) + 1}I', len(modules), *offsets) + b''.join(modules)
+Path(sys.argv[-1]).write_bytes(bundle)
 digest = hashlib.sha256(bundle).hexdigest()
-print(f'{sys.argv[3]}: {len(bundle)} bytes, sha256 {digest}' + ('' if digest == BUNDLE else ' (not the 21H461 pin)'))
+print(f'{sys.argv[-1]}: {len(bundle)} bytes, sha256 {digest}' + ('' if digest == BUNDLE else ' (not the 21H461 pin)'))

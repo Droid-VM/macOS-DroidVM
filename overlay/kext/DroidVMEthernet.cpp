@@ -107,6 +107,9 @@ public:
     IOReturn getHardwareAddress(IOEthernetAddress *address) override;
     IOReturn enable(IONetworkInterface *interface) override;
     IOReturn disable(IONetworkInterface *interface) override;
+    // IOBSD is up (our IOResourceMatch), and the family's wait for it from start() needs IOResources matched, which it is
+    // not while IOResources' own matching starts us: a deadlock whenever IOBSD is published inside IOResources' first match
+    UInt32 getFeatures() const override { return kIONetworkFeatureNoBSDWait; }
     UInt32 outputPacket(mbuf_t packet, void *param) override;
     IOReturn setPromiscuousMode(bool active) override { fPromiscuous = active; return kIOReturnSuccess; }
     IOReturn setMulticastMode(bool active) override { fMulticast = active; return kIOReturnSuccess; }

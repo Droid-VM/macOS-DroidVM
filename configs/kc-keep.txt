@@ -10,3 +10,5 @@ com.apple.AppleFSCompression.AppleFSCompressionTypeDataless
 com.apple.iokit.IOHIDFamily
 com.apple.iokit.IOTimeSyncFamily
 com.apple.plugin.IOgPTPPlugin
+com.apple.driver.AppleDiskImages2
+com.apple.filesystems.hfs.kext

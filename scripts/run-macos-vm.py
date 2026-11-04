@@ -187,6 +187,11 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         # assertion _gPersonaManager != nil on loginwindow's persona login, and loginwindow never launches Dock, Finder and SystemUIServer.
         marker = "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk) else []),"
         assert text.count(marker) == 1
+        # MACOS_BOOT_MANIFEST_HASH=1 (k27, the macOS 27 kexts): /chosen/boot-manifest-hash, the SHA-384 of the boot manifest iBoot
+        # would pass. 27's Image4 kext initializes its nonce magazine with it and panics without ("unable to initialize magazine: 7");
+        # there is no manifest, so it is zeros.
+        if os.environ.get('MACOS_BOOT_MANIFEST_HASH') == '1':
+            text = text.replace(marker, "('boot-manifest-hash', bytes(48)), " + marker)
         text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
                                     " and args.data_store_mmio is None else []),")
         # MACOS_VMM_PRESENT=0: /defaults without vmm-present, so kern.hv_vmm_present is 0. MobileGestalt answers IsVirtualDevice from it,

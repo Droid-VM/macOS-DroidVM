@@ -3,7 +3,7 @@
 #   boot-cycle.sh LABEL [SECONDS] [extra run-macos-vm.py arguments...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SERIAL=${PHONE_SERIAL:-192.168.1.188:33445}
+SERIAL=${PHONE_SERIAL:-192.168.1.203:33445}
 LABEL=$1
 SECONDS_TO_RUN=${2:-90}
 shift $(( $# > 1 ? 2 : 1 ))
