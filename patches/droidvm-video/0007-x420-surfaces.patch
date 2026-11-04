@@ -1,6 +1,6 @@
---- a/DroidVMVTHost.cpp	2026-11-03 04:58:29.150721505 -0500
-+++ b/DroidVMVTHost.cpp	2026-11-03 05:30:15.318437302 -0500
-@@ -281,6 +281,7 @@
+--- a/DroidVMVTHost.cpp
++++ b/DroidVMVTHost.cpp
+@@ -279,6 +279,7 @@
      uint32_t codec = 0, width = 0, height = 0;
      bool encoder = false;
      uint32_t nalLength = 4;
@@ -8,7 +8,7 @@
      uint8_t parameterSets[512] = {};
      uint32_t parameterSetsSize = 0;
      bool parametersSent = false;
-@@ -495,6 +496,7 @@
+@@ -488,6 +489,7 @@
  
  // The parameter sets of an avcC or hvcC, as Annex B, and the NAL length size.
  bool parameterSets(Session *s, const ImageDescription &d) {
@@ -16,7 +16,7 @@
      Atom ext;
      const uint8_t start[4] = {0, 0, 0, 1};
      s->parameterSetsSize = 0;
-@@ -526,6 +528,7 @@
+@@ -519,6 +521,7 @@
          const uint8_t *p = ext.body, *end = ext.body + ext.size;
          if (ext.size < 23) return false;
          s->nalLength = (p[21] & 3) + 1;
@@ -24,7 +24,7 @@
          const unsigned arrays = p[22];
          p += 23;
          for (unsigned a = 0; a < arrays; ++a) {
-@@ -620,11 +623,21 @@
+@@ -613,11 +616,21 @@
          const uint32_t width = s->captureWidth < to.plane[0].width ? s->captureWidth : uint32_t(to.plane[0].width);
          const uint32_t height = s->captureHeight < to.plane[0].height ? s->captureHeight : uint32_t(to.plane[0].height);
          const uint8_t *luma = from.bytes, *chroma = from.bytes + uint64_t(s->captureStride) * s->captureHeight;
@@ -49,7 +49,7 @@
      } else {
          failed(61, 0);
      }
-@@ -1598,7 +1611,9 @@
+@@ -1554,7 +1567,9 @@
      Plist *p = new Plist();
      uint8_t buffer[512];
      if (!p) return;

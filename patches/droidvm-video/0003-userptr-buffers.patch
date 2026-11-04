@@ -87,7 +87,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
  }
 --- a/DroidVMVTHost.cpp
 +++ b/DroidVMVTHost.cpp
-@@ -43,6 +43,7 @@
+@@ -44,6 +44,7 @@
  #include <IOKit/IOUserClient.h>
  #include <IOKit/IOKitKeys.h>
  #include <IOKit/IOMemoryDescriptor.h>
@@ -95,7 +95,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
  #include <libkern/c++/OSString.h>
  #include <kern/thread.h>
  #include <stdarg.h>
-@@ -56,6 +57,8 @@
+@@ -57,6 +58,8 @@
  int droidvm_media_ioctl(unsigned device, uint32_t session, uint32_t code, void *payload, uint32_t out, uint32_t in);
  int droidvm_media_mmap(unsigned device, uint32_t session, uint32_t offset, bool writable, uint64_t *gpa, uint64_t *length);
  int droidvm_media_munmap(unsigned device, uint64_t gpa);
@@ -104,16 +104,16 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
  unsigned droidvm_media_devices(void);
  uint32_t droidvm_media_caps(unsigned device);
  const char *droidvm_media_card(unsigned device);
-@@ -98,7 +101,7 @@
+@@ -99,7 +102,7 @@
  enum : uint32_t {
      IocGFmt = 4, IocSFmt = 5, IocReqbufs = 8, IocQuerybuf = 9, IocQbuf = 15, IocStreamon = 18, IocStreamoff = 19, IocGCtrl = 27,
-     IocSubscribeEvent = 90, IocDecoderCmd = 96,
+     IocSubscribeEvent = 90, IocDecoderCmd = 96, IocEnumFramesizes = 74,
 -    TypeCaptureMplane = 9, TypeOutputMplane = 10, MemoryMmap = 1,
 +    TypeCaptureMplane = 9, TypeOutputMplane = 10, MemoryMmap = 1, MemoryUserPtr = 2,
      EventEos = 2, EventSourceChange = 5,
      BufFlagLast = 0x00100000, BufFlagError = 0x40,
      CidMinBuffersForCapture = 0x00980927,
-@@ -251,10 +254,14 @@
+@@ -252,10 +255,14 @@
  // --- Sessions ---------------------------------------------------------------------------------------------------------------
  struct Client;
  
@@ -131,7 +131,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
      uint8_t *bytes = nullptr;
      bool queued = false;
  };
-@@ -412,28 +419,63 @@
+@@ -413,28 +420,63 @@
      return droidvm_media_ioctl(s->device, s->v4l2, code, payload, out, in);
  }
  
@@ -211,7 +211,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
  }
  
  // The parameter sets of an avcC or hvcC, as Annex B, and the NAL length size.
-@@ -534,16 +576,15 @@
+@@ -535,16 +577,15 @@
      uint32_t control[2] = {CidMinBuffersForCapture, 0};
      unsigned count = ioctl(s, IocGCtrl, control, sizeof control, sizeof control) ? 8 : control[1] + 2;
      if (count > MaxCaptureBuffers) count = MaxCaptureBuffers;
@@ -231,7 +231,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
          if (r) { failed(52, r); return false; }
          s->capture[i].queued = true;
      }
-@@ -631,9 +672,8 @@
+@@ -632,9 +673,8 @@
  
  void requeueCapture(Session *s, unsigned index) {
      V4l2Buffer b = {};
@@ -243,7 +243,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
      if (r) failed(54, r);
      else s->capture[index].queued = true;
  }
-@@ -651,11 +691,10 @@
+@@ -652,11 +692,10 @@
      memcpy(out.bytes, input.bytes, size);
      IOFree(input.bytes, input.capacity);
      V4l2Buffer b = {};
@@ -257,7 +257,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
      IOLockLock(s->lock);
      if (r) {
          failed(8, r);
-@@ -1056,11 +1095,10 @@
+@@ -1057,11 +1096,10 @@
      OSSafeReleaseNULL(map);
      if (memory) { memory->complete(); memory->release(); }
      V4l2Buffer b = {};
@@ -271,7 +271,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
      IOLockLock(s->lock);
      if (r) { failed(85, r); out.queued = false; }
      return true;
-@@ -1278,12 +1316,12 @@
+@@ -1279,12 +1317,12 @@
      f.planes[0].sizeimage = width * height * 3 / 2;
      r = ioctl(s, IocSFmt, &f, sizeof f, sizeof f);
      if (r) { failed(92, r); return -12911; }
@@ -286,7 +286,7 @@ QBUF: DroidVMVirtioMedia.c's droidvm_media_ioctl_sg puts the list in a descripto
      r = ioctl(s, IocReqbufs, captures, sizeof captures, sizeof captures);
      if (r || !captures[0]) { failed(94, r); return -12904; }
      s->captureCount = captures[0] < MaxCaptureBuffers ? captures[0] : MaxCaptureBuffers;
-@@ -1554,7 +1592,7 @@
+@@ -1586,7 +1624,7 @@
      f.planes[0].sizeimage = OutputBytes;
      r = ioctl(s, IocSFmt, &f, sizeof f, sizeof f);
      if (r) { failed(3, r); return -12911; }

@@ -3,7 +3,7 @@ so the name match found nothing and every frame's IOSurface lookup failed (stage
 
 --- a/DroidVMVTHost.cpp
 +++ b/DroidVMVTHost.cpp
-@@ -138,7 +138,8 @@
+@@ -139,7 +139,8 @@
  IOService *surfaceRoot() {
      static IOService *root;
      if (!root) {

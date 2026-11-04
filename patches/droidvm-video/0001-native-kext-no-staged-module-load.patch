@@ -4,7 +4,7 @@ does, through the file's static initializer).
 
 --- a/DroidVMVTParavirt.cpp
 +++ b/DroidVMVTParavirt.cpp
-@@ -309,8 +309,10 @@
+@@ -311,8 +311,10 @@
      return result;
  }
  
@@ -15,7 +15,7 @@ does, through the file's static initializer).
  
  // Publishes the service on IOResources, once.
  static int publish(void) {
-@@ -358,10 +360,12 @@
+@@ -361,10 +363,12 @@
  // classes are) and the sysctl, and with droidvm-vt-paravirt=1 publishes the service.
  int droidvm_vt_paravirt_attach(void) {
      if (droidvm_vtpv_stage) return -1;

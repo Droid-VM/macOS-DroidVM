@@ -5,7 +5,7 @@
 # Its buffers come from one contiguous allocation (DROIDVM_DEVICE_DYNAMIC: a native kext's __DATA has no room for them).
 set -eu
 K27=$(cd "$(dirname "$0")" && pwd); M=$(dirname "$K27"); D=$M/overlay/kext/DroidVMVideo
-VT_REF=fab4fb1   # Droid-VM/UniXNU-droidvm wip/hackintosh, 2026-11-02
+VT_REF=706338e   # Droid-VM/UniXNU-droidvm wip/hackintosh, 2026-11-02 (VideoToolbox on the phone's codecs by default)
 V=$M/out/k27/src/DroidVMVideo; rm -rf $V; mkdir -p $V
 for name in DroidVMVirtioMedia.c DroidVMVTParavirt.cpp DroidVMVTHost.cpp DroidVMVTWire.h DroidVMDmaRegion.h; do
   git -C $M/sources/UniXNU-droidvm show $VT_REF:package/$name > $V/$name

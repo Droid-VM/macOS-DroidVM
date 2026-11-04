@@ -1,6 +1,6 @@
---- a/DroidVMVTHost.cpp	2026-11-03 03:40:17.928135702 -0500
-+++ b/DroidVMVTHost.cpp	2026-11-03 03:40:30.200660202 -0500
-@@ -430,13 +430,17 @@
+--- a/DroidVMVTHost.cpp
++++ b/DroidVMVTHost.cpp
+@@ -431,13 +431,17 @@
  
  // Buffer `index` of the queue (after REQBUFS with USERPTR): as long as the device says (QUERYBUF's plane length, the queue's
  // sizeimage, which a USERPTR buffer must give exactly), wired, and the list of its pages, adjacent ones merged.

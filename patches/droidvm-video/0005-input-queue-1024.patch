@@ -1,6 +1,6 @@
---- a/DroidVMVTHost.cpp	2026-11-03 03:57:54.937292098 -0500
-+++ b/DroidVMVTHost.cpp	2026-11-03 03:57:54.945743476 -0500
-@@ -127,7 +127,7 @@
+--- a/DroidVMVTHost.cpp
++++ b/DroidVMVTHost.cpp
+@@ -128,7 +128,7 @@
  };
  static_assert(sizeof(V4l2Format) == 208, "v4l2_format");
  
@@ -9,7 +9,7 @@
  constexpr uint32_t OutputBytes = 2u << 20;
  
  // --- IOSurface, through the guest process's own IOSurfaceRootUserClient ----------------------------------------------------
-@@ -292,7 +292,10 @@
+@@ -293,7 +293,10 @@
  
      IOLock *lock = nullptr;
      // Frames given (dfrm) and not yet in an OUTPUT buffer: Annex B, IOMalloc'd.
@@ -21,7 +21,7 @@
      unsigned inputHead = 0, inputTail = 0;
      // An outstanding dfin: its request, answered when pendingFrames is 0 or at finishDeadline.
      bool finishWanted = false, draining = false;
-@@ -305,7 +308,7 @@
+@@ -306,7 +309,7 @@
      uint32_t pendingFrames = 0;
      // The frames given and not yet handed over, by ID: at dfin's deadline each gets a Demt with an error, or VideoToolbox would
      // wait for it forever.
@@ -30,7 +30,7 @@
      unsigned outstandingCount = 0;
  
      // The session's IOSurfaceRootUserClient (opened at its first pixel buffer) and the surfaces it looked up, by ID.
-@@ -687,7 +690,7 @@
+@@ -688,7 +691,7 @@
      unsigned index = OutputBuffers;
      for (unsigned i = 0; i < OutputBuffers; ++i) if (!s->output[i].queued) { index = i; break; }
      if (index == OutputBuffers || s->inputHead == s->inputTail) return false;
@@ -39,7 +39,7 @@
      s->output[index].queued = true;
      IOLockUnlock(s->lock);
      Mapped &out = s->output[index];
-@@ -1416,7 +1419,7 @@
+@@ -1417,7 +1420,7 @@
      s->open = s->outputStreaming = s->captureStreaming = s->fast = false;
      s->captureCount = 0;
      while (s->inputTail != s->inputHead) {
@@ -48,7 +48,7 @@
          IOFree(input.bytes, input.capacity);
      }
      s->pendingFrames = 0;
-@@ -1644,15 +1647,15 @@
+@@ -1676,15 +1679,15 @@
          p += length;
      }
      IOLockLock(s->lock);

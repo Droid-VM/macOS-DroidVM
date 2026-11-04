@@ -50,12 +50,12 @@ never closed for being idle, and nothing referred to is ever dropped.
 
 --- a/DroidVMVTHost.cpp
 +++ b/DroidVMVTHost.cpp
-@@ -103,11 +103,13 @@
+@@ -104,11 +104,13 @@
  // --- V4L2 over virtio-media (64-bit Linux layouts) ----------------------------------------------------------------------------
  enum : uint32_t {
      IocGFmt = 4, IocSFmt = 5, IocReqbufs = 8, IocQuerybuf = 9, IocQbuf = 15, IocStreamon = 18, IocStreamoff = 19, IocGCtrl = 27,
 +    IocSCtrl = 28,
-     IocSubscribeEvent = 90, IocDecoderCmd = 96,
+     IocSubscribeEvent = 90, IocDecoderCmd = 96, IocEnumFramesizes = 74,
      TypeCaptureMplane = 9, TypeOutputMplane = 10, MemoryMmap = 1, MemoryUserPtr = 2,
      EventEos = 2, EventSourceChange = 5,
      BufFlagLast = 0x00100000, BufFlagError = 0x40,
@@ -64,7 +64,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      DecCmdStart = 0, DecCmdStop = 1,
      MediaEvtError = 0, MediaEvtDqbuf = 1, MediaEvtEvent = 2,
  };
-@@ -131,12 +133,50 @@
+@@ -132,12 +134,50 @@
  static_assert(sizeof(V4l2Format) == 208, "v4l2_format");
  
  constexpr unsigned OutputBuffers = 4, MaxCaptureBuffers = 32, MaxInputs = 4096;
@@ -120,7 +120,7 @@ never closed for being idle, and nothing referred to is ever dropped.
  // Frame thinning. The lock screen's aerials are 4K HEVC at 240 frames a second (idleassetsd's 4KSDR240FPS); its player decodes
  // every frame and shows about 30 of them a second, and nothing in AVFoundation asks for fewer (ReducedFrameDelivery is set by no
  // one but VideoToolbox's own callers). A pixel buffer and a 4K copy for each of the 240 is ten times what this path does, so the
-@@ -343,13 +383,46 @@
+@@ -344,13 +384,46 @@
      bool finishWanted = false, draining = false;
      uint64_t finishRequest = 0;
      uint64_t finishDeadline = 0;
@@ -167,7 +167,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      uint64_t lastInputAt = 0;   // mach_absolute_time of the last dfrm queued
      thread_t worker = nullptr;
      uint32_t pendingFrames = 0;
-@@ -396,6 +469,9 @@
+@@ -397,6 +470,9 @@
      task_t task;
      int pid;
      IOLock *lock;
@@ -177,7 +177,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      Session *sessions;
  };
  
-@@ -660,7 +736,7 @@
+@@ -661,7 +737,7 @@
      IOLockLock(s->lock);
      AbsoluteTime deadline;
      clock_interval_to_deadline(2000, kMillisecondScale, &deadline);
@@ -186,7 +186,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          if (IOLockSleepDeadline(s->lock, &s->replied, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) break;
      const bool replied = s->replied;
      s->awaitedRequest = 0;
-@@ -821,7 +897,8 @@
+@@ -822,7 +898,8 @@
      uint32_t request[5] = {count, TypeCaptureMplane, MemoryUserPtr, 0, 0};
      r = ioctl(s, IocReqbufs, request, sizeof request, sizeof request);
      if (r || !request[0]) { failed(51, r); return false; }
@@ -196,7 +196,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      const bool direct = setUpDirect(s);
      for (unsigned i = 0; i < s->captureCount; ++i) {
          if (!direct && !mapBuffer(s, TypeCaptureMplane, i, s->capture[i])) return false;
-@@ -889,6 +966,10 @@
+@@ -890,6 +967,10 @@
      memory->release();
  }
  
@@ -207,7 +207,7 @@ never closed for being idle, and nothing referred to is ever dropped.
  // Returns whether the slot's pool surface went with the frame (direct): the slot then needs another.
  bool emitFrame(Session *s, unsigned index, int64_t frame, uint32_t bytesused) {
      Mapped &buffer = s->capture[index];
-@@ -898,13 +979,7 @@
+@@ -899,13 +980,7 @@
      if (bytesused && pts >= 0) {
          // Shown when ThinUs have passed since the last shown, or when time went back (a loop, a seek, a new segment).
          if (s->lastShownUs != INT64_MIN && pts >= s->lastShownUs && pts - s->lastShownUs < ThinUs) {
@@ -222,7 +222,7 @@ never closed for being idle, and nothing referred to is ever dropped.
              return false;
          }
          s->lastShownUs = pts;
-@@ -913,22 +988,38 @@
+@@ -914,22 +989,38 @@
          // Decoded in place: the surface goes as it is, once no line the guest's caches hold of it (prefetched while the device
          // wrote) can stand in for what the device put there.
          if (buffer.memory) buffer.memory->performOperation(kIOMemoryIncoherentIOFlush, 0, buffer.length);
@@ -266,7 +266,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          return false;
      }
      uint8_t pixelBuffer[16];
-@@ -936,17 +1027,20 @@
+@@ -937,17 +1028,20 @@
      const SurfaceView surface = s->replySurface;
      if (bytesused) copyFrame(s, buffer, surface);
      // Demt: the frame, decoded into that pixel buffer.
@@ -292,7 +292,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      return false;
  }
  
-@@ -957,22 +1051,186 @@
+@@ -958,22 +1052,186 @@
      IOLockUnlock(s->lock);
  }
  
@@ -483,7 +483,7 @@ never closed for being idle, and nothing referred to is ever dropped.
  }
  
  void requeueCapture(Session *s, unsigned index) {
-@@ -987,22 +1245,34 @@
+@@ -988,22 +1246,34 @@
  // the rate (the aerials' do), once 16 steps between inputs' times have shown the frame period; every layer till then.
  bool hevcSession(const Session *s);
  unsigned keptLayer(const Session *s) {
@@ -526,7 +526,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          if (s->pendingFrames) --s->pendingFrames;
          const bool first = !s->skipLogged;
          s->skipLogged = true;
-@@ -1068,7 +1338,17 @@
+@@ -1069,7 +1339,17 @@
          return;
      }
      if (s->pendingFrames && mach_absolute_time() < s->finishDeadline) return;
@@ -544,7 +544,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          IOLockUnlock(s->lock);
          dropOutstanding(s);
          IOLockLock(s->lock);
-@@ -1090,8 +1370,23 @@
+@@ -1091,8 +1371,23 @@
      IOLockLock(s->lock);
      const bool draining = s->draining;
      s->draining = false;
@@ -569,7 +569,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      if (draining) {
          const int r = decoderCommand(s, DecCmdStart);
          if (r) failed(56, r);
-@@ -1107,32 +1402,86 @@
+@@ -1108,32 +1403,86 @@
  void closeDevice(Session *s);
  void forgetStartMessage(Session *s);
  
@@ -668,7 +668,7 @@ never closed for being idle, and nothing referred to is ever dropped.
              if (s->outstandingCount) {
                  IOLockUnlock(s->lock);
                  dropOutstanding(s);
-@@ -1140,7 +1489,19 @@
+@@ -1141,7 +1490,19 @@
              }
              s->pendingFrames = 0;
              s->idleClosed = true;
@@ -688,7 +688,7 @@ never closed for being idle, and nothing referred to is ever dropped.
              closeDevice(s);
              IOLockLock(s->lock);
              break;
-@@ -1157,12 +1518,19 @@
+@@ -1158,12 +1519,19 @@
          } else if (e.kind == MediaEvtDqbuf && e.type == TypeCaptureMplane && e.index < s->captureCount) {
              s->capture[e.index].queued = false;
              bool handedOver = false;
@@ -709,7 +709,7 @@ never closed for being idle, and nothing referred to is ever dropped.
              }
              if (e.flags & BufFlagLast) endDrain(s);
              if (handedOver) dropSurface(s->capture[e.index]);
-@@ -1179,7 +1547,11 @@
+@@ -1180,7 +1548,11 @@
          } else if (e.kind == MediaEvtEvent && e.type == EventEos) {
              endDrain(s);
          } else if (e.kind == MediaEvtError) {
@@ -721,7 +721,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          }
      }
      s->workerRunning = false;
-@@ -1810,7 +2182,15 @@
+@@ -1811,7 +2183,15 @@
          s->stopping = false;
      }
      closeDevice(s);
@@ -738,7 +738,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      while (s->inputTail != s->inputHead) {
          const Session::Input &input = s->inputs[s->inputTail++ % MaxInputs];
          IOFree(input.bytes, input.capacity);
-@@ -1925,8 +2305,10 @@
+@@ -1926,8 +2306,10 @@
          }
          s->client = c;
          memcpy(s->uuid, h.uuid, 16);
@@ -749,8 +749,8 @@ never closed for being idle, and nothing referred to is ever dropped.
          droidvm_vthost_sessions = droidvm_vthost_sessions + 1;
      }
      s->codec = uint32_t(codec);
-@@ -1973,7 +2355,30 @@
-     delete p;
+@@ -2003,7 +2385,30 @@
+     return fits;
  }
  
 +void clearReplay(Session *s) {
@@ -780,7 +780,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      if (s->startMessage) IOFree(s->startMessage, s->startSize);
      s->startMessage = nullptr;
      s->startSize = 0;
-@@ -1987,17 +2392,79 @@
+@@ -2017,17 +2422,79 @@
      s->startSize = n;
  }
  
@@ -863,7 +863,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      Param fds;
      ImageDescription d;
      if (!param(m, n, cc(",fds"), fds) || !imageDescription(fds.value, fds.size, d)) return -12902;
-@@ -2011,9 +2478,13 @@
+@@ -2042,9 +2509,13 @@
      s->pendingFrames = 0;
      s->device = decoderDevice();
      if (s->device == ~0u) return -12906;
@@ -877,7 +877,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      registerSession(s);
      droidvm_media_set_fast(s->device, true);
      s->fast = true;
-@@ -2030,19 +2501,31 @@
+@@ -2062,19 +2533,31 @@
      f.num_planes = 1;
      f.planes[0].sizeimage = OutputBytes;
      r = ioctl(s, IocSFmt, &f, sizeof f, sizeof f);
@@ -914,7 +914,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      thread_deallocate(s->worker);
      s->extendBottom = s->tenBit && directLayout() ? ((s->height + 31) & ~31u) - s->height : 0;
      pixelBufferAttributes(s);
-@@ -2065,16 +2548,99 @@
+@@ -2097,16 +2580,99 @@
      return value / timescale * 1000000 + value % timescale * 1000000 / timescale;
  }
  
@@ -1016,7 +1016,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      const uint32_t capacity = sdat.size + (s->nalLength < 4 ? sdat.size : 0) + (s->parametersSent ? 0 : s->parameterSetsSize) + 64;
      uint8_t *bytes = static_cast<uint8_t *>(IOMalloc(capacity));
      if (!bytes) return -12904;
-@@ -2085,6 +2651,7 @@
+@@ -2117,6 +2683,7 @@
          at = s->parameterSetsSize;
          s->parametersSent = true;
      }
@@ -1024,7 +1024,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      const uint8_t *p = sdat.body, *end = sdat.body + sdat.size;
      // The temporal layer of the frame's first VCL NAL unit (HEVC types 0-31; nuh_temporal_id_plus1 the low 3 bits of byte 2).
      uint8_t tid = 0;
-@@ -2113,27 +2680,45 @@
+@@ -2145,27 +2712,45 @@
          // VideoToolbox takes frames back in any order (decode order is not output order).
          IOLockUnlock(s->lock);
          IOFree(bytes, capacity);
@@ -1080,7 +1080,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      if (s->outstandingCount < MaxInputs) s->outstanding[s->outstandingCount++] = frame;
      IOLockUnlock(s->lock);
      IOLockWakeup(s->lock, &s->events, false);
-@@ -2161,6 +2746,7 @@
+@@ -2196,6 +2781,7 @@
      c->task = task;
      c->pid = pid;
      c->lock = IOLockAlloc();
@@ -1088,7 +1088,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      c->sessions = nullptr;
      return c;
  }
-@@ -2168,15 +2754,21 @@
+@@ -2203,15 +2789,21 @@
  void droidvm_vthost_client_close(void *host) {
      Client *c = static_cast<Client *>(host);
      if (!c) return;
@@ -1112,7 +1112,7 @@ never closed for being idle, and nothing referred to is ever dropped.
      delete c;
  }
  
-@@ -2187,8 +2779,9 @@
+@@ -2222,8 +2814,9 @@
      if (!c || !header(m, n, h)) return -1;
      // The guest's replies to the host's requests (Dbuf, Demt).
      if (h.flags & FlagGuestReply) {
@@ -1123,7 +1123,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          int32_t error = 0;
          paramS32(m, n, cc(",err"), error);
          Param uuid;
-@@ -2215,6 +2808,12 @@
+@@ -2250,6 +2843,12 @@
          }
          IOLockUnlock(s->lock);
          IOLockWakeup(s->lock, &s->replied, false);
@@ -1136,7 +1136,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          return 0;
      }
      IOLockLock(c->lock);
-@@ -2256,8 +2855,10 @@
+@@ -2291,8 +2890,10 @@
      case cc("-enc"):
          if (s) {
              teardown(s);
@@ -1147,7 +1147,7 @@ never closed for being idle, and nothing referred to is ever dropped.
              IOLockFree(s->lock);
              IOLockFree(s->surfaceLock);
              forgetStartMessage(s);
-@@ -2301,13 +2902,22 @@
+@@ -2336,13 +2937,22 @@
          break;
      }
      case cc("dfrm"): {
@@ -1173,7 +1173,7 @@ never closed for being idle, and nothing referred to is ever dropped.
          sendToGuest(c, w, buffer);
          break;
      }
-@@ -2316,7 +2926,8 @@
+@@ -2351,7 +2961,8 @@
              IOLockLock(s->lock);
              s->finishWanted = true;
              s->finishRequest = h.request;
@@ -1183,7 +1183,7 @@ never closed for being idle, and nothing referred to is ever dropped.
              IOLockUnlock(s->lock);
              IOLockWakeup(s->lock, &s->events, false);
          } else {
-@@ -2324,14 +2935,20 @@
+@@ -2359,14 +2970,20 @@
          }
          break;
      case cc("dinv"):
