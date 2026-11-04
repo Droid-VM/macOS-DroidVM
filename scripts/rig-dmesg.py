@@ -82,8 +82,12 @@ class Phone:
         if not hasattr(self, 'root'):
             self.root = struct.unpack('<Q', self.read('va:%x' % (self.symbol('kernel_pmap_store') + 8), 8)[1])[0]   # pmap.ttep
         table = self.root
+        if not hasattr(self, 'tables'):
+            self.tables = {}   # table PA -> its 4 KiB, read once (a 1 MiB msgbuf= is 256 pages, each a walk)
         for level, shift in ((1, 30), (2, 21), (3, 12)):
-            entry = struct.unpack('<Q', self.read('%#x' % (table + ((va >> shift) & 0x1ff) * 8), 8)[1])[0]
+            if table not in self.tables:
+                self.tables[table] = self.read('%#x' % table, 0x1000)[1]
+            entry = struct.unpack_from('<Q', self.tables[table], ((va >> shift) & 0x1ff) * 8)[0]
             if not entry & 1:
                 raise SystemExit(f'va {va:#x}: level {level} entry {entry:#x} is invalid')
             address = entry & 0x0000fffffffff000
@@ -93,11 +97,16 @@ class Phone:
 
     def read(self, target, length):
         if target.startswith('va:') and not 0 <= int(target[3:], 16) - self.kernel_va < KERNELCACHE_SPAN:
-            va, data = int(target[3:], 16), b''   # not linear: page by page
-            while len(data) < length:
-                chunk = min(length - len(data), 0x1000 - (va + len(data)) % 0x1000)
-                data += self.read('%#x' % self.translate(va + len(data)), chunk)[1]
-            return self.translate(va), data
+            va, runs, at = int(target[3:], 16), [], 0   # not linear: page by page, physically contiguous pages one run
+            while at < length:
+                chunk = min(length - at, 0x1000 - (va + at) % 0x1000)
+                pa = self.translate(va + at)
+                if runs and runs[-1][0] + runs[-1][1] == pa:
+                    runs[-1][1] += chunk
+                else:
+                    runs.append([pa, chunk])
+                at += chunk
+            return runs[0][0], self.read_runs(runs)
         if target.startswith('0x'):
             pa = int(target, 16)
         else:
@@ -112,6 +121,26 @@ class Phone:
             raise SystemExit(f'guest PA {pa:#x}+{length:#x} is not in a crosvm_guest mapping')
         data = self.adb(f'dd if=/proc/{pid}/mem bs=1 skip={address} count={length} 2>/dev/null')
         return pa, data
+
+    def read_runs(self, runs):
+        """Guest PA runs [pa, length], read in one adb call (whole pages by the page, the rest by the byte)."""
+        pid, maps = self.maps()
+        commands = []
+        for pa, length in runs:
+            for guest, size, host in maps:
+                if guest <= pa and pa + length <= guest + size:
+                    address = host + pa - guest
+                    break
+            else:
+                raise SystemExit(f'guest PA {pa:#x}+{length:#x} is not in a crosvm_guest mapping')
+            if address % 0x1000 == 0 and length % 0x1000 == 0:
+                commands.append(f'dd if=/proc/{pid}/mem bs=4096 skip={address // 0x1000} count={length // 0x1000} 2>/dev/null')
+            else:
+                commands.append(f'dd if=/proc/{pid}/mem bs=1 skip={address} count={length} 2>/dev/null')
+        data = self.adb('; '.join(commands))
+        if len(data) != sum(length for _, length in runs):
+            raise SystemExit(f'read {len(data)} bytes of {sum(length for _, length in runs)}')
+        return data
 
 
 def main():
