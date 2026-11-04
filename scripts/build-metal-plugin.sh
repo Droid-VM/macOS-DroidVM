@@ -39,9 +39,36 @@ for old, new in [
     # refused here; the server has no other way to draw the wallpaper (refused, the desktop is never repainted where windows moved
     # off it), so the 8-bit formats are converted once per surface contents before this (the frontend's convertedYCbCrTexture) and
     # only the others still reach this refusal; the small backdrop samples (512x512) are made.
+    # Where the runtime reads 4:2:0 planes in place (METAL2VULKAN_YCBCR_PLANES_ONLY, set for WindowServer by the plugin; patches/
+    # metal2vulkan-macos/0001), YCBCR8_420_2P and YCBCR10_420_2P (500, 505) over plane 0 go to it: neither converted on the CPU nor refused.
+    (' if(id<MTLTexture> converted=convertedYCbCrTexture(self,d,surface,plane))return converted;\n',
+     ' static const bool planesInPlace=getenv("METAL2VULKAN_YCBCR_PLANES_ONLY")!=nullptr;\n'
+     ' const bool inPlace=planesInPlace && plane==0 && (d.pixelFormat==500 || d.pixelFormat==505);\n'
+     ' if(inPlace){static std::atomic<unsigned> made;if(made++<4)NBLOG(@"native-metal: surface texture %lux%lu YCbCr format %lu read in place",'
+     '(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat);}\n'
+     ' if(id<MTLTexture> converted=inPlace?nil:convertedYCbCrTexture(self,d,surface,plane))return converted;\n'),
+    # Such a texture reads the video frame's own pages when the GPU runs a pass that samples it (no copy), so its surface is counted in
+    # use from the commit of each command buffer that binds it until that command buffer completes: a decoder's pool reuses a surface no
+    # one uses, and wrote the next frame into one a lock-screen pass was still reading (black bands a CTU row high). Counted for the
+    # texture's life instead, every pool surface stayed in use (WindowServer keeps a texture of each), and the decoder, out of
+    # surfaces, showed grey frames but for what moved.
+    ('@property(nonatomic,strong) NSMutableSet *surfaces;',
+     '@property(nonatomic,strong) NSMutableSet *surfaces;\n@property(nonatomic,strong) NSMutableArray *surfacesInUse;'),
+    ('  flushSurfaces(_surfaces);\n  if(gLogTextures)dumpSurfacesOnce(_surfaces,_resourceOwners);\n',
+     '  flushSurfaces(_surfaces);\n'
+     '  if(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY"))for(NBTexture *texture in _surfaces)\n'
+     '   if(texture.surface && (texture.descriptor.format==500 || texture.descriptor.format==505)) {\n'
+     '    if(!_surfacesInUse)_surfacesInUse=[NSMutableArray array];\n'
+     '    IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
+     '   }\n'
+     '  if(gLogTextures)dumpSurfacesOnce(_surfaces,_resourceOwners);\n'),
+    (' [_surfaces removeAllObjects];[_resourceOwners removeAllObjects];\n',
+     ' for(NBTexture *texture in _surfacesInUse)IOSurfaceDecrementUseCount(texture.surface);\n _surfacesInUse=nil;\n'
+     ' [_surfaces removeAllObjects];[_resourceOwners removeAllObjects];\n'),
     (' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),',
      ' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n'
-     ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024){\n'
+     ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024 &&\n'
+     '    !(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY") && plane==0 && (d.pixelFormat==500 || d.pixelFormat==505))){\n'
      '  static std::atomic<unsigned> refusals;   // the server asks again at every frame\n'
      '  if(refusals++<4)NBLOG(@"native-metal: surface texture refused: %lux%lu YCbCr format %lu converts on the CPU",(unsigned long)d.width,'
      '(unsigned long)d.height,(unsigned long)d.pixelFormat);\n'
@@ -101,5 +128,7 @@ open(sys.argv[1], 'wb').write(plistlib.dumps(dict(
     CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='NativeAdrenoMetalDevice',
     CFBundleSupportedPlatforms=['MacOSX'], LSMinimumSystemVersion='14.0'), fmt=plistlib.FMT_XML))
 EOF
+# NO_STAGE=1: the bundle only. Staging without STAGE_ARGS=--base/--store makes a new Data seed, which resets the phone's Data.
+[ -n "${NO_STAGE:-}" ] && exit 0
 [ -x out/metal/probe/metal-probe ] || bash scripts/build-metal-probe.sh
 python3 scripts/stage-gpu-plugin.py --probe out/metal/probe/metal-probe ${STAGE_ARGS:-} $O/NativeAdrenoMetal.bundle

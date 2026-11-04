@@ -29,10 +29,11 @@ TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
 # NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan, from the sources/UniXNU-turnip worktree at
 # the commit that pins this NativeMetal: see build-turnip-macos.py), in the order its build-adreno-metal-bridge.py applies. As there, not
 # NativeMetal's 0020-written-host-page-textures-in-place-at-any-size.patch: it needs upstream Turnip's render-mode patch, which is not
-# in the board's Mesa.
+# in the board's Mesa. Then this repository's own (patches/metal2vulkan-macos).
 BOARD = ROOT / 'sources/UniXNU-turnip'
 PATCHES = [patch for patch in sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch'))
-           if patch.name != '0020-written-host-page-textures-in-place-at-any-size.patch'] + sorted((BOARD / 'patches/metal2vulkan').glob('*.patch'))
+           if patch.name != '0020-written-host-page-textures-in-place-at-any-size.patch'] + sorted((BOARD / 'patches/metal2vulkan').glob('*.patch')) \
+    + sorted((ROOT / 'patches/metal2vulkan-macos').glob('*.patch'))
 
 pin = json.loads((UNIXNU / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:

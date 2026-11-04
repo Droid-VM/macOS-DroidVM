@@ -1,0 +1,53 @@
+--- a/crates/metal2vulkan-runtime/src/texture/ycbcr_image.rs
++++ b/crates/metal2vulkan-runtime/src/texture/ycbcr_image.rs
+@@ -142,6 +142,19 @@
+     }
+ }
+ 
++/// Whether a two-plane YCbCr texture whose planes a function may read in place is made over its
++/// planes alone, without the image of its converted texels and the conversion's staging copy of
++/// the planes: where the process sets `METAL2VULKAN_YCBCR_PLANES_ONLY=1`. A 4096 x 2160 texture's
++/// image and staging are about 100 MiB, and a compositor that makes a texture of each video frame's
++/// surface (WindowServer's lock-screen wallpaper) holds a pool's worth of them; where every slot
++/// that binds it reads its planes in place, none of it is read.
++fn planes_only() -> bool {
++    static PLANES_ONLY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *PLANES_ONLY.get_or_init(|| {
++        std::env::var("METAL2VULKAN_YCBCR_PLANES_ONLY").is_ok_and(|value| value.trim() == "1")
++    })
++}
++
+ /// A two-plane YCbCr texture's planes as a function reads them in place (the module docs): their
+ /// words, their first byte in the texels' buffer, and their image the device's conversion samples
+ /// where it has one (`ycbcr_planes.rs`).
+@@ -267,6 +280,13 @@
+                     Err(kept) => counts.ycbcr_planes_image_kept(kept),
+                 }
+             }
++            // Planes alone where the process asks it (`planes_only`): no image of the converted
++            // texels and no staging copy of the planes, only the bytes a slot reading them in place
++            // binds; a use that needs the image is refused (`Texture::image`).
++            if in_place.is_ok() && planes_only() {
++                let made = (Storage::Texels(texels), in_place.ok());
++                return Ok(Texture::made_with_planes(self, made, record, None, id_use));
++            }
+             let storage =
+                 self.converted_storage(call, texels, &descriptor, layout, (planes, span))?;
+             let made = (storage, in_place.ok());
+--- a/crates/metal2vulkan-runtime/src/texture.rs
++++ b/crates/metal2vulkan-runtime/src/texture.rs
+@@ -4218,10 +4218,13 @@
+         }
+     }
+ 
+-    /// The buffer's bytes a texture buffer is, or `None` for a texture with an image.
++    /// The buffer's bytes a texture buffer is, or `None` for a texture with an image. A two-plane
++    /// YCbCr texture over its planes alone (`texture/ycbcr_image.rs`'s `planes_only`) is no
++    /// texture buffer: its slots bind its planes in place ([`buffer_texels`](Self::buffer_texels)).
+     pub(super) fn texels(&self) -> Option<&Texels> {
+         match &self.0.storage {
+             Storage::Image(_) | Storage::Alias { .. } | Storage::Shadow { .. } => None,
++            Storage::Texels(_) if self.0.planes_in_place.is_some() => None,
+             Storage::Texels(texels) => Some(texels),
+         }
+     }
