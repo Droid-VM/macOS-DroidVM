@@ -92,6 +92,8 @@ NET_BRIDGE = 'br-wifi'
 # The pool only has to exist (crosvm refuses the device on gunyah without one): DroidVMVideo's buffers are guest memory (USERPTR).
 MEDIA = ['decoder', 'encoder'] if os.environ.get('MACOS_MEDIA') == '1' else []
 MEDIA_POOL_MB = int(os.environ.get('MACOS_MEDIA_POOL_MB') or 8)
+# MACOS_MEDIA_VIDC=1: the decoder on msm_vidc itself (crosvm's vidc=true: guest CAPTURE buffers as udmabufs, no MediaCodec).
+MEDIA_VIDC = os.environ.get('MACOS_MEDIA_VIDC') == '1'
 # The guest's display size is the boot console's (simplefb, the GOP DroidVMDisplay reads), so both screens carry it.
 WIDTH, HEIGHT = 1920, 1080
 FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
@@ -146,7 +148,7 @@ def media_options():
     if not MEDIA:
         return []
     uid = sh(f'stat -c %u {ios.APP}').strip()
-    return ['--pre-alloc', f'media-host-mb={MEDIA_POOL_MB}', *[o for kind in MEDIA for o in ('--virtio-media', f'kind={kind},uid={uid}')],
+    return ['--pre-alloc', f'media-host-mb={MEDIA_POOL_MB}', *[o for kind in MEDIA for o in ('--virtio-media', f'kind={kind},uid={uid}' + (',vidc=true' if MEDIA_VIDC and kind == 'decoder' else ''))],
             '--virtio-mmio-media']
 
 
