@@ -10,8 +10,9 @@ if [ "${1:-}" != --no-deps ]; then
   python3 scripts/build-turnip-macos.py
   python3 scripts/build-metal-bridge-macos.py
 fi
-# NativeMetal: local branch macos-hackintosh, Droid-VM/NativeMetal wip/hackintosh f4ce342 (the AdrenoMetal Droid-VM/UniXNU wip/droidvm
-# ef4486d pins, see build-turnip-macos.py) with a9531ab (two-plane YCbCr surface textures converted once per contents) on top
+# NativeMetal: local branch macos-hackintosh, Droid-VM/NativeMetal wip/hackintosh f4ce342 with a9531ab (two-plane YCbCr surface textures
+# converted once per contents) and its refresh by the surface's seed and luma sum, then wip/hackintosh's 3f8d44a..fb063de (the AdrenoMetal
+# Droid-VM/UniXNU wip/droidvm 527b8b7 pins, see build-turnip-macos.py) picked on top
 U=sources/UniXNU/drivers/NativeMetal
 O=out/metal/plugin
 B=$O/NativeAdrenoMetal.bundle/Contents
@@ -62,9 +63,9 @@ for old, new in [
      '    IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
      '   }\n'
      '  if(gLogTextures)dumpSurfacesOnce(_surfaces,_resourceOwners);\n'),
-    (' [_surfaces removeAllObjects];[_resourceOwners removeAllObjects];\n',
+    (' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[_resourceOwners removeAllObjects];\n',
      ' for(NBTexture *texture in _surfacesInUse)IOSurfaceDecrementUseCount(texture.surface);\n _surfacesInUse=nil;\n'
-     ' [_surfaces removeAllObjects];[_resourceOwners removeAllObjects];\n'),
+     ' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[_resourceOwners removeAllObjects];\n'),
     (' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),',
      ' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n'
      ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024 &&\n'

@@ -321,6 +321,13 @@ static id deviceForPort(io_service_t port)
             }
             setenv("METAL2VULKAN_BLOCK_MIB", text[0] ? text : "16", 0);
         }
+        // A client's cache of freed BOs (Turnip's darwin backend: TU_DARWIN_BO_CACHE_MB, 96 by default, and TU_DARWIN_BO_CACHE_SMALL_MB
+        // for BOs of at most 1 MiB, 16): 16 and 8 MiB in every process but WindowServer, which keeps the defaults, as upstream's plugin
+        // (NativeMetal 52162a4) for all but its render server. Every BO is wired guest memory and each resident client kept its cache full.
+        if (strcmp(getprogname(), "WindowServer")) {
+            setenv("TU_DARWIN_BO_CACHE_MB", "16", 0);
+            setenv("TU_DARWIN_BO_CACHE_SMALL_MB", "8", 0);
+        }
         // The render server's queue at a high global priority (the board's patches/metal2vulkan/0012, as upstream's plugin does for
         // backboardd): a Vulkan queue's priority is fixed when the device opens, and the board's Turnip moves the process's ring to it
         // (patches/mesa/turnip-darwin-queue-priority.patch), so WindowServer's frames do not wait on the GPU behind an app's.
