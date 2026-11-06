@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Wed, 4 Nov 2026 13:40:00 -0500
+Subject: [PATCH 41/41] k27: a realtime computation past the maximum is held to
+ it rather than refused
+
+The board's timer runs at 19.2 MHz, where max_rt_quantum (50 ms) is 960000 ticks. coreaudiod asks for its I/O thread
+THREAD_TIME_CONSTRAINT_POLICY with a computation of 1200000 ticks (50 ms at Apple's 24 MHz; period 1536000):
+thread_policy_set refused it, every I/O thread stayed non-realtime ("Failed to change thread to realtime priority"),
+the HAL's clock never moved and WebKit's players stopped at their first second. The computation is held to the
+maximum when the constraint allows it, as a computation below half the constraint is already raised.
+
+(not yet committed on branch k27: exported from the worktree's diff)
+---
+diff --git a/osfmk/kern/thread_policy.c b/osfmk/kern/thread_policy.c
+index bb1f51b..cf36182 100644
+--- a/osfmk/kern/thread_policy.c
++++ b/osfmk/kern/thread_policy.c
+@@ -405,6 +405,15 @@ thread_policy_set_internal(
+ 		info = (thread_time_constraint_with_priority_policy_t)policy_info;
+ 
+ 
++		/*
++		 * A computation past the maximum is held to it rather than refused: the board's timer runs at 19.2 MHz,
++		 * where 50 ms is 960000 ticks, and coreaudiod asks for its I/O thread a computation of 1200000 ticks (50 ms
++		 * at Apple's 24 MHz), so every I/O thread it starts stays non-realtime and the HAL's clock never moves.
++		 */
++		if (info->computation > max_rt_quantum && info->constraint >= max_rt_quantum) {
++			info->computation = max_rt_quantum;
++		}
++
+ 		if (info->constraint < info->computation ||
+ 		    info->computation > max_rt_quantum ||
+ 		    info->computation < min_rt_quantum) {

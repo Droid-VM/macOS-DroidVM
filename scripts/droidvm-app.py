@@ -11,6 +11,8 @@
   droidvm-app.py register                                (re)write the vms.json entry through the daemon's config transaction
   droidvm-app.py net                                     only switch the registered VM's network (MACOS_NET) and dump its new FDT,
                                                          keeping every other setting made in the app; then boot
+  droidvm-app.py snd                                     only switch the registered VM's virtio-snd card (MACOS_SND) and dump its
+                                                         new FDT, keeping every other setting made in the app; then boot
   droidvm-app.py media                                   only switch the registered VM's virtio-media codecs (MACOS_MEDIA) and dump
                                                          its new FDT, keeping every other setting made in the app; then boot
   droidvm-app.py store-patch                             write out/metal/stage/store-patch.{bin,txt} (stage-gpu-plugin.py --store) into
@@ -92,6 +94,11 @@ NET_BRIDGE = 'br-wifi'
 # The pool only has to exist (crosvm refuses the device on gunyah without one): DroidVMVideo's buffers are guest memory (USERPTR).
 MEDIA = ['decoder', 'encoder'] if os.environ.get('MACOS_MEDIA') == '1' else []
 MEDIA_POOL_MB = int(os.environ.get('MACOS_MEDIA_POOL_MB') or 8)
+# MACOS_SND=1: the speaker and microphone (DroidVMAudio) on the phone's AAudio: crosvm's virtio-snd card (the upstream iPadOS rig's
+# backend=aaudio, its helper under the app's uid) on virtio-mmio (--virtio-mmio-snd; its window follows --virtio-mmio-gpu's and comes
+# before the media ones), /arm-io/virtio-snd in the ADT. Without it DroidVMAudio still publishes both devices and plays into silence.
+# The template changes: register, or snd for the VM as it is.
+SND = os.environ.get('MACOS_SND') == '1'
 # MACOS_MEDIA_VIDC=1: the decoder on msm_vidc itself (crosvm's vidc=true: guest CAPTURE buffers as udmabufs, no MediaCodec).
 MEDIA_VIDC = os.environ.get('MACOS_MEDIA_VIDC') == '1'
 # The guest's display size is the boot console's (simplefb, the GOP DroidVMDisplay reads), so both screens carry it.
@@ -101,6 +108,9 @@ REQUIRED_ARGS = ['mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-r
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
 # vCPU the busy host did not run for that long while holding one panicked the guest at launchd's spawn storms; 40 times is 10 s
 REQUIRED_ARGS.append('ml-timeout-lock-scale=40')
+# CoreAudio (and Swift's clocks) take the host clock as 24 MHz whatever mach_timebase_info says; the counter here runs at 19.2 MHz, so
+# without the kernel scaling it (patch 0042) the HAL writes every 80 ms instead of 64 ms and the sound stutters and falls behind the picture
+REQUIRED_ARGS.append('droidvm-timebase-hz=24000000')
 # MACOS_DROP_ARGS=NAME[,NAME]: leave those of the arguments above (and of GPU_ARGS) out
 REQUIRED_ARGS = [a for a in REQUIRED_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')]
 # exec-env (one boot argument, groups split by ';'): WebKit's WebContent reserves a 64 GiB Gigacage aligned to 64 GiB, which the 39-bit
@@ -129,7 +139,7 @@ def template(persistent):
                                  '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
                                  '--virtio-mmio-block', run.STORE + ',lock=false',
                                  *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else []),
-                                 *media_options()]})
+                                 *snd_options(), *media_options()]})
     if NET:
         vm['networks'] = [{'network_id': network_id(), 'mac_address': NET_MAC}]
     if VIRTIO_GPU:
@@ -150,6 +160,26 @@ def media_options():
     uid = sh(f'stat -c %u {ios.APP}').strip()
     return ['--pre-alloc', f'media-host-mb={MEDIA_POOL_MB}', *[o for kind in MEDIA for o in ('--virtio-media', f'kind={kind},uid={uid}' + (',vidc=true' if MEDIA_VIDC and kind == 'decoder' else ''))],
             '--virtio-mmio-media']
+
+
+def snd_options():
+    if not SND:
+        return []
+    uid = sh(f'stat -c %u {ios.APP}').strip()
+    return ['--virtio-snd', f'backend=aaudio,capture=true,num_output_devices=1,num_input_devices=1,uid={uid}', '--virtio-mmio-snd']
+
+
+def strip_snd(options):
+    """extra_options without what snd_options() adds."""
+    kept, skip = [], False
+    for option in options:
+        if skip:
+            skip = False
+        elif option == '--virtio-snd':
+            skip = True
+        elif option != '--virtio-mmio-snd':
+            kept.append(option)
+    return kept
 
 
 def strip_media(options):
@@ -208,7 +238,7 @@ def boot_disk(args):
     # Below the shim's RAM base (0x600000 of firmware window), the framebuffer and the pools at the top of RAM (0xA00000 before:
     # the window and a 1280x800 framebuffer's 4 MiB)
     run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None,
-                 virtio_gpu=VIRTIO_GPU, net=NET, media=len(MEDIA))   # every vCPU the app gives the VM
+                 virtio_gpu=VIRTIO_GPU, net=NET, snd=SND, media=len(MEDIA))   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + ([a for a in GPU_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')] if GPU else []) +
                            ['exec-env=' + ';'.join(EXEC_ENV + (GPU_EXEC_ENV if GPU else []))] + args.kernel_arg)
@@ -275,7 +305,26 @@ def media(args):
     if row and row.get('state') != 'STOPPED':
         raise SystemExit(f'stop the running VM first ({row.get("state")})')
     vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
-    vm['extra_options'] = strip_media(vm['extra_options']) + media_options()
+    vm['extra_options'] = strip_media(vm['extra_options']) + media_options()   # the snd options stay ahead of them
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
+    print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
+    if not reply.get('success'):
+        raise SystemExit(1)
+    dump_fdt()
+
+
+def snd(args):
+    """The registered VM with (MACOS_SND=1) or without the virtio-snd card, every other setting kept: its window goes before the
+    media ones (crosvm's order), which move, so the FDT is dumped again."""
+    ipc = ios.Ipc()
+    row = ios.find_vm(ipc)
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
+    options = strip_snd(vm['extra_options'])
+    kept = strip_media(options)
+    vm['extra_options'] = kept + snd_options() + options[len(kept):]   # the media options, as the VM has them, stay last
     status = ipc.call('vm_config_status')
     reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
     print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
@@ -307,7 +356,7 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
-    for name in ('push', 'register', 'net', 'media', 'store-patch', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'net', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -320,6 +369,8 @@ def main():
         prepare(args)
     elif args.cmd == 'net':
         net(args)
+    elif args.cmd == 'snd':
+        snd(args)
     elif args.cmd == 'media':
         media(args)
     elif args.cmd == 'store-patch':

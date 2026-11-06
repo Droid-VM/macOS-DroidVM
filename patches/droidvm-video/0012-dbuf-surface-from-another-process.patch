@@ -1,0 +1,21 @@
+A Dbuf's surface from a pool another process made: Safari's videos (WebKit) came back with every lookup of the answered
+surface refused (11-04: session 640x360 avc1, "stage 41 failed: -536870174", kIOReturnNotPermitted, in 9 out 0 dropped 8): the
+task may look up by ID only what it made itself or what is global. Looked up as an efrm's frame is, through a send right the
+process's own IOSurface client makes; once a session needed that, every later surface of it goes that way.
+--- a/DroidVMVTHost.cpp
++++ b/DroidVMVTHost.cpp
+@@ -2828,7 +2828,13 @@
+                 if (s->known[i].id == surfaces[0]) { view = s->known[i].view; surface = true; }
+             if (!surface) {
+                 if (!s->surfaces) s->surfaces = openSurfaceClient(c->task);
+-                surface = s->surfaces && lookupSurface(s->surfaces, surfaces[0], view);
++                surface = s->surfaces && !s->holder && lookupSurface(s->surfaces, surfaces[0], view);
++                // A pool another process made (WebKit's: the task may not look it up by ID, kIOReturnNotPermitted): through the
++                // process's own client, as an efrm's frame.
++                if (!surface && s->surfaces) {
++                    if (!s->holder) s->holder = processSurfaceClient(c->pid);
++                    surface = s->holder && lookupSurface(s->surfaces, surfaces[0], view, s->holder);
++                }
+                 if (surface && s->knownCount < 48) s->known[s->knownCount++] = {surfaces[0], view};
+             }
+             IOLockUnlock(s->surfaceLock);

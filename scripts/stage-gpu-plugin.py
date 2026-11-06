@@ -4,7 +4,7 @@ searches for <MetalPluginName>.bundle; /Library is a firmlink into the Data volu
 make-owner-trust-bundle.py).
 
     stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
-                        [--disable-job LABEL]... [--disable-agent LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.0.1]
+                        [--disable-job LABEL]... [--enable-job LABEL]... [--disable-agent LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.0.1]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
@@ -34,6 +34,8 @@ seed format (256 MiB). Output: STORE changed in place and out/metal/stage/store-
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
 throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit).
+--enable-job writes LABEL as enabled (false) to the same overrides: a daemon an earlier --disable-job turned off (audiomxd, which
+macOS 27's media routing lives in: without it AVSampleBufferAudioRenderer fails with -16155 and WebKit's player with it).
 --disable-agent writes LABEL to uid 501's overrides (disabled.501.plist, what `launchctl disable gui/501/LABEL` writes): a user agent
 the board has no use for (Siri, Photos, iCloud, Find My...), whose first-login burst left the 4 GiB guest to jetsam, which killed idle
 daemons that launchd relaunched on their next message, thousands of times.
@@ -201,6 +203,7 @@ def main():
     parser.add_argument('--top', metavar='SECONDS', type=int)
     parser.add_argument('--run', metavar=('SECONDS', 'COMMAND'), nargs=2, action='append', default=[])
     parser.add_argument('--disable-job', metavar='LABEL', action='append', default=[])
+    parser.add_argument('--enable-job', metavar='LABEL', action='append', default=[])
     parser.add_argument('--disable-agent', metavar='LABEL', action='append', default=[])
     parser.add_argument('--user', metavar='NAME:PASSWORD')
     parser.add_argument('--data-size-mib', type=int)
@@ -294,14 +297,15 @@ def main():
                     subprocess.run(['sudo', 'chown', '0:0', str(run_job)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(run_job)], check=True)
                 # The seed's own overrides are kept (each run starts from the artifact seed).
-                for disabled, labels in ((mount / LAUNCHD_DISABLED, args.disable_job),
-                                         (mount / LAUNCHD_DISABLED.replace('.plist', '.501.plist'), args.disable_agent)):
+                for disabled, labels in ((mount / LAUNCHD_DISABLED, {**{label: True for label in args.disable_job},
+                                                                     **{label: False for label in args.enable_job}}),
+                                         (mount / LAUNCHD_DISABLED.replace('.plist', '.501.plist'),
+                                          {label: True for label in args.disable_agent})):
                     if not labels:
                         continue
                     subprocess.run(['sudo', 'mkdir', '-p', str(disabled.parent)], check=True)
                     seed = subprocess.run(['sudo', 'cat', str(disabled)], capture_output=True).stdout
-                    plist = plistlib.dumps({**(plistlib.loads(seed) if seed else {}), **{label: True for label in labels}},
-                                           fmt=plistlib.FMT_XML)
+                    plist = plistlib.dumps({**(plistlib.loads(seed) if seed else {}), **labels}, fmt=plistlib.FMT_XML)
                     subprocess.run(['sudo', 'tee', str(disabled)], input=plist, stdout=subprocess.DEVNULL, check=True)
                     subprocess.run(['sudo', 'chown', '0:0', str(disabled)], check=True)
                     subprocess.run(['sudo', 'chmod', '644', str(disabled)], check=True)

@@ -1,0 +1,46 @@
+The speaker's periods with a lead on the host: the engine hands over each period as its deadline passes, so crosvm's AAudio
+stream ran with nothing queued at every hitch of the guest or the host (11-05: twelve gaps of 25-66 ms in a minute of a
+video, heard as stutter). As the output starts, the transport queues 8 periods (40 ms) of silence ahead, which the guest's
+periods keep from then on, and the output latency the HAL is given includes them, so players keep their pictures in step.
+
+--- a/DroidVMVirtioSnd.c
++++ b/DroidVMVirtioSnd.c
+@@ -33,6 +33,7 @@
+ 
+ enum {
+     SND_SLOTS = 16,                  // periods in flight per direction (80 ms)
++    SND_PREFILL = 8,                 // periods of silence queued ahead as the output starts (40 ms; DroidVMAudio.cpp's OutputLead)
+     SND_QUEUE = 64,                  // descriptors per queue: three per slot (header, data, status)
+     SND_PERIOD_FRAMES = 240,
+     SND_OUT_CHANNELS = 2, SND_IN_CHANNELS = 1,
+@@ -232,6 +233,11 @@
+         if (output) {
+             snd.tx_free = SND_SLOTS; snd.tx_next = 0;
+             snd.out_running = pcm_command(SND_R_PCM_START, snd.out_stream);
++            // The engine hands over each period as its deadline passes, so the host's queue ran empty at every hitch of
++            // the guest or of the host (crosvm: "playback stream is running with nothing queued", 25-66 ms, heard as
++            // stutter): it starts SND_PREFILL periods ahead instead, a lead the guest's periods keep from then on.
++            static const int16_t silence[SND_PERIOD_FRAMES * SND_OUT_CHANNELS];
++            for (unsigned i = 0; snd.out_running && i < SND_PREFILL; ++i) droidvm_snd_play(silence, SND_PERIOD_FRAMES);
+         } else {
+             pcm_command(SND_R_PCM_STOP, snd.out_stream);
+             snd.out_running = false;
+--- a/DroidVMAudio.cpp
++++ b/DroidVMAudio.cpp
+@@ -67,6 +67,7 @@
+     Rate = 48000, RingFrames = 8192, PeriodFrames = 240,   // 5 ms
+     OutputChannels = 2, InputChannels = 1, StreamID = 1,
+     SafetyOffset = 2 * PeriodFrames, Latency = PeriodFrames,
++    OutputLead = 8 * PeriodFrames,   // the silence the transport queues ahead as the output starts (DroidVMVirtioSnd.c's SND_PREFILL)
+     TransportBuiltIn = 0x626c746e,                        // 'bltn'
+     FormatLinearPCM = 0x6c70636d,                         // 'lpcm'
+     FlagsS16 = 0x4 | 0x8,                                 // signed integer, packed (little endian)
+@@ -210,7 +211,7 @@
+     e->setProperty("model UID", uid);
+     setNumber(e, "transport type", TransportBuiltIn);
+     setNumber(e, "clock domain", 1);   // the HAL warns that a built-in device in clock domain 0 is unusual
+-    setNumber(e, "output latency", Latency);
++    setNumber(e, "output latency", Latency + OutputLead);   // so players keep their pictures in step with the sound heard
+     setNumber(e, "input latency", Latency);
+     setNumber(e, "output safety offset", SafetyOffset);
+     setNumber(e, "input safety offset", SafetyOffset);

@@ -1,0 +1,23 @@
+The output latency the HAL is given now includes the host's own part: the periods leave the transport for crosvm's AAudio
+stream, which since 11-05 runs on Android's fast mixer (31 ms reported by AudioFlinger). Without it the guest said 55 ms
+for sound heard about 86 ms after it was written, and players kept their pictures that far ahead of it (lips before the words).
+
+--- a/DroidVMAudio.cpp
++++ b/DroidVMAudio.cpp
+@@ -68,6 +68,7 @@
+     OutputChannels = 2, InputChannels = 1, StreamID = 1,
+     SafetyOffset = 2 * PeriodFrames, Latency = PeriodFrames,
+     OutputLead = 8 * PeriodFrames,   // the silence the transport queues ahead as the output starts (DroidVMVirtioSnd.c's SND_PREFILL)
++    HostLatency = 1536,              // the host's own part, past the transport: Android's fast mixer, 31 ms (crosvm, 11-05)
+     TransportBuiltIn = 0x626c746e,                        // 'bltn'
+     FormatLinearPCM = 0x6c70636d,                         // 'lpcm'
+     FlagsS16 = 0x4 | 0x8,                                 // signed integer, packed (little endian)
+@@ -211,7 +212,7 @@
+     e->setProperty("model UID", uid);
+     setNumber(e, "transport type", TransportBuiltIn);
+     setNumber(e, "clock domain", 1);   // the HAL warns that a built-in device in clock domain 0 is unusual
+-    setNumber(e, "output latency", Latency + OutputLead);   // so players keep their pictures in step with the sound heard
++    setNumber(e, "output latency", Latency + OutputLead + HostLatency);   // so players keep their pictures in step with the sound heard
+     setNumber(e, "input latency", Latency);
+     setNumber(e, "output safety offset", SafetyOffset);
+     setNumber(e, "input safety offset", SafetyOffset);
