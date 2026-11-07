@@ -1,0 +1,138 @@
+From ff6a679d0a45a0299dbbc1dbb8dbd3efa7dc1269 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 7 Nov 2026 01:04:03 -0500
+Subject: [PATCH 43/44] k27: macOS 27.2's Sandbox ends a rename swap:
+ mpo_vnode_notify_end_rename_swap
+
+27.2's Sandbox pairs two hooks around a rename swap: hook_vnode_notify_begin_rename_swap, in the
+mpo_vnode_notify_will_rename_swap slot, takes two rw locks (both vnodes' Sandbox state, in address
+order) and records them for the current thread; hook_vnode_notify_end_rename_swap, in the slot this
+kernel had as mpo_reserved16, finds that record and drops them. 26.5's xnu never calls the second,
+so the first renameatx_np(RENAME_SWAP) (dirs_cleaner, ~60 s into boot) returned to userspace with
+both held: "Returning to userspace with rw lock held ... rwlock_count 2".
+
+mpo_reserved16 becomes mpo_vnode_notify_end_rename_swap, called after vn_rename whether or not the
+swap succeeded, with the same checks as the will hook so the same policies see both.
+---
+ bsd/kern/policy_check.c  |  2 +-
+ bsd/vfs/vfs_syscalls.c   |  6 ++++++
+ security/mac_framework.h |  2 ++
+ security/mac_policy.h    | 22 +++++++++++++++++++++-
+ security/mac_vfs.c       | 21 +++++++++++++++++++++
+ 5 files changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/kern/policy_check.c b/bsd/kern/policy_check.c
+index a2038ce..6528e1d 100644
+--- a/bsd/kern/policy_check.c
++++ b/bsd/kern/policy_check.c
+@@ -191,7 +191,7 @@ const static struct mac_policy_ops policy_ops = {
+ 	.mpo_reserved13 = (mpo_reserved_hook_t *)common_hook,
+ 	.mpo_reserved14 = (mpo_reserved_hook_t *)common_hook,
+ 	.mpo_reserved15 = (mpo_reserved_hook_t *)common_hook,
+-	.mpo_reserved16 = (mpo_reserved_hook_t *)common_hook,
++	CHECK_SET_HOOK(vnode_notify_end_rename_swap)
+ 	.mpo_reserved17 = (mpo_reserved_hook_t *)common_hook,
+ 	.mpo_reserved18 = (mpo_reserved_hook_t *)common_hook,
+ 	CHECK_SET_HOOK(vnode_notify_will_rename_swap)
+diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
+index 14eb076..3c47e43 100644
+--- a/bsd/vfs/vfs_syscalls.c
++++ b/bsd/vfs/vfs_syscalls.c
+@@ -10129,6 +10129,12 @@ skipped_lookup:
+ 	    tdvp, &tvp, &tond->ni_cnd, tvap,
+ 	    flags, ctx);
+ 
++#if CONFIG_MACF
++	if (ISSET(flags, VFS_RENAME_SWAP)) {
++		mac_vnode_notify_end_rename_swap(ctx, fvp, tvp);
++	}
++#endif
++
+ 	if (locked_vp) {
+ 		vnode_link_unlock(fvp);
+ 		locked_vp = NULLVP;
+diff --git a/security/mac_framework.h b/security/mac_framework.h
+index 052d786..5c10bc9 100644
+--- a/security/mac_framework.h
++++ b/security/mac_framework.h
+@@ -577,6 +577,8 @@ void    mac_vnode_notify_rename_swap(vfs_context_t ctx, struct vnode *fvp,
+     struct vnode *tdvp, struct componentname *tcnp);
+ void    mac_vnode_notify_will_rename_swap(vfs_context_t ctx,
+     struct vnode *fvp, struct vnode *tvp);
++void    mac_vnode_notify_end_rename_swap(vfs_context_t ctx,
++    struct vnode *fvp, struct vnode *tvp);
+ void    mac_vnode_notify_setacl(vfs_context_t ctx, struct vnode *vp, struct kauth_acl *acl);
+ void    mac_vnode_notify_setattrlist(vfs_context_t ctx, struct vnode *vp, struct attrlist *alist);
+ void    mac_vnode_notify_setextattr(vfs_context_t ctx, struct vnode *vp, const char *name, struct uio *uio);
+diff --git a/security/mac_policy.h b/security/mac_policy.h
+index 745c37f..774ebd5 100644
+--- a/security/mac_policy.h
++++ b/security/mac_policy.h
+@@ -5662,6 +5662,26 @@ typedef void mpo_vnode_notify_will_rename_swap_t(
+ 	struct label *vl2
+ 	);
+ 
++/**
++ *  @brief Notification that a vnode rename swap has been attempted
++ *  @param cred User credential for the swapping process
++ *  @param v1 First vnode of the swap
++ *  @param vl1 Policy label for v1
++ *  @param v2 Second vnode of the swap
++ *  @param vl2 Policy label for v2
++ *
++ *  k27: the slot macOS 27's Sandbox fills with hook_vnode_notify_end_rename_swap. It is called after the
++ *  filesystem rename swap whether or not it succeeded, and releases what mpo_vnode_notify_will_rename_swap
++ *  (27's hook_vnode_notify_begin_rename_swap: two rw locks) took for the current thread.
++ */
++typedef void mpo_vnode_notify_end_rename_swap_t(
++	kauth_cred_t cred,
++	struct vnode *v1,
++	struct label *vl1,
++	struct vnode *v2,
++	struct label *vl2
++	);
++
+ /**
+  *  @brief Inform MAC policies that a vnode has been linked
+  *  @param cred User credential for the renaming process
+@@ -6073,7 +6093,7 @@ struct mac_policy_ops {
+ 	mpo_reserved_hook_t                     *mpo_reserved13;
+ 	mpo_reserved_hook_t                     *mpo_reserved14;
+ 	mpo_reserved_hook_t                     *mpo_reserved15;
+-	mpo_reserved_hook_t                     *mpo_reserved16;
++	mpo_vnode_notify_end_rename_swap_t      *mpo_vnode_notify_end_rename_swap;
+ 	mpo_reserved_hook_t                     *mpo_reserved17;
+ 	mpo_reserved_hook_t                     *mpo_reserved18;
+ 	mpo_vnode_notify_will_rename_swap_t     *mpo_vnode_notify_will_rename_swap;
+diff --git a/security/mac_vfs.c b/security/mac_vfs.c
+index 9c5561d..8239514 100644
+--- a/security/mac_vfs.c
++++ b/security/mac_vfs.c
+@@ -2925,6 +2925,27 @@ mac_vnode_notify_will_rename_swap(vfs_context_t ctx,
+ 	VFS_KERNEL_DEBUG_END1(109, fvp);
+ }
+ 
++/* k27: pairs mac_vnode_notify_will_rename_swap (same checks, so the same policies see both) */
++void
++mac_vnode_notify_end_rename_swap(vfs_context_t ctx,
++    struct vnode *fvp, struct vnode *tvp)
++{
++	kauth_cred_t cred;
++
++#if SECURITY_MAC_CHECK_ENFORCE
++	if (!mac_vnode_enforce) {
++		return;
++	}
++#endif
++	cred = vfs_context_ucred(ctx);
++	if (!mac_cred_check_enforce(cred)) {
++		return;
++	}
++
++	MAC_PERFORM(vnode_notify_end_rename_swap, cred,
++	    fvp, mac_vnode_label(fvp), tvp, mac_vnode_label(tvp));
++}
++
+ void
+ mac_vnode_notify_rename_swap(vfs_context_t ctx, struct vnode *fdvp,
+     struct vnode *fvp, struct componentname *fcnp, struct vnode *tdvp,

@@ -34,7 +34,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.0.1: MACOS_TAG=27.0.1)
+TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.2: MACOS_TAG=27.2)
 # CSR_ALLOW_UNRESTRICTED_FS (as k27/try.sh): the dyld cache has no SF_RESTRICTED, and without it launchd cannot map the cache
 os.environ.setdefault('MACOS_LP_SIP0', '0x2')
 sys.dont_write_bytecode = True

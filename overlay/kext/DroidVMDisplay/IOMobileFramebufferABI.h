@@ -361,8 +361,8 @@ public:
     virtual IOReturn trigger_pswap_dependent_thread();                                                                             // 480 0x106a
     virtual IOReturn send_clamshell_state();                                                                                       // 481 0xf761
     virtual IOReturn get_shared_disp_property();                                                                                   // 482 0xc09c
-    uint8_t iomfbLegacyState[0x1dd8 - sizeof(IOService)];   // the instance size of its MetaClass
+    uint8_t iomfbLegacyState[0x1de0 - sizeof(IOService)];   // the instance size of its MetaClass
 };
 
-static_assert(sizeof(IOMobileFramebufferLegacy) == 0x1dd8, "IOMobileFramebufferLegacy instance size");
+static_assert(sizeof(IOMobileFramebufferLegacy) == 0x1de0, "IOMobileFramebufferLegacy instance size");
 enum : unsigned {IOMobileFramebufferLegacySlots = 483};

@@ -27,7 +27,8 @@ module.DATA_START = layout['DATA_START']
 # k27_amfi_page_shift (31): that check fails when sp is within 0x80 of a page start, a fixed outcome on a fixed call chain over page
 # aligned kernel stacks, and with our kernel's frames every spawn's entitlement dictionary copy failed ("failed to create OSDictionary
 # copy: 14" panic). The kext's bytes stay as shipped.
-module.KEPT_POINTER_REBINDS = [(0xfffffe0007b439c8, '_k27_amfi_page_shift')]
+# The slot is the second of AMFI's __DATA_CONST,__got in the 27.2 vma2 kernelcache (0xfffffe0007b439c8 in 27.0.1's).
+module.KEPT_POINTER_REBINDS = [(0xfffffe0007b4bbc8, '_k27_amfi_page_shift')]
 
 # Symbols of the native kexts as linked (for k27/sym.py), next to the output: OUTPUT.natives.json {symbol: address}.
 natives = {}

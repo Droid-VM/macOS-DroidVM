@@ -20,7 +20,7 @@ import tomllib
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
-TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.0.1: MACOS_TAG=27.0.1)
+TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.2: MACOS_TAG=27.2)
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.dont_write_bytecode = True
 import phone_pool  # noqa: E402
@@ -32,7 +32,42 @@ OWNER = 'u0_a258:media_rw'                          # the owner of the DroidVM f
 STORE = FOLDER + '/data-store.img'
 STORE_GIB = 16
 PINS = ROOT / 'out/owner/macos-root-pins.json'
-OS_UUID = json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists() else '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'   # the OS volume the kernel's policy pins
+
+
+def image_volumes(image):
+    """The volumes of IMAGE when it is a bare APFS container (macOS 27's os.raw, every systemos.img), else None."""
+    if not image.is_file():
+        return None
+    with image.open('rb') as handle:
+        handle.seek(32)
+        if handle.read(4) != b'NXSB':
+            return None
+        spec = importlib.util.spec_from_file_location('apfs_container', ROOT / 'scripts/apfs-container.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class Disk:
+            def read(self, offset, length):
+                handle.seek(offset)
+                return handle.read(length)
+        return module.Container(Disk(), 0, image.stat().st_size).volumes()['volumes']
+
+
+def image_volume_uuid(name, role=None):
+    """The UUID of the one volume (of ROLE) in artifacts/TAG/NAME, or None when that is no bare APFS container."""
+    image = ROOT / f'artifacts/{TAG}/{name}'
+    volumes = image_volumes(image)
+    if volumes is None:
+        return None
+    found = [v['uuid'] for v in volumes if role is None or v['role'] == role]
+    if len(found) != 1:
+        raise SystemExit(f'{image}: expected one {role or ""} volume, found {len(found)}')
+    return found[0]
+
+
+# the OS volume the kernel mounts as root: from the image itself, else the one the legacy kernel's policy pins
+OS_UUID = (image_volume_uuid('os.raw', 'System') or (json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists()
+                               else '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'))
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
 KERNEL = Path(os.environ.get('MACOS_KERNEL', ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'))
@@ -193,6 +228,10 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         # there is no manifest, so it is zeros.
         if os.environ.get('MACOS_BOOT_MANIFEST_HASH') == '1':
             text = text.replace(marker, "('boot-manifest-hash', bytes(48)), " + marker)
+        # /chosen/owner-systemos-uuid: the SystemOS volume the k27 kernel mounts as the shared-cache carrier, read from the image
+        systemos_uuid = image_volume_uuid('systemos.img')
+        if systemos_uuid:
+            text = text.replace(marker, f"('owner-systemos-uuid', {systemos_uuid.encode() + bytes(1)!r}), " + marker)
         text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
                                     " and args.data_store_mmio is None else []),")
         # MACOS_VMM_PRESENT=0: /defaults without vmm-present, so kern.hv_vmm_present is 0. MobileGestalt answers IsVirtualDevice from it,

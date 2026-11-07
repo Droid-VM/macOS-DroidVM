@@ -1,4 +1,4 @@
-# xnu-12377 for the k27 VM (macOS 27.0.1 kexts and userland)
+# xnu-12377 for the k27 VM (macOS 27.2 kexts and userland)
 
 On top of the pristine `xnu-12377.121.6` (sources/xnu-12377, commit ac9718f), applied in order with `git am`; the result is the
 tree of branch `k27` (out/k27/xnu, a worktree of out/x12377/xnu-m; also fetched into sources/xnu-12377 as `k27`).

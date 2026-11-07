@@ -4,7 +4,7 @@ searches for <MetalPluginName>.bundle; /Library is a firmlink into the Data volu
 make-owner-trust-bundle.py).
 
     stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
-                        [--disable-job LABEL]... [--enable-job LABEL]... [--disable-agent LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.0.1]
+                        [--disable-job LABEL]... [--enable-job LABEL]... [--disable-agent LABEL]... [--user NAME:PASSWORD] BUNDLE...        [MACOS_TAG=27.2]
 
 --probe adds a launchd job that runs EXECUTABLE once at boot (overlay/metal/metal-probe.mm: what dyld and Metal make of the plugin).
 --setup-done writes /var/db/.AppleSetupDone: loginwindow then goes to its login window instead of Language Chooser and Setup Assistant
@@ -60,7 +60,7 @@ sys.path.insert(0, str(ROOT / 'sources/UniXNU/drivers/DarwinBoot/Test'))
 import packed_ramdisk  # noqa: E402
 from data_store import PAGE, Store  # noqa: E402
 
-TAG = os.environ.get('MACOS_TAG', '27.0.1')
+TAG = os.environ.get('MACOS_TAG', '27.2')
 ARTIFACTS = ROOT / f'artifacts/{TAG}'
 OUT = ROOT / 'out/metal/stage'
 LC_CODE_SIGNATURE = 0x1d
