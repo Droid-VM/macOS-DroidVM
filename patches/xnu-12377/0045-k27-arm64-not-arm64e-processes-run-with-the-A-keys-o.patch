@@ -1,0 +1,72 @@
+From 1af6e09a6de57dda9832e76fa2cb7f54bf8ed8e3 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 7 Nov 2026 12:42:39 -0500
+Subject: [PATCH 45/49] k27: arm64 (not arm64e) processes run with the A keys
+ off (SCTLR_EL1.EnIA/EnDA per thread), as on Apple's CPUs
+
+---
+ osfmk/arm64/locore.s | 37 +++++++++++++++++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/osfmk/arm64/locore.s b/osfmk/arm64/locore.s
+index fd736d1..13d2819 100644
+--- a/osfmk/arm64/locore.s
++++ b/osfmk/arm64/locore.s
+@@ -38,6 +38,18 @@
+ #include <config_dtrace.h>
+ #include "assym.s"
+ #include <arm64/exception_asm.h>
++
++/*
++ * The virtual board's CPUs have plain ARMv8.3 pointer authentication: no per-process key switching (paravirtualized or Apple's),
++ * so a process whose user JOP keys are off (an arm64 one, not arm64e: IMGPF_NOJOP) cannot have them off by its key. Its shared
++ * cache's authenticated pointers are slid unsigned (vm_shared_region_auth_remap, key 0) and its own pointers are never signed:
++ * what Apple's CPUs make work by turning the A keys off at EL0, done here with SCTLR_EL1.EnIA/EnDA, cleared on the way out to such
++ * a thread and set again first thing on the way in (before LOAD_USER_PCB's AUTDA). The B keys (return addresses) stay on.
++ */
++#if defined(BCM2837) && defined(HAS_APPLE_PAC) && !HAS_PARAVIRTUALIZED_PAC
++#define NOJOP_SCTLR 1
++#define NOJOP_SCTLR_KEYS (SCTLR_PACIA_ENABLED | SCTLR_PACDA_ENABLED)
++#endif
+ #include "dwarf_unwind.h"
+ 
+ #if __ARM_KERNEL_PROTECT__
+@@ -920,6 +932,15 @@ el1_sp1_serror_vector_long:
+ 
+ .macro EL0_64_VECTOR guest_label
+ 	stp		x0, x1, [sp, #-16]!					// Save x0 and x1 to the exception stack
++#if NOJOP_SCTLR
++	mrs		x0, SCTLR_EL1
++	tbnz	x0, #SCTLR_PACIA_ENABLED_SHIFT, 1f	// A keys on: the thread is not a keys-off one
++	MOV64	x1, NOJOP_SCTLR_KEYS
++	orr		x0, x0, x1
++	msr		SCTLR_EL1, x0
++	isb		sy
++1:
++#endif /* NOJOP_SCTLR */
+ #if __ARM_KERNEL_PROTECT__
+ 	mov		x18, #0 						// Zero x18 to avoid leaking data to user SS
+ #endif
+@@ -2068,6 +2089,22 @@ Lno_gcr_mask_el0_reset:
+ #endif  /* defined(ERET_IS_NOT_CONTEXT_SYNCHRONIZING) && !__ARM_KERNEL_PROTECT__ */
+ 	strb	wzr, [x1, CPU_SYNC_ON_CSWITCH]
+ 
++#if NOJOP_SCTLR
++	// To a keys-off thread at EL0: its A keys off (see NOJOP_SCTLR). No A-key instruction runs from here to the eret, which
++	// synchronizes the change.
++	mrs		x2, SPSR_EL1
++	tst		x2, #(PSR64_MODE_EL_MASK)
++	b.ne	1f
++	mrs		x2, TPIDR_EL1
++	ldr		w2, [x2, TH_ARM_MACHINE_FLAGS]
++	tbz		w2, #ARM_MACHINE_THREAD_DISABLE_USER_JOP_SHIFT, 1f
++	mrs		x2, SCTLR_EL1
++	MOV64	x3, NOJOP_SCTLR_KEYS
++	bic		x2, x2, x3
++	msr		SCTLR_EL1, x2
++1:
++#endif /* NOJOP_SCTLR */
++
+ 
+ #if ERET_NEEDS_ISB
+ 	// Apply any pending isb from earlier.

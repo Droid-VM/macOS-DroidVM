@@ -1,0 +1,37 @@
+From 34cb6b19ea6ffaff217473640aebfdd85dc14709 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 7 Nov 2026 12:42:39 -0500
+Subject: [PATCH 49/49] k27: macOS's syscalls the iOS-based config left out:
+ sendfile, System V IPC, searchfs, file leases
+
+---
+ config/MASTER.arm64.bcm2837 | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/config/MASTER.arm64.bcm2837 b/config/MASTER.arm64.bcm2837
+index d19205f..0c52cc6 100644
+--- a/config/MASTER.arm64.bcm2837
++++ b/config/MASTER.arm64.bcm2837
+@@ -29,11 +29,11 @@
+ #  BSD_EXTRAS_BASE = [ ]
+ #  BSD_EXTRAS_DEV = [ config_coredump config_ucoredump ]
+ #  BSD_EXTRAS_DEBUG = [ config_coredump config_ucoredump ]
+-#  BSD_BASE =       [ mach_bsd psynch config_proc_uuid_policy config_personas config_imageboot config_imageboot_img4 BSD_EXTRAS_BASE ]
++#  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm psynch config_proc_uuid_policy config_personas config_imageboot config_imageboot_img4 BSD_EXTRAS_BASE ]
+ #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel config_imgsrc_access ]
+ #  BSD_DEV =        [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEV ]
+ #  BSD_DEBUG =      [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEBUG ]
+-#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver config_firmlinks ]
++#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver config_firmlinks config_searchfs config_file_leases ]
+ #  FILESYS_RELEASE= [ FILESYS_BASE ]
+ #  FILESYS_DEV =    [ FILESYS_BASE fdesc config_union_mounts ]
+ #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc config_union_mounts ]
+@@ -41,7 +41,7 @@
+ #  SKYWALK_RELEASE = [ SKYWALK_BASE ]
+ #  SKYWALK_DEV =    [ SKYWALK_BASE ]
+ #  SKYWALK_DEBUG =  [ SKYWALK_BASE ]
+-#  NETWORKING =     [ inet tcpdrop_synfin bpfilter if_bridge traffic_mgt dummynet ah_all_crypto if_fake if_redirect vlan ]
++#  NETWORKING =     [ inet sendfile tcpdrop_synfin bpfilter if_bridge traffic_mgt dummynet ah_all_crypto if_fake if_redirect vlan ]
+ #  NETWORKING_RELEASE = [ NETWORKING ]
+ #  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler if_headless kctl_test ]
+ #  NETWORKING_DEBUG = [ NETWORKING_DEV ]

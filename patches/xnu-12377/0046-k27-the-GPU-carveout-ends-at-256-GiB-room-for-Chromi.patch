@@ -1,0 +1,31 @@
+From 0e7d3ee65b5610e37e428f64aacbb8b022938307 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 7 Nov 2026 12:42:39 -0500
+Subject: [PATCH 46/49] k27: the GPU carveout ends at 256 GiB, room for
+ Chromium's 16 GiB pools in the 512 GiB user VA
+
+---
+ osfmk/arm64/machine_routines.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index fb10415..f456377 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -194,7 +194,16 @@ static const struct vm_reserved_region vm_reserved_regions[] = {
+ 	{
+ 		.vmrr_name = "GPU Carveout",
+ 		.vmrr_addr = MACH_VM_MIN_GPU_CARVEOUT_ADDRESS,
++#if defined(BCM2837)
++		/*
++		 * The virtual board's user VA is 512 GiB (a 4K level-1 root), not 16K macOS's 128 TiB, and nothing maps into the
++		 * carveout here (the GPU is Turnip's on virtio-gpu, with its own addresses): up to 256 GiB only, so that 256-448 GiB
++		 * is the room large aligned reservations need (Chromium PartitionAlloc's 16 GiB pools, WebKit's 64 GiB Gigacage).
++		 */
++		.vmrr_size = (vm_map_size_t)(0x0000004000000000ULL - MACH_VM_MIN_GPU_CARVEOUT_ADDRESS)
++#else
+ 		.vmrr_size = (vm_map_size_t)(MACH_VM_MAX_GPU_CARVEOUT_ADDRESS - MACH_VM_MIN_GPU_CARVEOUT_ADDRESS)
++#endif
+ 	},
+ 	/*
+ 	 * Reserve the virtual memory space representing the commpage nesting region

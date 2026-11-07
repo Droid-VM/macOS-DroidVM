@@ -1,0 +1,50 @@
+From 007bac0e90d143dc64f4eef2865858f48ced8924 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 7 Nov 2026 12:42:39 -0500
+Subject: [PATCH 47/49] k27: mmap places mappings on 16K boundaries for user
+ space that assumes 16K pages (V8, PartitionAlloc)
+
+---
+ bsd/kern/kern_mman.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/bsd/kern/kern_mman.c b/bsd/kern/kern_mman.c
+index d3d9993..32d27c9 100644
+--- a/bsd/kern/kern_mman.c
++++ b/bsd/kern/kern_mman.c
+@@ -773,6 +773,17 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
+ 	}
+ #endif
+ 
++#if defined(__arm64__) && !__ARM_16K_PG__
++	/*
++	 * A 4K kernel under arm64 macOS user space, which takes pages for 16K: Chromium's PartitionAlloc and V8 round with a
++	 * constant 16K mask (an aligned reservation maps size + alignment and trims both ends at 16K bounds), so a placed mapping
++	 * starts on a 16K boundary, as on Apple's 16K kernels. MAP_FIXED keeps the address it is given.
++	 */
++	const mach_vm_offset_t anywhere_mask = (flags & MAP_FIXED) ? 0 : (mach_vm_offset_t)0x3fff;
++#else
++	const mach_vm_offset_t anywhere_mask = 0;
++#endif
++
+ 	/*
+ 	 * Lookup/allocate object.
+ 	 */
+@@ -802,7 +813,7 @@ map_anon_retry:
+ 
+ 		result = mach_vm_map_kernel(user_map,
+ 		    vm_sanitize_wrap_addr_ref(&user_addr), user_size,
+-		    0, vmk_flags,
++		    anywhere_mask, vmk_flags,
+ 		    IPC_PORT_NULL, 0, FALSE,
+ 		    prot, maxprot,
+ 		    (flags & MAP_SHARED) ?
+@@ -898,7 +909,7 @@ map_file_retry:
+ 
+ 		result = vm_map_enter_mem_object_control(user_map,
+ 		    vm_sanitize_wrap_addr_ref(&user_addr), user_size,
+-		    0, vmk_flags,
++		    anywhere_mask, vmk_flags,
+ 		    control, vm_map_trunc_page(file_pos, user_mask),
+ 		    docow, prot, maxprot,
+ 		    (flags & MAP_SHARED) ?
