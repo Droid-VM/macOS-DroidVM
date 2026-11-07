@@ -303,7 +303,13 @@ private:
     unsigned fSwapInfoRead, fSwapInfoWrite;
 };
 
-OSDefineMetaClassAndStructors(DroidVMDisplay, IOMobileFramebufferLegacy)
+// Registered by the name of vma2's display class: WindowServer (SLCADisplay::read_pv_preferences, GenerateClientUUIDForDisplay)
+// takes an external display whose service is an AppleParavirtDisplay with a ParavirtDisplayPrefs dictionary for paravirtualized,
+// and names it by its CADisplay uniqueId (IOMFBUUID) rather than a random UUID kept in the Data volume. BackBoard's hit tests look
+// the touchscreen's displayUUID (DroidVMInput: IOMFBUUID, as HSTouchHIDService reads a display service's) up among those names.
+OSDefineMetaClassWithInit(DroidVMDisplay, IOMobileFramebufferLegacy, )
+DroidVMDisplay::MetaClass::MetaClass() : OSMetaClass("AppleParavirtDisplay", DroidVMDisplay::superClass, sizeof(DroidVMDisplay)) {}
+OSDefineDefaultStructors(DroidVMDisplay, IOMobileFramebufferLegacy)
 
 static IOPMPowerState gPowerStates[2] = {   // AppleParavirtDisplay's gPowerState
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -1156,6 +1162,10 @@ bool DroidVMDisplay::createDisplayAttributes()
         if (!(appendNumber(scalingLimits, "RGBLayer_MinScaleFraction", 4) && appendNumber(scalingLimits, "RGBLayer_MaxScale", 4)))
             break;
         setProperty("IOMFBUUID", "44726F69-6456-4D00-0000-000000000001");
+        if (OSDictionary *prefs = OSDictionary::withCapacity(0)) {   // paravirtualized for WindowServer (see the class registration)
+            setProperty("ParavirtDisplayPrefs", prefs);
+            prefs->release();
+        }
         setProperty("external", true);
         setProperty("primary", 0ULL, 32);   // AppleParavirtDisplay's display index
         done = setProperty("DisplayAttributes", attributes) && setProperty("Transport", transport) &&

@@ -6,10 +6,9 @@
 // and pointer events:
 //   - a keyboard: the boot keyboard report (modifiers and six keys), Linux key codes translated to HID usages;
 //   - a multi-touch screen: the tablet report, the first finger the pointer and any finger down the left button. Boot argument
-//     droidvm-touch-digitizer=1: a built-in digitizer touch screen of four fingers instead, the report descriptor of
-//     Virtualization's "Virtual USB Touch Screen" (VzCore::Hardware::UsbTouchScreen, macOS 27). On 27.0.1 WindowServer's
-//     BackBoardHIDTouchEventProcessor never attaches it (its direct touch processor is Sidecar's), and IOHIDFamily's pointer
-//     path makes each touch a held button: a tap drags a selection;
+//     droidvm-touch-digitizer=1: a built-in touch screen instead, as a touch screen Mac's: the report descriptor of
+//     Virtualization's "Virtual USB Touch Screen" (VzCore::Hardware::UsbTouchScreen, macOS 27) for AppleMultitouchDriver to take
+//     it, then Apple's multitouch protocol (feature reports and path frames, below) for HSTouchHIDService.plugin;
 //   - an absolute pointer: the tablet report (absolute X/Y 0..32767, three buttons, wheel);
 //   - a relative mouse: the boot mouse report.
 // No interrupts: a kernel thread polls every 4 ms. Headers: the SDK's IOKit/hid (out/x12377/inc-hid).
@@ -36,6 +35,7 @@ enum class Kind : uint8_t { none, touch, pointer, mouse, keyboard };
 constexpr unsigned maxDevices = 8, maxSlots = 10, maxQueue = 64, pollMs = 4, fingers = 4;
 constexpr int32_t tabletRange = 0x8000;
 bool gTouchTablet = true;   // false with droidvm-touch-digitizer=1
+char gDisplayUUID[40];      // the built-in digitizer's displayUUID, empty for Sidecar's
 
 // usb_kbd_keycode of Linux (drivers/hid/usbhid/usbkbd.c): HID usage -> Linux key code; inverted at start.
 const uint8_t hidToLinux[256] = {
@@ -94,6 +94,71 @@ const uint8_t touchDescriptor[] = {0x05, 0x0d, 0x09, 0x04, 0xa1, 0x01, FINGER FI
 #undef FINGER
 static_assert(sizeof(touchDescriptor) == 191, "Virtualization's descriptor");
 
+// The built-in digitizer speaks Apple's multitouch protocol, as a touch screen Mac's does to AppleMultitouchDriver (its
+// AppleMultitouchHIDService takes the device's IOHIDInterface) and to HSTouchHIDService.plugin in WindowServer (whose frame parser
+// reads path frames, as the frames its sensing algorithms make of the touch controller's images):
+//   - feature reports by mtReportID, the report ID echoed in front: 0xDB all of them at once ([1] then [u16 length with the ID][ID]
+//     [payload] each), 0xD1 family ID, 0xD3 rDEVICE_BASIC_INFO (endianness 1 = little, rows, columns, bcdVersion big-endian, max
+//     packet size), 0xD9 the surface in hundredths of a mm (width, height, then the s16 bounds xmin ymin xmax ymax that contacts are
+//     normalized against), 0x7F status;
+//   - input reports 0x44, a path frame: a 25-byte header (ID, frame number, header length, version 2, u32 milliseconds, image
+//     length 0, path count, path size) and a 30-byte path each (path ID, stage, finger 1-5, hand, s16 X/Y in hundredths of a mm with
+//     Y up, s16 velocities in eighths of a mm/s, radii, orientation, Q8 size and density).
+// No region descriptor (0xD0): MultitouchSupport makes one of rows x columns; the family is none of its known ones (their pitch
+// tables are a trackpad's), so the default.
+namespace mt {
+enum : uint8_t { status = 0x7f, family = 0xd1, basicInfo = 0xd3, surface = 0xd9, all = 0xdb, pathFrame = 0x44 };
+enum : uint8_t { startInRange = 1, makeTouch = 3, touching = 4, breakTouch = 5, outOfRange = 7 };   // path stages
+constexpr uint8_t familyId = 0x30, rows = 20, columns = 32;
+constexpr unsigned headerSize = 25, pathSize = 30;
+constexpr uint32_t width = 30200, height = 19600;   // a 14-inch touch screen's, hundredths of a mm
+
+void put16(uint8_t *p, uint32_t value) { p[0] = static_cast<uint8_t>(value); p[1] = static_cast<uint8_t>(value >> 8); }
+void put32(uint8_t *p, uint32_t value) { put16(p, value); put16(p + 2, value >> 16); }
+
+// A feature report's payload (no report ID) and its length, 0 if there is no such report.
+unsigned property(uint8_t id, uint8_t *p)
+{
+  switch (id) {
+  case status:
+    memset(p, 0, 4);
+    return 4;
+  case family:
+    p[0] = familyId;
+    return 1;
+  case basicInfo:
+    memset(p, 0, 14);
+    p[0] = 1;
+    p[1] = rows;
+    p[2] = columns;
+    p[3] = 0x01;   // bcdVersion 1.00
+    put32(p + 8, 1024);
+    return 14;
+  case surface:
+    put32(p, width);
+    put32(p + 4, height);
+    put16(p + 8, 0);
+    put16(p + 10, 0);
+    put16(p + 12, width);
+    put16(p + 14, height);
+    return 16;
+  case all: {
+    unsigned n = 1;
+    p[0] = 1;
+    static const uint8_t ids[] = {family, basicInfo, surface, status};
+    for (uint8_t each : ids) {
+      unsigned length = property(each, p + n + 3);
+      put16(p + n, length + 1);
+      p[n + 2] = each;
+      n += 3 + length;
+    }
+    return n;
+  }
+  }
+  return 0;
+}
+}  // namespace mt
+
 struct Event { uint16_t type, code; int32_t value; };
 struct Descriptor { uint64_t address; uint32_t length; uint16_t flags, next; };
 static_assert(sizeof(Event) == 8 && sizeof(Descriptor) == 16, "VirtIO wire layout");
@@ -116,6 +181,10 @@ struct DroidVMInputDevice {
   int32_t x = 0, y = 0, dx = 0, dy = 0, wheel = 0;
   uint8_t buttons = 0, modifiers = 0, keys[6] = {};
   uint8_t last[5 * fingers] = {};
+  // The digitizer's paths as last sent: where (virtio-input's units, then hundredths of a mm) and when.
+  struct { bool down = false; int32_t x = 0, y = 0, mmX = 0, mmY = 0; uint32_t milliseconds = 0; } sent[maxSlots];
+  uint8_t frame = 0;
+  uint32_t milliseconds = 0;
   unsigned reports = 0;
   DroidVMHIDDevice *hid = nullptr;
   Descriptor *descriptors() { return reinterpret_cast<Descriptor *>(base); }
@@ -134,17 +203,49 @@ public:
 
   IOReturn newReportDescriptor(IOMemoryDescriptor **descriptor) const override;
   OSString *newTransportString() const override { return OSString::withCString("Virtual"); }
-  OSString *newManufacturerString() const override { return OSString::withCString("DroidVM"); }
+  // The digitizer is Apple's as Virtualization's touch screen: AppleMultitouchDriver's "AppleMultitouchHIDService (0x0D,0x04)"
+  // personality takes an IOHIDInterface of that usage and manufacturer, and its own product ID keeps it from DroidVMHIDEventDriver's.
+  OSString *newManufacturerString() const override { return OSString::withCString(digitizer() ? "Apple" : "DroidVM"); }
   OSString *newProductString() const override;
   OSNumber *newVendorIDNumber() const override { return OSNumber::withNumber(virtio_pci::vendorId, 32); }
-  OSNumber *newProductIDNumber() const override { return OSNumber::withNumber(0x1052, 32); }
+  OSNumber *newProductIDNumber() const override { return OSNumber::withNumber(digitizer() ? 0x1053 : 0x1052, 32); }
   OSNumber *newLocationIDNumber() const override { return OSNumber::withNumber(0x44560000 | fIndex, 32); }
   OSNumber *newPrimaryUsagePageNumber() const override { return OSNumber::withNumber(digitizer() ? 0x0d : kHIDPage_GenericDesktop, 32); }
   OSNumber *newPrimaryUsageNumber() const override;
+  IOReturn getReport(IOMemoryDescriptor *report, IOHIDReportType reportType, IOOptionBits options) override;
+  IOReturn setReport(IOMemoryDescriptor *report, IOHIDReportType reportType, IOOptionBits options) override;
   bool digitizer() const { return fDevice->kind == Kind::touch && !gTouchTablet; }
 };
 
 OSDefineMetaClassAndStructors(DroidVMHIDDevice, IOHIDDevice)
+
+// AppleMultitouchHIDService's feature reports (the report ID in the options): the reply goes in front of the buffer it lends,
+// whose length then says how much there is.
+IOReturn DroidVMHIDDevice::getReport(IOMemoryDescriptor *report, IOHIDReportType reportType, IOOptionBits options)
+{
+  if (!digitizer() || !report)
+    return IOHIDDevice::getReport(report, reportType, options);
+  uint8_t bytes[128];
+  const uint8_t id = static_cast<uint8_t>(options);
+  unsigned length = mt::property(id, bytes + 1);
+  if (!length)
+    return kIOReturnUnsupported;
+  bytes[0] = id;
+  ++length;
+  if (length > report->getLength())
+    return kIOReturnNoSpace;
+  report->writeBytes(0, bytes, length);
+  if (IOBufferMemoryDescriptor *buffer = OSDynamicCast(IOBufferMemoryDescriptor, report))
+    buffer->setLength(length);
+  return kIOReturnSuccess;
+}
+
+IOReturn DroidVMHIDDevice::setReport(IOMemoryDescriptor *report, IOHIDReportType reportType, IOOptionBits options)
+{
+  if (!digitizer() || !report)
+    return IOHIDDevice::setReport(report, reportType, options);
+  return kIOReturnSuccess;   // nothing to set: the device has no modes
+}
 
 IOReturn DroidVMHIDDevice::newReportDescriptor(IOMemoryDescriptor **descriptor) const
 {
@@ -184,7 +285,10 @@ class DroidVMInput : public IOService {
   void poll(DroidVMInputDevice &d);
   void event(DroidVMInputDevice &d, const Event &e);
   void report(DroidVMInputDevice &d);
+  void multitouch(DroidVMInputDevice &d);
+  void pathFrame(DroidVMInputDevice &d, const uint8_t *stages);
   void describe();
+  static bool multitouchPublished(void *target, void *refCon, IOService *service, IONotifier *notifier);
 
 public:
   bool start(IOService *provider) override;
@@ -283,6 +387,36 @@ int32_t scale(int32_t value, int32_t minimum, int32_t span)
 
 int8_t clamp8(int32_t value) { return static_cast<int8_t>(value < -127 ? -127 : value > 127 ? 127 : value); }
 
+OSDictionary *multitouchProperties()
+{
+  OSDictionary *properties = OSDictionary::withCapacity(3), *plugins = OSDictionary::withCapacity(1);
+  OSDictionary *algs = OSDictionary::withCapacity(4);
+  OSArray *config = OSArray::withCapacity(1);
+  OSString *framework = OSString::withCString("SensingAlgsService.framework"), *interface = OSString::withCString("SASInterfaceTouch");
+  OSNumber *platform = OSNumber::withNumber(0xe0, 32), *packet = OSNumber::withNumber(0xff60, 32);
+  const bool made = properties && plugins && algs && config && framework && interface && platform && packet;
+  if (made) {
+    algs->setObject("SAFrameworkName", framework);
+    algs->setObject("SASInterfaceClassName", interface);
+    algs->setObject("PlatformID", platform);
+    algs->setObject("MaxPacketSize", packet);
+    config->setObject(algs);
+    properties->setObject("HSTouchHIDService", kOSBooleanTrue);
+    properties->setObject("IOCFPlugInTypes", plugins);
+    properties->setObject("SensingAlgsConfig", config);
+  }
+  OSSafeReleaseNULL(plugins);
+  OSSafeReleaseNULL(algs);
+  OSSafeReleaseNULL(config);
+  OSSafeReleaseNULL(framework);
+  OSSafeReleaseNULL(interface);
+  OSSafeReleaseNULL(platform);
+  OSSafeReleaseNULL(packet);
+  if (!made)
+    OSSafeReleaseNULL(properties);
+  return properties;
+}
+
 const char *kindName(Kind kind)
 {
   return kind == Kind::touch ? "touch screen" : kind == Kind::pointer ? "tablet" : kind == Kind::mouse ? "mouse" : "keyboard";
@@ -329,9 +463,17 @@ bool DroidVMInput::start(IOService *provider)
       hid->setProperty(kIOHIDBuiltInKey, true);   // the touch processor takes a display's touches from a built-in one only
       // SkyLight's handle_digitizer_added drops a digitizer whose displayUUID (a CFUUID string) names no display it knows:
       // DroidVMDisplay's IOMFBUUID unless droidvm-touch-display-uuid says otherwise.
-      char displayUUID[40] = "44726F69-6456-4D00-0000-000000000001";
-      PE_parse_boot_argn("droidvm-touch-display-uuid", displayUUID, sizeof(displayUUID) - 1);
-      hid->setProperty("displayUUID", displayUUID);
+      strlcpy(gDisplayUUID, "44726F69-6456-4D00-0000-000000000001", sizeof(gDisplayUUID));
+      PE_parse_boot_argn("droidvm-touch-display-uuid", gDisplayUUID, sizeof(gDisplayUUID) - 1);
+      hid->setProperty("displayUUID", gDisplayUUID);
+      // What the touch MacBook Pro's touch controller (its firmware's "kiwi" interface) has AppleMultitouchHIDService give its
+      // AppleMultitouchDevice, which looks for the property up its providers: HSTouchHIDService.plugin rather than the personality's
+      // MultitouchHID.plugin, whose sensing algorithms stage is the generic touch one (the second of the controller's; the first,
+      // SensingAlgsKiwi_AP, makes path frames of its images).
+      if (OSDictionary *properties = multitouchProperties()) {
+        hid->setProperty("DefaultMultitouchProperties", properties);
+        properties->release();
+      }
     }
     // droidvm-touch-sidecar=1: neither, as Sidecar's digitizer: WindowServer (WSSidecar2) then makes it a WSSidecar2HIDService on
     // the main display at its first event, whose touches its modern Sidecar processor delivers as direct touches.
@@ -347,6 +489,15 @@ bool DroidVMInput::start(IOService *provider)
     ++fCount;
   }
   IOLog("DroidVMInput: %u device(s) of %u virtio-input function(s)\n", fCount, functions);
+  // The event service WindowServer gets for the digitizer is AppleMultitouchDevice (under AppleMultitouchHIDService, on the device's
+  // IOHIDInterface): SkyLight's handle_digitizer_added takes a digitizer only with a displayUUID, which on a Mac with a touch screen
+  // its display has given it.
+  if (gDisplayUUID[0]) {
+    OSDictionary *matching = IOService::serviceMatching("AppleMultitouchDevice");
+    if (matching)
+      IOService::addMatchingNotification(gIOFirstPublishNotification, matching, multitouchPublished, this, nullptr);
+    OSSafeReleaseNULL(matching);
+  }
   if (!fCount)
     return false;
   uint32_t recordTimes = 0;
@@ -455,19 +606,8 @@ void DroidVMInput::report(DroidVMInputDevice &d)
   uint8_t bytes[sizeof(d.last)] = {};
   unsigned length;
   if (d.kind == Kind::touch && !gTouchTablet) {
-    // Finger i is slot i (the first four of the screen's): its contact identifier, in range and tip switch while its tracking
-    // identifier stands, and where it is (where it was once lifted).
-    for (unsigned i = 0; i < fingers; ++i) {
-      const auto &s = d.slots[i];
-      uint8_t *f = bytes + 5 * i;
-      int32_t sx = scale(s.x, d.minX, d.spanX), sy = scale(s.y, d.minY, d.spanY);
-      f[0] = static_cast<uint8_t>(i | (s.id >= 0 ? 0xc0 : 0));
-      f[1] = static_cast<uint8_t>(sx);
-      f[2] = static_cast<uint8_t>(sx >> 8);
-      f[3] = static_cast<uint8_t>(sy);
-      f[4] = static_cast<uint8_t>(sy >> 8);
-    }
-    length = sizeof(bytes);
+    multitouch(d);
+    return;
   } else if (d.kind == Kind::keyboard) {
     bytes[0] = d.modifiers;
     memcpy(bytes + 2, d.keys, sizeof(d.keys));
@@ -522,18 +662,6 @@ void DroidVMInput::report(DroidVMInputDevice &d)
   }
   if (!d.hid || !memcmp(bytes, d.last, length))
     return;
-  if (d.kind == Kind::touch && !gTouchTablet) {
-    // bring-up: each change of which fingers touch, with every finger's report
-    static unsigned edges;
-    unsigned tips = 0, before = 0;
-    for (unsigned i = 0; i < fingers; ++i) {
-      tips |= (bytes[5 * i] >> 7 & 1u) << i;
-      before |= (d.last[5 * i] >> 7 & 1u) << i;
-    }
-    if (tips != before && ++edges <= 300)
-      IOLog("DroidVMInput: touch %u: tips %x -> %x: %02x %02x%02x %02x%02x | %02x %02x%02x %02x%02x\n", edges, before, tips, bytes[0],
-            bytes[2], bytes[1], bytes[4], bytes[3], bytes[5], bytes[7], bytes[6], bytes[9], bytes[8]);
-  }
   memcpy(d.last, bytes, length);
   if (++d.reports <= 20 || d.reports % 500 == 0)   // bring-up: are the events getting through
     IOLog("DroidVMInput: %s report %u: %02x %02x %02x %02x %02x %02x %02x %02x\n", kindName(d.kind), d.reports, bytes[0], bytes[1],
@@ -544,6 +672,110 @@ void DroidVMInput::report(DroidVMInputDevice &d)
     d.hid->handleReport(report);
     report->release();
   }
+}
+
+// The digitizer's slots as multitouch paths (slot i is path i + 1), a frame when any finger lands, lifts or moves. A finger
+// that lands starts in range and makes touch, one that lifts breaks touch and goes out of range: two frames, a millisecond apart.
+void DroidVMInput::multitouch(DroidVMInputDevice &d)
+{
+  uint8_t first[maxSlots] = {}, second[maxSlots] = {};
+  bool changed = false, twice = false;
+  for (unsigned i = 0; i < maxSlots; ++i) {
+    const auto &s = d.slots[i];
+    auto &sent = d.sent[i];
+    const bool down = s.id >= 0;
+    if (down && !sent.down) {
+      first[i] = mt::startInRange;
+      second[i] = mt::makeTouch;
+      changed = twice = true;
+    } else if (!down && sent.down) {
+      first[i] = mt::breakTouch;
+      second[i] = mt::outOfRange;
+      changed = twice = true;
+    } else if (down) {
+      first[i] = second[i] = mt::touching;
+      changed |= s.x != sent.x || s.y != sent.y;
+    }
+    if (down) {
+      sent.x = s.x;
+      sent.y = s.y;
+    }
+    sent.down = down;
+  }
+  if (!changed || !d.hid)
+    return;
+  pathFrame(d, first);
+  if (twice)
+    pathFrame(d, second);
+}
+
+void DroidVMInput::pathFrame(DroidVMInputDevice &d, const uint8_t *stages)
+{
+  uint64_t nanoseconds;
+  absolutetime_to_nanoseconds(mach_absolute_time(), &nanoseconds);
+  const uint32_t now = static_cast<uint32_t>(nanoseconds / 1000000);
+  d.milliseconds = now > d.milliseconds ? now : d.milliseconds + 1;
+  uint8_t bytes[mt::headerSize + mt::pathSize * maxSlots] = {};
+  unsigned paths = 0;
+  for (unsigned i = 0; i < maxSlots; ++i) {
+    if (!stages[i])
+      continue;
+    auto &sent = d.sent[i];
+    uint8_t *p = bytes + mt::headerSize + mt::pathSize * paths++;
+    const int64_t sx = scale(sent.x, d.minX, d.spanX), sy = scale(sent.y, d.minY, d.spanY);
+    const int32_t x = static_cast<int32_t>(sx * mt::width / (tabletRange - 1));
+    const int32_t y = static_cast<int32_t>(mt::height - sy * mt::height / (tabletRange - 1));
+    // The velocity since the last frame a finger was touching in, eighths of a mm/s: 80 per hundredth of a mm a millisecond.
+    int32_t vx = 0, vy = 0;
+    if (stages[i] == mt::touching && d.milliseconds > sent.milliseconds) {
+      const int32_t dt = static_cast<int32_t>(d.milliseconds - sent.milliseconds);
+      vx = (x - sent.mmX) * 80 / dt;
+      vy = (y - sent.mmY) * 80 / dt;
+      vx = vx < -32767 ? -32767 : vx > 32767 ? 32767 : vx;
+      vy = vy < -32767 ? -32767 : vy > 32767 ? 32767 : vy;
+    }
+    sent.mmX = x;
+    sent.mmY = y;
+    sent.milliseconds = d.milliseconds;
+    p[0] = static_cast<uint8_t>(i + 1);
+    p[1] = stages[i];
+    p[2] = static_cast<uint8_t>(i < 4 ? i + 2 : 1);   // index, middle, ring, little finger, then thumbs
+    p[3] = 1;                                         // a hand
+    mt::put16(p + 4, static_cast<uint32_t>(x));
+    mt::put16(p + 6, static_cast<uint32_t>(y));
+    mt::put16(p + 8, static_cast<uint32_t>(vx));
+    mt::put16(p + 10, static_cast<uint32_t>(vy));
+    mt::put16(p + 12, 400);     // radii: 4 and 3.5 mm
+    mt::put16(p + 14, 350);
+    mt::put16(p + 16, 16384);   // upright
+    mt::put16(p + 18, 256);     // size 1
+    mt::put16(p + 20, 256);     // density 1
+  }
+  bytes[0] = mt::pathFrame;
+  bytes[1] = d.frame++;
+  bytes[2] = mt::headerSize;
+  bytes[3] = 2;
+  mt::put32(bytes + 4, d.milliseconds);
+  bytes[16] = static_cast<uint8_t>(paths);
+  bytes[17] = mt::pathSize;
+  const unsigned length = mt::headerSize + mt::pathSize * paths;
+  IOBufferMemoryDescriptor *report = IOBufferMemoryDescriptor::withBytes(bytes, length, kIODirectionNone);
+  if (report) {
+    recordTime(d);
+    d.hid->handleReport(report);
+    report->release();
+  }
+}
+
+bool DroidVMInput::multitouchPublished(void *, void *, IOService *service, IONotifier *)
+{
+  for (IOService *provider = service->getProvider(); provider; provider = provider->getProvider())
+    if (OSDynamicCast(DroidVMHIDDevice, provider)) {
+      service->setProperty("displayUUID", gDisplayUUID);
+      IOLog("DroidVMInput: %s gets displayUUID %s\n", service->getMetaClass()->getClassName(), gDisplayUUID);
+      break;
+    }
+  return true;
 }
 
 void DroidVMInput::describe()

@@ -71,10 +71,14 @@ DTB = FOLDER + '/generated.dtb'
 # MACOS_GPU=1: Metal (DroidVMGpu's NativeAdreno, Turnip) on the virtio GPU's 3D (vgpu-3d=1, drm2kgsl on the host): needs
 # MACOS_VIRTIO_GPU=1. crosvm's --droidvm-gpu (the host's KGSL, the old route) is gone from the VM.
 GPU = os.environ.get('MACOS_GPU') == '1'
-# WindowServer's frame pacing: CA triple buffering, the plugin's nextWakeupTime (updates a refresh apart, not on the VBL grid) and
-# magazine malloc without zeroing on free; a heavy window drag 60 to ~118 frames a second with them (kc283 to kc292)
+# WindowServer's frame pacing: CA triple buffering and the plugin's nextWakeupTime (updates a refresh apart, not on the VBL grid); a
+# heavy window drag 60 to ~118 frames a second with them (kc283 to kc292)
 GPU_ARGS = ['vgpu-3d=1', 'ca-triple-buffer=1', 'ca-free-wakeup=1']
-GPU_EXEC_ENV = ['WindowServer:MallocZeroOnFree=0']
+# Not WindowServer:MallocZeroOnFree=0 (magazine malloc, no zeroing on free; about 8% more drag frames): SkyLight relies on fresh
+# allocations being zero, as xzone's zero-on-free gives them, e.g. -[WSDisplayRenderSpace targetIDAtScreenLocation:...] mallocs an
+# event record, sets a few fields and has CGSEventReclaimObjects CFRelease the others: WindowServer crashed on every touch's hit test.
+# MACOS_EXEC_ENV can still add it.
+GPU_EXEC_ENV = []
 # MACOS_VIRTIO_GPU=1: the display is crosvm's virtio-gpu on virtio-mmio (--virtio-mmio-gpu, the last virtio-mmio window) instead of
 # simplefb. The daemon builds its --gpu (virglrenderer, context-types=drm, udmabuf) and the gpu-0 screen's display service from the
 # gpu_* fields and screens; the guest scans out IOSurface pages as guest-handle blobs, which the host blits (zero copy in the guest).
