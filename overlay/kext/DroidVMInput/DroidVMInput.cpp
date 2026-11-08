@@ -17,6 +17,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/hid/IOHIDDevice.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include "NativeVirtioPci.h"
@@ -277,6 +278,7 @@ class DroidVMInput : public IOService {
   // droidvm-input-times=1 (diagnostics, research/debug-2026-10-28): the times (mach_absolute_time) of the last 256 pointer and touch
   // reports, published as the ReportTimes property (the count, then the ring) for WindowServer's latency rows.
   bool fRecordTimes = false;
+  uint64_t fUserActiveAt = 0;   // mach_absolute_time of the last requestUserActive
   uint64_t fTimes[257] = {};
   unsigned fPublished = 0;
 
@@ -286,6 +288,7 @@ class DroidVMInput : public IOService {
   void event(DroidVMInputDevice &d, const Event &e);
   void report(DroidVMInputDevice &d);
   void multitouch(DroidVMInputDevice &d);
+  void userActive();
   void pathFrame(DroidVMInputDevice &d, const uint8_t *stages);
   void describe();
   static bool multitouchPublished(void *target, void *refCon, IOService *service, IONotifier *notifier);
@@ -679,7 +682,7 @@ void DroidVMInput::report(DroidVMInputDevice &d)
 void DroidVMInput::multitouch(DroidVMInputDevice &d)
 {
   uint8_t first[maxSlots] = {}, second[maxSlots] = {};
-  bool changed = false, twice = false;
+  bool changed = false, twice = false, landed = false;
   for (unsigned i = 0; i < maxSlots; ++i) {
     const auto &s = d.slots[i];
     auto &sent = d.sent[i];
@@ -687,7 +690,7 @@ void DroidVMInput::multitouch(DroidVMInputDevice &d)
     if (down && !sent.down) {
       first[i] = mt::startInRange;
       second[i] = mt::makeTouch;
-      changed = twice = true;
+      changed = twice = landed = true;
     } else if (!down && sent.down) {
       first[i] = mt::breakTouch;
       second[i] = mt::outOfRange;
@@ -704,9 +707,26 @@ void DroidVMInput::multitouch(DroidVMInputDevice &d)
   }
   if (!changed || !d.hid)
     return;
+  if (landed)
+    userActive();
   pathFrame(d, first);
   if (twice)
     pathFrame(d, second);
+}
+
+// A finger landing is user activity, as a key or a click is. The touch screen's events are not to the power manager: with the display
+// off after the idle time (DroidVMDisplay's "display off"), the screen stayed dark under the finger and the VM looked frozen. powerd
+// turns the display on for requestUserActive; at most once a second.
+void DroidVMInput::userActive()
+{
+  const uint64_t now = mach_absolute_time();
+  uint64_t since = 0;
+  absolutetime_to_nanoseconds(now - fUserActiveAt, &since);
+  if (fUserActiveAt && since < NSEC_PER_SEC)
+    return;
+  fUserActiveAt = now;
+  if (IOPMrootDomain *root = getPMRootDomain())
+    root->requestUserActive(this, "touch");
 }
 
 void DroidVMInput::pathFrame(DroidVMInputDevice &d, const uint8_t *stages)
