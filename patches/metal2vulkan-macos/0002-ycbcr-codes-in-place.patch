@@ -1,0 +1,154 @@
+RGB8_420_2P and RGB10_420_2P (540, 543) read as codes in place: the planes' texel buffer, the
+reconstructed codes red Cr, green Y, blue Cb, each code / (2^b - 1), flagged by bit 11 of the
+in-place conversion word (YCbCrInPlace::CODES); no planes image of the device's conversion.
+WallpaperAerialsExtension's 4480x3088 RGB10_420_2P aerial frames otherwise had no texture.
+
+--- a/crates/metal2vulkan/src/bind/ycbcr_in_place.rs
++++ b/crates/metal2vulkan/src/bind/ycbcr_in_place.rs
+@@ -79,18 +79,25 @@
+     pub const CHROMA_AT: usize = 4;
+     /// Word: the elements from one chroma row to the next.
+     pub const CHROMA_ROW: usize = 5;
+-    /// Word: the conversion: the codes' bits in bits 0 to 7, full range in bit 8, and the matrix
+-    /// in bits 9 and 10 (0 BT.601, 1 BT.709, 2 BT.2020).
++    /// Word: the conversion: the codes' bits in bits 0 to 7, full range in bit 8, the matrix
++    /// in bits 9 and 10 (0 BT.601, 1 BT.709, 2 BT.2020), and in bit 11 a texture read as codes
++    /// ([`CODES`](Self::CODES)).
+     pub const CONVERSION: usize = 6;
++    /// The conversion word's bit of a texture read as codes (`RGB8_420_2P`, `RGB10_420_2P`): the
++    /// reconstructed codes themselves, red Cr, green Y and blue Cb, each `code / (2^b - 1)`, alpha
++    /// 1, no range or matrix. A compositor that converts the video frame itself samples these (the
++    /// macOS lock screen's aerial wallpaper, 4480 x 3088 `RGB10_420_2P`), whose image of codes would
++    /// otherwise be converted from the planes for every frame.
++    pub const CODES: u32 = 1 << 11;
+ 
+     /// The in-place form of `planes`, where a function reads them so: a
+-    /// converted 4:2:0 layout of unpacked 8- or 10-bit codes, both planes in the bytes (a chroma
++    /// converted or code-reading 4:2:0 layout of unpacked 8- or 10-bit codes, both planes in the bytes (a chroma
+     /// plane of rows; not the conversion's row of zeros), each plane's first byte and rows a
+     /// multiple of an element. `None` for any other: such a texture keeps its image of converted
+     /// texels alone.
+     pub fn of(planes: &YCbCrPlanes) -> Option<YCbCrInPlace> {
+         let codes = planes.codes;
+-        if codes.output != YCbCrOutput::Converted
++        if !matches!(codes.output, YCbCrOutput::Converted | YCbCrOutput::Codes)
+             || codes.subsampling != ChromaSubsampling::Chroma420
+             || codes.packed
+             || !matches!((codes.bits, codes.bytes), (8, 1) | (10, 2))
+@@ -130,7 +137,8 @@
+         words[Self::LUMA_ROW] = luma_row / element;
+         words[Self::CHROMA_AT] = chroma_at / element;
+         words[Self::CHROMA_ROW] = chroma_row / element;
+-        words[Self::CONVERSION] = conversion_word(codes.bits, planes.range, planes.matrix);
++        words[Self::CONVERSION] = conversion_word(codes.bits, planes.range, planes.matrix)
++            | if codes.output == YCbCrOutput::Codes { Self::CODES } else { 0 };
+         Some(YCbCrInPlace {
+             words,
+             bytes,
+@@ -144,11 +152,17 @@
+     /// takes samples that image (`VariantKey::ycbcr_planes_sampled`).
+     pub fn with_planes_image(self) -> YCbCrInPlace {
+         YCbCrInPlace {
+-            planes_image: true,
++            planes_image: !self.codes(),
+             ..self
+         }
+     }
+ 
++    /// The texture reads the codes themselves ([`CODES`](Self::CODES)): no conversion of the
++    /// device's sampler stands for it, so it holds no planes image.
++    pub fn codes(&self) -> bool {
++        self.words[Self::CONVERSION] & Self::CODES != 0
++    }
++
+     /// The device's conversion of the planes as an image ([`YCbCrPlanesSampler`]): their codes'
+     /// bits, range and matrix.
+     pub fn sampler(&self) -> YCbCrPlanesSampler {
+@@ -316,11 +330,15 @@
+         let tail = YCbCrInPlace::of(&planes(PixelFormat::YCBCR84202P, [64, 16], [0, 16]))
+             .expect("chroma first");
+         assert_eq!(tail.view_bytes(), 64 + 4 * 16 + 8);
++        // A code-reading 4:2:0 texture reads in place too, its codes flagged and no planes image.
++        let codes = YCbCrInPlace::of(&planes(PixelFormat::RGB84202P, [0, 16], [96, 16]))
++            .expect("codes");
++        assert!(codes.codes() && !p8.codes());
++        assert_eq!(codes.with_planes_image().planes_sampler(), None);
+         for pf in [
+             PixelFormat::YCBCR84222P,
+             PixelFormat::YCBCR84442P,
+             PixelFormat::YCBCR84202PSRGB,
+-            PixelFormat::RGB84202P,
+             PixelFormat::YCBCR104202PPACKED,
+         ] {
+             assert_eq!(
+--- a/crates/metal2vulkan/src/lower/sampler/in_place.rs
++++ b/crates/metal2vulkan/src/lower/sampler/in_place.rs
+@@ -128,6 +128,9 @@
+     max: [SValue; 2],
+     /// Red's, green's and blue's `(kb, kr)` (`i32`s) of the surface's range and matrix.
+     k: [[SValue; 2]; 3],
++    /// The texture reads the codes themselves (a `bool`, `YCbCrInPlace::CODES`): red Cr, green Y
++    /// and blue Cb, each `code / m`, instead of the conversion.
++    codes: SValue,
+ }
+ 
+ /// The scalar and vector types a tap computes in.
+@@ -265,6 +268,8 @@
+     let max = [pick(fb, [1023, 255])?, pick(fb, [511, 127])?];
+     let full = field_at(fb, 8, 1)?;
+     let full = fb.binary(BinOp::IEqual, full, one)?;
++    let codes = field_at(fb, 11, 1)?;
++    let codes = fb.binary(BinOp::IEqual, codes, one)?;
+     let matrix = field_at(fb, 9, 3)?;
+     let bt709 = fb.binary(BinOp::IEqual, matrix, one)?;
+     let two = t.u(fb, 2)?;
+@@ -305,6 +310,7 @@
+         full,
+         max,
+         k,
++        codes,
+     };
+     Ok((planes, size))
+ }
+@@ -380,9 +386,11 @@
+     // Each chroma code `(S + 8) >> 4`, counted as a 10-bit code, less 512.
+     let (eight, four, mid) = (t.u(fb, 8)?, t.u(fb, 4)?, t.i(fb, 512)?);
+     let mut chroma = [mid; 2];
+-    for (c, sum) in chroma.iter_mut().zip(sums) {
++    let mut chroma_codes = [zero; 2];
++    for ((c, sum), raw) in chroma.iter_mut().zip(sums).zip(chroma_codes.iter_mut()) {
+         let s = fb.binary(BinOp::IAdd, sum, eight)?;
+         let code = fb.binary(BinOp::ShiftRightLogical, s, four)?;
++        *raw = code;
+         let code = fb.binary(BinOp::ShiftLeftLogical, code, p.up)?;
+         let code = fb.convert(ConvOp::Bitcast, code, t.i32_)?;
+         *c = fb.binary(BinOp::ISub, code, mid)?;
+@@ -417,6 +425,14 @@
+         let v = fb.convert(ConvOp::ConvertSToF, v, t.f32_)?;
+         lanes.push(fb.binary(BinOp::FMul, v, grid)?);
+     }
++    // A texture read as codes: red Cr, green Y and blue Cb, each `code / m`, in place of the
++    // conversion.
++    let m = fb.convert(ConvOp::ConvertUToF, p.max[0], t.f32_)?;
++    for (lane, code) in lanes.iter_mut().zip([chroma_codes[1], luma, chroma_codes[0]]) {
++        let v = fb.convert(ConvOp::ConvertUToF, code, t.f32_)?;
++        let v = fb.binary(BinOp::FDiv, v, m)?;
++        *lane = fb.select(p.codes, v, *lane)?;
++    }
+     lanes.push(t.f(fb, 1.0)?);
+     fb.composite_construct(t.vec4, &lanes)
+ }
+--- a/crates/metal2vulkan-runtime/src/texture/ycbcr_image.rs
++++ b/crates/metal2vulkan-runtime/src/texture/ycbcr_image.rs
+@@ -273,8 +273,9 @@
+                 Ok(_) => counts.ycbcr_texture_in_place(),
+                 Err(kept) => counts.ycbcr_image_kept(*kept),
+             }
+-            // Its planes as an image the device's conversion samples, where it has one.
+-            if let Ok(p) = &mut in_place {
++            // Its planes as an image the device's conversion samples, where it has one (none
++            // for a texture read as codes: no conversion of the device's stands for it).
++            if let Some(p) = in_place.as_mut().ok().filter(|p| !p.words.codes()) {
+                 match self.planes_image(&texels, (planes, &p.words), p.start)? {
+                     Ok(image) => p.image = Some(image),
+                     Err(kept) => counts.ycbcr_planes_image_kept(kept),

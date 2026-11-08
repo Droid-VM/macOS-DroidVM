@@ -336,7 +336,10 @@ static id deviceForPort(io_service_t port)
         // WindowServer's 4:2:0 YCbCr surface textures (video frames: the lock screen's wallpaper) over their planes alone, which its
         // shaders read in place (patches/metal2vulkan-macos/0001): no 100 MiB image and staging per 4K texture, and no CPU-converted
         // copy per pool surface (1.2 GB of the guest's memory at the lock screen, which then had none for the hardware decoder).
-        if (!strcmp(getprogname(), "WindowServer") && access("/private/var/ngpu/debug/no-ycbcr-planes", F_OK) != 0)
+        // WallpaperAerialsExtension draws the login and lock screen's aerial (4480x3088 RGB10_420_2P frames it converts itself),
+        // read as codes in place (patches/metal2vulkan-macos/0002); refused, those screens were a flat colour.
+        if ((!strcmp(getprogname(), "WindowServer") || !strcmp(getprogname(), "WallpaperAerialsExtension")) &&
+            access("/private/var/ngpu/debug/no-ycbcr-planes", F_OK) != 0)
             setenv("METAL2VULKAN_YCBCR_PLANES_ONLY", "1", 0);
         // The frontend's refusals (a texture it does not make, with the reason) on stderr too, where stderr-log=1 shows them.
         setenv("NMB_LOG_STDERR", "1", 1);

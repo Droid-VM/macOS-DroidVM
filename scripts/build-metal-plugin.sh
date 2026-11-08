@@ -40,11 +40,13 @@ for old, new in [
     # refused here; the server has no other way to draw the wallpaper (refused, the desktop is never repainted where windows moved
     # off it), so the 8-bit formats are converted once per surface contents before this (the frontend's convertedYCbCrTexture) and
     # only the others still reach this refusal; the small backdrop samples (512x512) are made.
-    # Where the runtime reads 4:2:0 planes in place (METAL2VULKAN_YCBCR_PLANES_ONLY, set for WindowServer by the plugin; patches/
-    # metal2vulkan-macos/0001), YCBCR8_420_2P and YCBCR10_420_2P (500, 505) over plane 0 go to it: neither converted on the CPU nor refused.
+    # Where the runtime reads 4:2:0 planes in place (METAL2VULKAN_YCBCR_PLANES_ONLY, set for WindowServer and WallpaperAerialsExtension by the plugin; patches/
+    # metal2vulkan-macos/0001), YCBCR8_420_2P and YCBCR10_420_2P (500, 505) over plane 0 go to it: neither converted on the CPU nor refused;
+    # so do RGB8_420_2P and RGB10_420_2P (540, 543), read as codes in place (patches/metal2vulkan-macos/0002): WallpaperAerialsExtension's
+    # 4480x3088 RGB10_420_2P frames, refused before, left the login and lock screen a flat colour.
     (' if(id<MTLTexture> converted=convertedYCbCrTexture(self,d,surface,plane))return converted;\n',
      ' static const bool planesInPlace=getenv("METAL2VULKAN_YCBCR_PLANES_ONLY")!=nullptr;\n'
-     ' const bool inPlace=planesInPlace && plane==0 && (d.pixelFormat==500 || d.pixelFormat==505);\n'
+     ' const bool inPlace=planesInPlace && plane==0 && (d.pixelFormat==500 || d.pixelFormat==505 || d.pixelFormat==540 || d.pixelFormat==543);\n'
      ' if(inPlace){static std::atomic<unsigned> made;if(made++<4)NBLOG(@"native-metal: surface texture %lux%lu YCbCr format %lu read in place",'
      '(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat);}\n'
      ' if(id<MTLTexture> converted=inPlace?nil:convertedYCbCrTexture(self,d,surface,plane))return converted;\n'),
@@ -58,7 +60,8 @@ for old, new in [
     ('  flushSurfaces(_surfaces);\n  if(gLogTextures)dumpSurfacesOnce(_surfaces,_resourceOwners);\n',
      '  flushSurfaces(_surfaces);\n'
      '  if(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY"))for(NBTexture *texture in _surfaces)\n'
-     '   if(texture.surface && (texture.descriptor.format==500 || texture.descriptor.format==505)) {\n'
+     '   if(texture.surface && (texture.descriptor.format==500 || texture.descriptor.format==505 ||\n'
+     '    texture.descriptor.format==540 || texture.descriptor.format==543)) {\n'
      '    if(!_surfacesInUse)_surfacesInUse=[NSMutableArray array];\n'
      '    IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
      '   }\n'
@@ -69,7 +72,8 @@ for old, new in [
     (' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),',
      ' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n'
      ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024 &&\n'
-     '    !(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY") && plane==0 && (d.pixelFormat==500 || d.pixelFormat==505))){\n'
+     '    !(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY") && plane==0 && (d.pixelFormat==500 || d.pixelFormat==505 ||\n'
+     '    d.pixelFormat==540 || d.pixelFormat==543))){\n'
      '  static std::atomic<unsigned> refusals;   // the server asks again at every frame\n'
      '  if(refusals++<4)NBLOG(@"native-metal: surface texture refused: %lux%lu YCbCr format %lu converts on the CPU",(unsigned long)d.width,'
      '(unsigned long)d.height,(unsigned long)d.pixelFormat);\n'

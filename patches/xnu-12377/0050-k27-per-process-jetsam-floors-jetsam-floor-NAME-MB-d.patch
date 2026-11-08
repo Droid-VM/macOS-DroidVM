@@ -1,0 +1,76 @@
+From 316570f060fea3740af55638e832d5770a8b90c1 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 7 Nov 2026 23:09:34 -0500
+Subject: [PATCH] k27: per-process jetsam floors (jetsam-floor=NAME:MB, default
+ WallpaperAerialsExtension:2048)
+
+The Mac's jetsamproperties table has no entry for the aerial wallpaper, so it runs at
+RunningBoard's default 1000 MB soft limit. Its frames here are plain 4:2:0 10-bit surfaces
+(24-42 MB each, ~26 in flight between its decoder and the render server's queue), not the
+Mac's compressed ones: a 4480x3088 clip took it past the limit, it was killed as a highwater
+process and the lock screen went grey. memstat_set_memlimits_locked raises the named
+processes' limits to the floor, as an Override entry in that table would; no limit (0) stays.
+---
+ bsd/kern/kern_memorystatus.c | 46 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 46 insertions(+)
+
+diff --git a/bsd/kern/kern_memorystatus.c b/bsd/kern/kern_memorystatus.c
+index 6f8a417..a80fcd7 100644
+--- a/bsd/kern/kern_memorystatus.c
++++ b/bsd/kern/kern_memorystatus.c
+@@ -3249,6 +3249,52 @@ memstat_set_memlimits_locked(proc_t p, int32_t active_limit,
+ 		inactive_limit = default_inactive_limit;
+ 	}
+ 
++#if defined(BCM2837)
++	/*
++	 * The board's per-process floors (boot-arg jetsam-floor=NAME:MB[,NAME:MB...], default WallpaperAerialsExtension:2048): what
++	 * a jetsamproperties Override entry would give a process the Mac's table leaves at RunningBoard's default. The aerial
++	 * wallpaper's frames are plain 4:2:0 10-bit surfaces here (24-42 MB each, ~26 in flight between its decoder and the render
++	 * server's queue), not the Mac's compressed ones: its 4480x3088 clips took it past the 1000 MB soft limit and the lock screen
++	 * went grey.
++	 */
++	{
++		static char floors[128];
++		static int floors_read;
++		if (!floors_read) {
++			if (!PE_parse_boot_argn("jetsam-floor", floors, sizeof(floors))) {
++				strlcpy(floors, "WallpaperAerialsExtension:2048", sizeof(floors));
++			}
++			floors_read = 1;
++		}
++		const char *name = proc_best_name(p);
++		size_t name_len = strlen(name);
++		for (const char *at = floors; *at;) {
++			const char *colon = strchr(at, ':');
++			if (!colon) {
++				break;
++			}
++			int32_t mb = 0;
++			const char *digit = colon + 1;
++			while (*digit >= '0' && *digit <= '9') {
++				mb = mb * 10 + (*digit++ - '0');
++			}
++			if ((size_t)(colon - at) == name_len && !strncmp(at, name, name_len) && mb > 0) {
++				/* 0 is no limit: left so */
++				if (active_limit > 0) {
++					active_limit = MAX(active_limit, mb);
++				}
++				if (inactive_limit > 0) {
++					inactive_limit = MAX(inactive_limit, mb);
++				}
++			}
++			at = *digit == ',' ? digit + 1 : digit;
++			if (*at && at == digit) {
++				break;
++			}
++		}
++	}
++#endif /* BCM2837 */
++
+ #if DEVELOPMENT || DEBUG
+ 	if (p->p_memlimit_increase) {
+ 		/* Apply memlimit increase (for testing with overlay roots) */
+-- 
+2.53.0
+
