@@ -4,6 +4,10 @@
 // have (ArmDTPlatform publishes the devices), and the source-built kernel's larger __TEXT covers AppleARMPlatform's in the
 // collection (AppleAudioClockLibs' too). The kept kexts only look up optional platform functions and type-check providers, so the stand-in gives them
 // what an absent function or a provider of another class gives: no function, and classes no object belongs to.
+// It stands in for IOUSBHostFamily too, which IOBluetoothFamily lists as a library (for its USB transport) without referring to any
+// of its symbols; kept, it would bring AppleSMC, RTBuddy, AppleA7IOP and IOAccessoryManager, which need AppleARMPlatform's
+// functions and 27's coprocessor logging. IOBluetoothFamily is kept for its IOBluetoothHCIController (on IOResources), which
+// bluetoothd's MacUserClient waits for before it serves CoreBluetooth.
 #include <IOKit/IOService.h>
 #include <libkern/c++/OSSymbol.h>
 

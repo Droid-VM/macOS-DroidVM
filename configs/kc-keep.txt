@@ -13,3 +13,5 @@ com.apple.plugin.IOgPTPPlugin
 com.apple.driver.AppleDiskImages2
 com.apple.filesystems.hfs.kext
 com.apple.driver.AppleMultitouchDriver
+com.apple.iokit.IOBluetoothFamily
+com.apple.driver.AppleVPCredentialManager

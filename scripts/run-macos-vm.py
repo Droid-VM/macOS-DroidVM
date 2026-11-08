@@ -137,6 +137,14 @@ def kernel_args(extra):
     if os.environ.get('MACOS_KERNEL'):
         # armcpu-diagnostics=1 panics when one interrupt drains more than 128 timer interrupts: a macOS boot under load reaches that
         dropped |= set(IOS_DISPLAY_PROBES) | {'armcpu-diagnostics'}
+    if os.environ.get('MACOS_KERNEL'):
+        # bluetoothd runs, on the ADT's virtual controller (/bluetooth, below): IOBluetoothHostController's first use
+        # (+defaultController) waits on CoreBluetooth's state with no timeout -- System Settings' Sharing pane and Language Chooser
+        # hung in -[IOBluetoothCoreBluetoothCoordinator init].
+        for i, a in enumerate(arguments):
+            if a.startswith('droidvm-disable-jobs='):
+                jobs = [j for j in a.split('=', 1)[1].split(',') if j != 'com.apple.bluetoothd']
+                arguments[i] = 'droidvm-disable-jobs=' + ','.join(jobs)
     extra = [a for a in extra if not a.startswith('drop:')]
     names = {a.split('=', 1)[0] for a in extra}
     arguments = [a for a in arguments if a.split('=', 1)[0] not in names | dropped] + extra
@@ -241,6 +249,18 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
             marker = "('vmm-present', struct.pack('<I', 1)),"
             assert text.count(marker) == 1
             text = text.replace(marker, '')
+        # /bluetooth, as upstream's iPadOS 27 board (UniXNU-droidvm make-droidvm-adt.py): bluetoothd finds its controller by name
+        # (IOServiceNameMatching "marconi-bt", then "bluetooth") and without one exits ("Unable to match bluetooth service in device
+        # tree"), and CoreBluetooth's clients never get a state: IOBluetoothCoreBluetoothCoordinator's init waits for its central
+        # manager's first state update with no timeout, and System Settings' Sharing pane hung there. transport-encoding 10 is the
+        # virtual transport of Apple's own VMs (bluetoothd's VirtualController); with kern.hv_vmm_present set ("Bluetooth is running
+        # inside a Virtual Machine, so skipping chip initialization") it needs no chip. local-mac-address: six bytes, not all zero,
+        # locally administered and stable for one unique chip ID.
+        marker = "        node('options', []),"
+        assert text.count(marker) == 1
+        text = text.replace(marker, marker + "\n        node('bluetooth', [('device_type', b'bluetooth\\0'), ('transport-encoding', struct.pack('<I', 10)),"
+                                    " ('local-mac-address', bytes([0x02, 0xd7]) + zlib.crc32(b'bluetooth' + (args.unique_chip_id or 0x4456)"
+                                    ".to_bytes(8, 'little')).to_bytes(4, 'big'))]),")
         # virtio_gpu (crosvm --virtio-mmio-gpu, the last virtio-mmio window): /arm-io/virtio-gpu, the display's scanout device
         # (DroidVMDisplay); like the upstream tool's --virtio-gpu-mmio, it is not one of the generic virtio-mmio nodes.
         marker = "    parser.add_argument('--display-gamut',"
