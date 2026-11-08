@@ -10,9 +10,8 @@ if [ "${1:-}" != --no-deps ]; then
   python3 scripts/build-turnip-macos.py
   python3 scripts/build-metal-bridge-macos.py
 fi
-# NativeMetal: local branch macos-hackintosh, Droid-VM/NativeMetal wip/hackintosh f4ce342 with a9531ab (two-plane YCbCr surface textures
-# converted once per contents) and its refresh by the surface's seed and luma sum, then wip/hackintosh's 3f8d44a..fb063de (the AdrenoMetal
-# Droid-VM/UniXNU wip/droidvm 527b8b7 pins, see build-turnip-macos.py) picked on top
+# NativeMetal: local branch macos-hackintosh, Droid-VM/NativeMetal wip/hackintosh 0e7550a (2026-11-08) with a9531ab (two-plane YCbCr
+# surface textures converted once per contents) and its refresh by the surface's seed and luma sum rebased on top
 U=sources/UniXNU/drivers/NativeMetal
 O=out/metal/plugin
 B=$O/NativeAdrenoMetal.bundle/Contents
@@ -32,9 +31,11 @@ for old, new in [
      'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
     # The encoding thread (NativeMetal fd9fbe1: the runtime's half of each encoder call on a thread of its own, fed in batches) in
     # WindowServer as in backboardd, the render server it was made for; /private/var/ngpu/debug/no-encode-thread turns it off.
-    ('                                (isRenderServer() || access("/private/var/ngpu/debug/encode-thread",F_OK)==0);',
-     '                                (isRenderServer() || !strcmp(getprogname(),"WindowServer") ||\n'
-     '                                 access("/private/var/ngpu/debug/encode-thread",F_OK)==0);'),
+    # (By name: NativeMetal b0d6a07 makes the render server a role the host states, native_bridge_metal_set_render_server, which
+    # would also give WindowServer the render server's other policies -- round-robin 54, display hold, ending after a GPU loss.)
+    ('                      (isRenderServer() || access("/private/var/ngpu/debug/encode-thread",F_OK)==0);',
+     '                      (isRenderServer() || !strcmp(getprogname(),"WindowServer") ||\n'
+     '                       access("/private/var/ngpu/debug/encode-thread",F_OK)==0);'),
     # The runtime converts a two-plane YCbCr texture on the CPU at every encoder that uses it (planes copied to staging, then a
     # dispatch): WindowServer's 4096x2160 wallpaper frames (YCBCR8_444_2P) took the 4 GiB guest into jetsam. Above 1 Mpx it is
     # refused here; the server has no other way to draw the wallpaper (refused, the desktop is never repainted where windows moved
