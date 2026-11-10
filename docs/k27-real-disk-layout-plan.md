@@ -303,3 +303,12 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 已改为默认 digitizer：无额外参数即发布内置触摸屏，经 AppleMultitouchDriver / HSTouchHIDService 处理。保留 `droidvm-touch-digitizer=0` 作为显式诊断回退，正常启动不需要设置。仅重编 DroidVMInput、重新链接 KC，主实例正常关机后替换启动盘中的 kernel.macho；启动配置、种子、ADT、trust cache 及 bootloader 的 SHA-256 均与替换前一致。旧启动盘在宿主采集目录和手机 `/data/local/tmp/macos-boot-before-touch.img` 留有备份。
 
 SSH 验证：bootargs 未增加触摸参数，DroidVM Touch Screen 的 PrimaryUsagePage 13 / PrimaryUsage 4、Built-In Yes；AppleMultitouchDevice 已注册并匹配，HSTouchHIDService Yes，displayUUID 对应主显示器，WindowServer 已打开 AppleMultitouchDeviceUserClient。此处确认驱动注册和用户态连接，未将其等同于手势交互实测；未截屏。编译、KC vtable 检查和原始记录见 `out/touch-default-2026-11-11/`。
+
+
+### 旧布局产物删除（11-11）
+
+用户授权后已删除开发机 27 组旧布局产物，按实际分配块计释放约 6.36 GiB：23G93/27.2 的旧 data-seed、旧救援 store/undo、扩容中间种子、插件 staging 的历史种子和 trustcache 备份、旧 store-patch、旧 OS/SystemOS owner 认证缓存与 pins、union-rename KC。owner 私钥、IPSW 原始输入、历史日志和归档源码分支保留。删除清单及依赖检查在 `out/legacy-artifact-cleanup-2026-11-11/`。
+
+手机删除 `/data/local/tmp/grow/` 中四个扩容种子和主实例目录中的旧 data-store.undo 两文件；已检查目录不再含独立 os.img/systemos.img 或这些旧种子/undo。当前两台 VM 的 boot/store/固件、原生触摸更新前的启动盘备份以及新布局 fsck 测试备份保留。
+
+重要依赖：主实例仍使用 `out/metal/stage/scratch-data.img`（48 GiB 逻辑、88624256 字节打包种子，identity `732e2a574c780b3668154d4a99e40fac84d50c2100954ec9b8d8e5352e829757`），已逐项匹配手机 store 页数和 seed digest，不能当旧垃圾删除。新实例使用 `artifacts/27.2/disk/scratch-data.img`（空种子，identity `eb2115d5055aa7a97a29af8ebbe5859b6fa4595faab30eacf5f2b69d037b92bf`）。后续改主实例 boot 必须继续指定这份主实例种子，不能直接使用新装盘的默认种子。清理后再次核对两份身份，主实例 RUNNING，SSH 七卷挂载正常；未重启或改写现用 store。
