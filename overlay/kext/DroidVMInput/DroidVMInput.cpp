@@ -5,8 +5,7 @@
 // becomes an IOHIDDevice with the report descriptor of QEMU's USB devices, which IOHIDFamily's event drivers turn into keyboard
 // and pointer events:
 //   - a keyboard: the boot keyboard report (modifiers and six keys), Linux key codes translated to HID usages;
-//   - a multi-touch screen: the tablet report, the first finger the pointer and any finger down the left button. Boot argument
-//     droidvm-touch-digitizer=1: a built-in touch screen instead, as a touch screen Mac's: the report descriptor of
+//   - a multi-touch screen: a built-in touch screen by default, as a touch screen Mac's: the report descriptor of
 //     Virtualization's "Virtual USB Touch Screen" (VzCore::Hardware::UsbTouchScreen, macOS 27) for AppleMultitouchDriver to take
 //     it, then Apple's multitouch protocol (feature reports and path frames, below) for HSTouchHIDService.plugin;
 //   - an absolute pointer: the tablet report (absolute X/Y 0..32767, three buttons, wheel);
@@ -35,7 +34,7 @@ enum class Kind : uint8_t { none, touch, pointer, mouse, keyboard };
 
 constexpr unsigned maxDevices = 8, maxSlots = 10, maxQueue = 64, pollMs = 4, fingers = 4;
 constexpr int32_t tabletRange = 0x8000;
-bool gTouchTablet = true;   // false with droidvm-touch-digitizer=1
+bool gTouchTablet = false;  // droidvm-touch-digitizer=0 explicitly selects legacy pointer emulation
 char gDisplayUUID[40];      // the built-in digitizer's displayUUID, empty for Sidecar's
 
 // usb_kbd_keycode of Linux (drivers/hid/usbhid/usbkbd.c): HID usage -> Linux key code; inverted at start.
@@ -434,8 +433,9 @@ bool DroidVMInput::start(IOService *provider)
   for (unsigned usage = 0; usage < 0xe8; ++usage)
     if (hidToLinux[usage] && !linuxToHid[hidToLinux[usage]] && (usage < 0x80 || usage >= 0xe0))
       linuxToHid[hidToLinux[usage]] = static_cast<uint8_t>(usage);
-  uint32_t touchDigitizer = 0;
-  gTouchTablet = !(PE_parse_boot_argn("droidvm-touch-digitizer", &touchDigitizer, sizeof(touchDigitizer)) && touchDigitizer);
+  uint32_t touchDigitizer = 1;
+  PE_parse_boot_argn("droidvm-touch-digitizer", &touchDigitizer, sizeof(touchDigitizer));
+  gTouchTablet = !touchDigitizer;
   fEcam = provider->mapDeviceMemoryWithIndex(0, kIOMapAnywhere | kIOMapInhibitCache);
   if (!fEcam) {
     IOLog("DroidVMInput: cannot map the ECAM window\n");

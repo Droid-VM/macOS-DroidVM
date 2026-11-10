@@ -294,3 +294,12 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 缺少 store 时启动工具直接提示先制盘并 install，不再创建只有旧布局才能使用的空 Data store。插件部署工具删除旧的单 Data 卷重建扩容选项 `--data-size-mib`，保留按角色挂载 Data 及 `--base/--store/--disk`；容量在制盘时用 `make-macos-disk.py --size-gib` 设置。参考内核构建工具也不再从已删除的 Data 制盘脚本读取 UUID。归档文档保留当时的命令作为历史记录；参考内核镜像认证工具仍用于复现归档参考构建，不作为当前 k27 制盘入口。
 
 验证：4 项启动配置定向测试及全量 17 项 unittest 通过；用现有 FDT、相同根 UUID 和固定随机输入生成的 ADT 在清理前后逐字节相同（SHA-256 `86cb056b509376e983d12ae05f1dc3ecd9b8abcf7a36bff372bad3d772aac29d`）。App 的磁盘参数、必需启动参数及内核命令行与清理前一致；三处脚本 CLI 帮助和 Python 编译检查通过。主实例仍为 RUNNING，本次未重新部署镜像或重启 guest。记录见 `out/layout-cleanup-2026-11-11/`。
+
+
+### 默认原生触摸（11-11）
+
+主实例的旧启动参数没有 `droidvm-touch-digitizer=1`，DroidVMInput 原先因此将触屏注册为鼠标（PrimaryUsagePage 1 / PrimaryUsage 2）。这不是分区清理删掉了参数，而是输入驱动本身默认使用 tablet 模拟。
+
+已改为默认 digitizer：无额外参数即发布内置触摸屏，经 AppleMultitouchDriver / HSTouchHIDService 处理。保留 `droidvm-touch-digitizer=0` 作为显式诊断回退，正常启动不需要设置。仅重编 DroidVMInput、重新链接 KC，主实例正常关机后替换启动盘中的 kernel.macho；启动配置、种子、ADT、trust cache 及 bootloader 的 SHA-256 均与替换前一致。旧启动盘在宿主采集目录和手机 `/data/local/tmp/macos-boot-before-touch.img` 留有备份。
+
+SSH 验证：bootargs 未增加触摸参数，DroidVM Touch Screen 的 PrimaryUsagePage 13 / PrimaryUsage 4、Built-In Yes；AppleMultitouchDevice 已注册并匹配，HSTouchHIDService Yes，displayUUID 对应主显示器，WindowServer 已打开 AppleMultitouchDeviceUserClient。此处确认驱动注册和用户态连接，未将其等同于手势交互实测；未截屏。编译、KC vtable 检查和原始记录见 `out/touch-default-2026-11-11/`。
