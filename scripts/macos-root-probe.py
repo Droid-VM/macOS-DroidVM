@@ -4,7 +4,7 @@
     macos-root-probe.py SOURCE DESTINATION
 
 The probe builder pins the 21H461 OS and SystemOS images that its policies must describe. For the macOS root (CI matrix
-root=macos) the policies describe the 23G93 OS disk and the SystemOS disk of make-macos-systemos.sh instead (the pins of
+root=macos) the policies describe the archived 23G93 OS and SystemOS reference images instead (the pins of
 out/owner/macos-root-pins.json, made by macos-root-pins.py from the locally built images), and its hash tables are placed after the kernel text. DESTINATION goes to the device repository's scripts/, which the unixnu tree copies over the
 UniXNU one; the upstream file is left as is.
 """

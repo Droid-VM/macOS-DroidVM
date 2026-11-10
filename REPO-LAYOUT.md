@@ -52,7 +52,7 @@
   - `data_store.py`、`fold-overlay.py`：手机 Data 存储格式（种子 + SHNGDATA 覆盖层）。
   - `droidvm-app.py`：写 App 的 VM 配置、重建启动盘（`boot`）、`start`/`stop`、`store-patch`（把补丁块写回手机，自动备份 undo）。
   - `run-macos-vm.py`：生成 ADT/启动盘。
-  - `make-*-seed.sh`、`make-macos-systemos.sh`、`make-trust-bundle.py`：生成种子、SystemOS 盘、信任缓存。
+  - `make-macos-disk.py`：生成单 APFS 容器新装盘与空种子；`make-trust-bundle.py`：生成信任缓存。
 - **guest 观察**：`rig-dmesg.py`（从宿主读 guest msgbuf，`--peek` 读内核变量）、`crash-symbolize.py`、`stackshot-*.py`、`xnu12377-smoke.sh`、`boot-cycle.sh`。
 - **IPSW / APFS**：`ipsw-member.py`、`macos-fetch-member.py`、`macos-inputs.py`、`apfs-*.py`、`udif-expand.py`、`dsc-disasm.py`、`dsc-xref.py`。
 - **构建环境**：`prepare-sources.py`、`import-linux-toolchain.py`、`start-linux-runtime.py`、`unixnu-linux.py`，以及 owner policy / 信任根相关的 `*-policy*.py`、`macos-root-*.py`。
@@ -75,7 +75,6 @@
 
 - `kext/`：板级 kext 源码与描述 JSON。DroidVMDisplay（IOMobileFramebuffer + virtio-gpu）、DroidVMVideo（VT 半虚拟化外壳）、DroidVMInput（触屏/键盘）、DroidVMEthernet（virtio-mmio 网卡）、DroidVMDataStore（Data 盘）、DroidVMGpuKext、NativeAES、ARMPlatformStandIn、NativeKextGlue、NativeUfsStoreStub 等。
 - `metal/`：`NativeAdrenoMetalPlugin.mm`（插件入口：WindowServer 设置队列优先级、原地读 YCbCr 开关等）、`MetalProbePlugin.mm`、`metal-probe.mm`、`gpu-bench.mm`、`frameworks/`。
-- `systemos-shims/`：SystemOS 盘里的替身程序。
 - `droidvm/`：早期 PCI virtio 驱动和板级树脚本（14.6.1 时期）。
 
 ## configs/

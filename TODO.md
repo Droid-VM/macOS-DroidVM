@@ -146,7 +146,7 @@
 ## 常用命令（`/home/qiuqiu/crosvm/macos`）
 - 在线路线上机：`MACOS_TAG=27.0.1 python3 scripts/droidvm-app.py boot --kernel-arg exec-log=1 ...`，再 `start`；串口日志 `/data/data/cn.classfun.droidvm/cache/console_<id>_serial1.log`，`scripts/rig-dmesg.py` 读 guest dmesg。
 - 12377 内核：`out/x12377/build-all.sh`（arm64e，默认）/ `XNU_ARCH=arm64`，上机冒烟 `MACOS_KERNEL=out/x12377/kernel12377e-osx.macho` `scripts/xnu12377-smoke.sh 30 vm_compression_limit=1572864`；虚表对比 `scripts/vtable-abi-diff.py KERNEL KC`。
-- 改根盘：`MACOS_TAG=27.0.1 scripts/rebuild-root.sh 16`。
+- 新装盘：`MACOS_TAG=27.2 python3 scripts/make-macos-disk.py OUTPUT_DIR`；部署使用 `scripts/droidvm-app.py install OUTPUT_DIR`，并设置输出 disk.json 的 System UUID。
 
 ## 坑
 - 多文件补丁改动后要把它碰的所有文件一起还原再重打；改补丁别插在别的补丁 hunk 紧邻处。

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Stage Metal plugin bundles for a boot: a copy of the Data seed with the bundles in /Library/GPUBundles (the first directory IOGPU
-searches for <MetalPluginName>.bundle; /Library is a firmlink into the Data volume, make-macos-data-seed.sh), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
+searches for <MetalPluginName>.bundle; /Library is a firmlink into the Data volume), and a trust cache bundle with one owner module of their Mach-O CDHashes before the original modules (as UniXNU's
 make-owner-trust-bundle.py).
 
     stage-gpu-plugin.py [--probe EXECUTABLE] [--setup-done] [--log-stream PREDICATE [--log-debug SUBSYSTEM]...] [--top SECONDS]
@@ -34,7 +34,6 @@ seed format (256 MiB). Output: STORE changed in place and out/metal/stage/store-
 Data volume is mounted through a loop device at the window and every page holding data is marked present afterwards; no patch (the
 whole store goes to the phone). The Data volume is found by its role in the container in every mode (vol= of the Linux driver: in the
 single-volume layout the System volume comes first).
---data-size-mib makes the Data volume's container that large (the seed's is 1 GiB, which the first login's caches fill to 91%).
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
 throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit).
@@ -96,7 +95,7 @@ MANAGED_PREFS = 'Library/Managed Preferences'
 USER_HOME_JOB = 'Library/LaunchDaemons/org.droidvm.user-home.plist'
 # The Data template's relative links climb out of the firmlinked directories to the volume's root:
 # Applications/Safari.app -> ../System/Cryptexes/App/System/Applications/Safari.app. This takes them to the cryptexes (as
-# make-macos-data-seed.sh does for a new seed; an older seed lacks it).
+# required by the Data template's relative links).
 CRYPTEXES_LINK = 'System/Cryptexes'
 SETUP_SKIP_ITEMS = ['Accessibility', 'AdditionalPrivacySettings', 'Appearance', 'AppleID', 'AppStore', 'Biometric', 'Diagnostics',
                     'DisplayTone', 'EnableLockdownMode', 'FileVault', 'iCloudDiagnostics', 'iCloudStorage', 'Intelligence', 'Location',
@@ -131,35 +130,6 @@ def add_user(dslocal, name, password, uid=501):
         record['users'] = [u for u in record.get('users', []) if u != name] + [name]
         record['groupmembers'] = [g for g in record.get('groupmembers', []) if g != guid] + [guid]
         write(path, record)
-
-
-def grow_volume(raw, size, scratch):
-    """The seed's Data volume in a new container of SIZE bytes (Linux cannot resize APFS): mkapfs as make-macos-data-seed.sh makes it,
-    the same label and UUID, then the old volume's tree copied over as that script fills it (rsync -aH)."""
-    uuid_line = next(line for line in (ROOT / 'scripts/make-macos-data-seed.sh').read_text().splitlines() if line.startswith('VOLUME_UUID='))
-    volume_uuid = uuid_line.split(':-', 1)[1].split('}', 1)[0]
-    grown = scratch / 'seed-grown.raw'
-    with grown.open('wb') as handle:
-        handle.truncate(size)
-    subprocess.run([str(ROOT / 'sources/apfsprogs/mkapfs/mkapfs'), '-L', 'Data', '-u', volume_uuid, str(grown)], check=True,
-                   stdout=subprocess.DEVNULL)
-    mounts = {}
-    try:
-        for name, image, mode in (('old', raw, 'ro'), ('new', grown, 'readwrite')):
-            point = scratch / f'mount-{name}'
-            point.mkdir()
-            loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', str(image)], text=True).strip()
-            mounts[name] = (point, loop)
-            subprocess.run(['sudo', 'mount', '-t', 'apfs', '-o', mode, loop, str(point)], check=True)
-        subprocess.run(['sudo', 'rsync', '-aH', '--numeric-ids', f'{mounts["old"][0]}/', f'{mounts["new"][0]}/'], check=True)
-        subprocess.run(['sync'], check=True)
-    finally:
-        for point, loop in mounts.values():
-            subprocess.run(['sudo', 'umount', str(point)])
-            subprocess.run(['sudo', 'losetup', '-d', loop])
-    raw.unlink()
-    print(f'Data volume grown to {size >> 20} MiB')
-    return grown
 
 
 def cdhash(path):
@@ -215,16 +185,13 @@ def main():
     parser.add_argument('--enable-job', metavar='LABEL', action='append', default=[])
     parser.add_argument('--disable-agent', metavar='LABEL', action='append', default=[])
     parser.add_argument('--user', metavar='NAME:PASSWORD')
-    parser.add_argument('--data-size-mib', type=int)
     parser.add_argument('--reduce-transparency', action='store_true')
     parser.add_argument('--file', metavar='SOURCE:DEST', action='append', default=[])
-    parser.add_argument('--base', type=Path, default=ARTIFACTS / 'data-seed/scratch-data.img')
+    parser.add_argument('--base', type=Path, default=ARTIFACTS / 'disk/scratch-data.img')
     parser.add_argument('--store', type=Path)
     parser.add_argument('--disk', type=Path)
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
-    if (args.store or args.disk) and args.data_size_mib:
-        raise SystemExit('--data-size-mib makes a new seed: not with --store or --disk')
     if args.store and args.disk:
         raise SystemExit('--store or --disk')
     bundles = [b.resolve() for b in args.bundles]
@@ -263,8 +230,6 @@ def main():
         mount.mkdir()
         if subprocess.run(['grep', '-q', '^apfs ', '/proc/modules']).returncode:
             subprocess.run(['sudo', 'insmod', str(ROOT / 'sources/linux-apfs-rw/apfs.ko')], check=True)
-        if args.data_size_mib and args.data_size_mib << 20 > logical:
-            raw = grow_volume(raw, args.data_size_mib << 20, Path(scratch))
         if args.disk:
             image = apfs_volumes.grow.Image(args.disk, window, logical)
             loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', '--offset', str(window), '--sizelimit', str(logical),

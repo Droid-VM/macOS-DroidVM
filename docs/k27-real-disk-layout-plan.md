@@ -285,3 +285,12 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 此前 49 个补丁的最终源码虽已无旧布局，0002 仍加入 SystemOS 挂载及双卷 manifest，再由 0049 删除；0042 也只服务这条过渡路径。本次重建每个提交的源码树：0002 直接引入当前根卷校验、从根读取 UUID 及仅含根卷的 manifest；后续提交不再出现旧 SystemOS 挂载。0042、0049 变为空提交并删除，补丁重新编号为 47 个。上文 11-10 的编号和数量是当时记录。
 
 47 个补丁从 `ac9718f` 全部 `git am` 重放通过，最终 tree 为 `c97cc109b2b49890091f3fb035777204c2fd1e4b`，与清理前已验证内核完全相同，不需要重新部署内核。记录见 `out/layout-cleanup-2026-11-11/{history.json,replay.txt}`。旧实验分支属于归档，不在当前 k27 补丁序列中。
+
+
+### 旧制盘和启动路径清理（11-11）
+
+已删除 `make-macos-systemos.sh`、`make-macos-data-seed.sh`、`rebuild-root.sh` 和 `overlay/systemos-shims/sbin/{mount,fsck}`。`run-macos-vm.py`、`droidvm-app.py` 不再配置或推送 os.img/systemos.img、不再写 owner-systemos-uuid 或传 union-hide-lower；唯一 mmio 块设备是完整新装盘 store，根 UUID 指向其中 System 卷。空 MACOS_ROOT_UUID 直接报错，不再选择旧布局。默认版本为 27.2，默认种子为 `artifacts/TAG/disk/scratch-data.img`，仍可用 MACOS_DATA_SEED 指定已部署盘的种子。
+
+缺少 store 时启动工具直接提示先制盘并 install，不再创建只有旧布局才能使用的空 Data store。插件部署工具删除旧的单 Data 卷重建扩容选项 `--data-size-mib`，保留按角色挂载 Data 及 `--base/--store/--disk`；容量在制盘时用 `make-macos-disk.py --size-gib` 设置。参考内核构建工具也不再从已删除的 Data 制盘脚本读取 UUID。归档文档保留当时的命令作为历史记录；参考内核镜像认证工具仍用于复现归档参考构建，不作为当前 k27 制盘入口。
+
+验证：4 项启动配置定向测试及全量 17 项 unittest 通过；用现有 FDT、相同根 UUID 和固定随机输入生成的 ADT 在清理前后逐字节相同（SHA-256 `86cb056b509376e983d12ae05f1dc3ecd9b8abcf7a36bff372bad3d772aac29d`）。App 的磁盘参数、必需启动参数及内核命令行与清理前一致；三处脚本 CLI 帮助和 Python 编译检查通过。主实例仍为 RUNNING，本次未重新部署镜像或重启 guest。记录见 `out/layout-cleanup-2026-11-11/`。

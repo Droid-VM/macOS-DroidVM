@@ -46,7 +46,7 @@ grow = volumes.grow
 TAG = os.environ.get('MACOS_TAG', '27.2')
 ARTIFACTS = ROOT / f'artifacts/{TAG}'
 APFS_KO = ROOT / 'sources/linux-apfs-rw/apfs.ko'
-LABEL = b'DroidVMDataStore\x01\x00\x00\x00'   # run-macos-vm.py ensure_store
+LABEL = b'DroidVMDataStore\x01\x00\x00\x00'
 # as on the live disk (docs/k27-real-disk-layout-plan.md P5): Data in the System volume's group; Update, VM, Hardware, xART beside
 OTHER_VOLUMES = [('Preboot', 'B'), ('VM', 'V'), ('Update', 'E'), ('Hardware', 'H'), ('xART', 'X')]
 # the x86_64 and Rosetta caches are of no use on this board (their files land uncompressed: Linux writes no APFS compression)
@@ -120,7 +120,7 @@ def fill(loop, roles, scratch):
 
     def data(target, os_volume):
         sudo('rsync', '-aH', '--numeric-ids', f'{os_volume}/System/Library/Templates/Data/', f'{target}/')
-        # what make-macos-data-seed.sh made of the template (directories the first boot would otherwise make itself)
+        # Directories that the first boot would otherwise create.
         for directory in ('tmp', 'log', 'run', 'vm', 'folders', 'db/dslocal/nodes/Default'):
             sudo('mkdir', '-p', target / 'private/var' / directory)
         sudo('mkdir', '-p', target / 'private/tmp')

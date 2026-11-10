@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Boot the locally built macOS 23G93 root once on the phone (crosvm-mmio on Gunyah) and keep the evidence.
+"""Boot the locally built macOS root once on the phone (crosvm-mmio on Gunyah) and keep the evidence.
 
-Adapted from ios tools/run-droidvm.py (ios commit 9a1e72d). Disks, virtio-mmio in this order: OS (ro), SystemOS (ro), Data store (rw,
-sparse). The boot disk is assembled here from the kernel, trust cache bundle, Data seed, UniXNU.efi and DarwinBoot.efi; its ADT is
-generated from the FDT this exact VM configuration produces (crosvm --dump-device-tree-blob).
+Adapted from ios tools/run-droidvm.py (ios commit 9a1e72d). The single virtio-mmio disk is the Data store (rw, sparse), containing
+the System/Data volume group. The boot disk is assembled here from the kernel, trust cache bundle, Data seed, UniXNU.efi and
+DarwinBoot.efi; its ADT is generated from the FDT this exact VM configuration produces (crosvm --dump-device-tree-blob).
 """
 import argparse
 import hashlib
@@ -20,7 +20,7 @@ import tomllib
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
-TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.2: MACOS_TAG=27.2)
+TAG = os.environ.get('MACOS_TAG', '27.2')   # artifacts/TAG
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.dont_write_bytecode = True
 import phone_pool  # noqa: E402
@@ -35,50 +35,12 @@ if INSTANCE:
     FOLDER += '-' + INSTANCE
 OWNER = 'u0_a258:media_rw'                          # the owner of the DroidVM folder; the daemon opens leased disks as the app
 STORE = FOLDER + '/data-store.img'
-STORE_GIB = 16
-PINS = ROOT / 'out/owner/macos-root-pins.json'
-
-
-def image_volumes(image):
-    """The volumes of IMAGE when it is a bare APFS container (macOS 27's os.raw, every systemos.img), else None."""
-    if not image.is_file():
-        return None
-    with image.open('rb') as handle:
-        handle.seek(32)
-        if handle.read(4) != b'NXSB':
-            return None
-        spec = importlib.util.spec_from_file_location('apfs_container', ROOT / 'scripts/apfs-container.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        class Disk:
-            def read(self, offset, length):
-                handle.seek(offset)
-                return handle.read(length)
-        return module.Container(Disk(), 0, image.stat().st_size).volumes()['volumes']
-
-
-def image_volume_uuid(name, role=None):
-    """The UUID of the one volume (of ROLE) in artifacts/TAG/NAME, or None when that is no bare APFS container."""
-    image = ROOT / f'artifacts/{TAG}/{name}'
-    volumes = image_volumes(image)
-    if volumes is None:
-        return None
-    found = [v['uuid'] for v in volumes if role is None or v['role'] == role]
-    if len(found) != 1:
-        raise SystemExit(f'{image}: expected one {role or ""} volume, found {len(found)}')
-    return found[0]
-
-
-# the OS volume the kernel mounts as root: from the image itself, else the one the legacy kernel's policy pins.
-# MACOS_ROOT_UUID (k27 single-volume layout, docs/k27-real-disk-layout-plan.md): the System volume in the Data container instead,
-# and no SystemOS volume is unioned over it.
-ROOT_UUID = os.environ.get('MACOS_ROOT_UUID', '').upper()
-# the virtio-mmio window of the Data store disk: after os.img and systemos.img, or the first one when the single-volume layout has
-# dropped those two disks (droidvm-app.py disks)
-DATA_STORE_MMIO = 0x0a000000 if ROOT_UUID else 0x0a002000
-OS_UUID = ROOT_UUID or (image_volume_uuid('os.raw', 'System') or (json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists()
-                               else '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'))
+# The System volume of the Data store's APFS volume group; empty no longer selects a legacy layout.
+ROOT_UUID = os.environ.get('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF7FB').upper()
+if not ROOT_UUID:
+    raise SystemExit('MACOS_ROOT_UUID must name the System volume (disk.json); the legacy union layout was removed')
+DATA_STORE_MMIO = 0x0a000000
+OS_UUID = ROOT_UUID
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
 KERNEL = Path(os.environ.get('MACOS_KERNEL', ROOT / 'out/linux/reference/droidvm/kernel/kernel.macho'))
@@ -99,28 +61,13 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def push_cached(adb, source, name):
-    """Push a large read-only image once; FOLDER/NAME.sha carries the first 16 hex digits of the pushed sha256."""
-    size = source.stat().st_size
-    remote, digest = f'{FOLDER}/{name}', sha256(source)[:16]
-    if (sh(adb, f'stat -c %s {remote} 2>/dev/null', check=False).strip() != str(size)
-            or sh(adb, f'cat {remote}.sha 2>/dev/null', check=False).strip() != digest):
-        sh(adb, f'mkdir -p {FOLDER}')
-        print(f'pushing {source} -> {remote}', flush=True)
-        subprocess.run(adb + ['push', str(source), remote + '.part'], check=True, timeout=14400)
-        sh(adb, f'mv {remote}.part {remote} && echo {digest} > {remote}.sha && chown {OWNER} {remote} {remote}.sha && chmod 660 {remote} {remote}.sha')
-    return remote
+def require_store(adb):
+    """A new install must be deployed with droidvm-app.py install before it can boot."""
+    if sh(adb, f'test -f {STORE} && echo yes', check=False).strip() != 'yes':
+        raise SystemExit(f'{STORE} is missing: create a disk with make-macos-disk.py and deploy it with droidvm-app.py install')
 
 
-def ensure_store(adb):
-    if sh(adb, f'test -e {STORE} && echo yes', check=False).strip() == 'yes':
-        return
-    label = 'DroidVMDataStore\\001\\000\\000\\000'
-    sh(adb, f'mkdir -p {Path(STORE).parent} && truncate -s {STORE_GIB}G {STORE} && '
-            f'printf "{label}" | dd of={STORE} bs=4096 conv=notrunc,sync count=1 2>/dev/null; chown {OWNER} {STORE}; chmod 660 {STORE}')
-
-
-def vm_command(os_img, systemos_img, mem_mb):
+def vm_command(mem_mb):
     return [CROSVM, 'run', '--hypervisor', 'gunyah', '--mem', str(mem_mb), '--cpus', '1',
             '--protected-vm-pseudo-unprotected', '--no-balloon', '--disable-sandbox',
             '--hugepages', '--prepare-lend-mthp-mode', 'single',
@@ -128,8 +75,6 @@ def vm_command(os_img, systemos_img, mem_mb):
             '--serial', 'type=file,hardware=serial,num=1,path=serial.log',
             '--dump-device-tree-blob', 'generated.dtb',
             '--block', 'boot.img,lock=false',
-            '--virtio-mmio-block', f'{os_img},ro=true,lock=false',
-            '--virtio-mmio-block', f'{systemos_img},ro=true,lock=false',
             '--virtio-mmio-block', f'{STORE},lock=false',
             APP + '/share/droidvm/edk2-gunyah.fd']
 
@@ -247,10 +192,6 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         # there is no manifest, so it is zeros.
         if os.environ.get('MACOS_BOOT_MANIFEST_HASH') == '1':
             text = text.replace(marker, "('boot-manifest-hash', bytes(48)), " + marker)
-        # /chosen/owner-systemos-uuid: the SystemOS volume the k27 kernel mounts as the shared-cache carrier, read from the image
-        systemos_uuid = None if ROOT_UUID else image_volume_uuid('systemos.img')
-        if systemos_uuid:
-            text = text.replace(marker, f"('owner-systemos-uuid', {systemos_uuid.encode() + bytes(1)!r}), " + marker)
         text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
                                     " and args.data_store_mmio is None else []),")
         # MACOS_VMM_PRESENT=0: /defaults without vmm-present, so kern.hv_vmm_present is 0. MobileGestalt answers IsVirtualDevice from it,
@@ -394,14 +335,12 @@ def main():
     remote = f'/data/local/tmp/macos-{stamp}-{args.label}'
     artifacts = ROOT / f'artifacts/{TAG}'
     trust = artifacts / 'boot/kernel.macho.trustcache'
-    data = artifacts / 'data-seed/scratch-data.img'
+    data = Path(os.environ.get('MACOS_DATA_SEED') or artifacts / 'disk/scratch-data.img')
     for path in (KERNEL, trust, data, INPUTS / 'UniXNU.efi', INPUTS / 'DarwinBoot.efi'):
         if not path.is_file():
             raise SystemExit(f'missing {path}')
     phone_pool.prepare_host_pool(adb, mem_mb, mem_mb + 128, local / 'host-pool-before.json')
-    os_img = push_cached(adb, artifacts / 'os.raw', 'os.img')
-    sys_img = push_cached(adb, artifacts / 'systemos.img', 'systemos.img')
-    ensure_store(adb)
+    require_store(adb)
     sh(adb, f'mkdir -p {remote}')
     run_env = f'LD_LIBRARY_PATH={APP}/lib'
     line = kernel_args(args.kernel_arg)
@@ -409,7 +348,7 @@ def main():
     placeholder = local / 'placeholder.img'
     subprocess.run(['truncate', '-s', '64M', str(placeholder)], check=True)
     subprocess.run(adb + ['push', str(placeholder), remote + '/boot.img'], check=True, timeout=300)
-    vm = vm_command(os_img, sys_img, mem_mb)
+    vm = vm_command(mem_mb)
     sh(adb, f'cd {remote} && (env {run_env} {shlex.join(vm)} < /dev/null > crosvm-pass1.log 2>&1 &) ; sleep 12; pkill -x crosvm-mmio ; sleep 2; ls -la generated.dtb')
     subprocess.run(adb + ['pull', remote + '/generated.dtb', str(local / 'generated.dtb')], check=True, timeout=30)
     sh(adb, 'sleep 5')
@@ -421,7 +360,6 @@ def main():
     (local / 'command.txt').write_text(shlex.join(vm) + '\n')
     (local / 'inputs.json').write_text(json.dumps({
         'kernel_sha256': sha256(KERNEL), 'trust_sha256': sha256(trust), 'data_seed_sha256': sha256(data),
-        'os_sha256': sha256(artifacts / 'os.raw'), 'systemos_sha256': sha256(artifacts / 'systemos.img'),
         'boot_disk_sha256': sha256(disk), 'kernel_args': line, 'os_volume_uuid': OS_UUID,
         'unixnu_efi_sha256': sha256(INPUTS / 'UniXNU.efi'), 'darwinboot_efi_sha256': sha256(INPUTS / 'DarwinBoot.efi')}, indent=2) + '\n')
     sh(adb, f'cd {remote} && rm -f serial.log && (nohup env {run_env} {shlex.join(vm)} < /dev/null > crosvm.log 2>&1 &)')

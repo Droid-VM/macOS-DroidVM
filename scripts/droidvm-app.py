@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the macOS 14.6.1 (23G93) VM from the DroidVM app: a persistent vms.json entry whose disks live in
+"""Run the macOS VM from the DroidVM app: a persistent vms.json entry whose disks live in
 /storage/emulated/0/DroidVM/MacOS.
 
   droidvm-app.py prepare [--kernel-arg NAME=VALUE ...]   push the images, register the VM, let the app's daemon boot it once
@@ -15,9 +15,8 @@
                                                          new FDT, keeping every other setting made in the app; then boot
   droidvm-app.py media                                   only switch the registered VM's virtio-media codecs (MACOS_MEDIA) and dump
                                                          its new FDT, keeping every other setting made in the app; then boot
-  droidvm-app.py disks                                   only switch the registered VM's disks to the layout of MACOS_ROOT_UUID
-                                                         (default: the Data store alone, the root is its System volume; empty: os.img and
-                                                         systemos.img ahead of it) and dump its new FDT, keeping every other setting
+  droidvm-app.py disks                                   use the Data store as the registered VM's single disk
+                                                         and dump its new FDT, keeping every other setting
                                                          made in the app; then boot
   droidvm-app.py store-patch                             write out/metal/stage/store-patch.{bin,txt} (stage-gpu-plugin.py --store) into
                                                          the stopped VM's Data store, the blocks it replaces saved beside it first
@@ -31,8 +30,8 @@
   droidvm-app.py start|stop|status
 
 The daemon plumbing (IPC, configuration transaction, VM template) is the iOS tool's (ios/tools/droidvm-app.py, imported and
-parameterised, never written to). The boot disk rides in "extra_options" as --block so no disk registry entry is needed; the OS,
-SystemOS and Data disks are --virtio-mmio-block like in run-macos-vm.py.
+parameterised, never written to). The boot disk rides in "extra_options" as --block so no disk registry entry is needed.
+The Data store is the single --virtio-mmio-block disk, as in run-macos-vm.py.
 """
 import argparse
 import hashlib
@@ -47,7 +46,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-TAG = os.environ.get('MACOS_TAG', '23G93')   # artifacts/TAG and out/owner/{os,systemos}-TAG (macOS 27.2: MACOS_TAG=27.2)
+TAG = os.environ.get('MACOS_TAG', '27.2')   # artifacts/TAG
 # CSR_ALLOW_UNRESTRICTED_FS (as k27/try.sh): the dyld cache has no SF_RESTRICTED, and without it launchd cannot map the cache
 os.environ.setdefault('MACOS_LP_SIP0', '0x2')
 sys.dont_write_bytecode = True
@@ -64,7 +63,7 @@ def load(path, name):
 
 ios = load(ROOT.parent / 'ios/tools/droidvm-app.py', 'ios_droidvm_app')
 # The k27 kernel boots the single-volume layout only (docs/k27-real-disk-layout-plan.md P5): the root is the System volume DroidVMSystem
-# of the Data store's container. MACOS_ROOT_UUID= (empty) selects the old union layout of os.img and systemos.img, for older kernels.
+# of the Data store's container. Set MACOS_ROOT_UUID to disk.json's System UUID for a new install.
 os.environ.setdefault('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF7FB')
 run = load(ROOT / 'scripts/run-macos-vm.py', 'run_macos_vm')
 
@@ -124,7 +123,7 @@ MEDIA_VIDC = os.environ.get('MACOS_MEDIA_VIDC') == '1'
 # The guest's display size is the boot console's (simplefb, the GOP DroidVMDisplay reads), so both screens carry it.
 WIDTH, HEIGHT = 1920, 1080
 FIRMWARE = FOLDER + '/edk2-macos.fd'   # ~/edk2-gunyah-topo built with -D VIRTIO_GPU_ENABLE=FALSE (edk2-gunyah-macos-novgpu.fd)
-REQUIRED_ARGS = ['mac-amfi-launch-permissive=1', 'union-hide-lower=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000']   # see TODO.md: without them launchd cannot get far
+REQUIRED_ARGS = ['mac-amfi-launch-permissive=1', 'malloc-ranges-off=1', 'arm64_maxoffset=0x7FFE000000']   # see TODO.md: without them launchd cannot get far
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
 # vCPU the busy host did not run for that long while holding one panicked the guest at launchd's spawn storms; 40 times is 10 s
 REQUIRED_ARGS.append('ml-timeout-lock-scale=40')
@@ -134,8 +133,6 @@ REQUIRED_ARGS.append('droidvm-timebase-hz=24000000')
 # MACOS_DROP_ARGS=NAME[,NAME]: leave those of the arguments above (and of GPU_ARGS) out
 # MACOS_ROOT_UUID (docs/k27-real-disk-layout-plan.md P5): launchd's mount phases mount Preboot, VM, Update, xART and Data and APFS
 # stitches the firmlinks stored on the System volume; Preboot is its own volume, so it needs no hiding from statfs.
-if os.environ.get('MACOS_ROOT_UUID'):
-    REQUIRED_ARGS.remove('union-hide-lower=1')
 REQUIRED_ARGS = [a for a in REQUIRED_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')]
 # exec-env (one boot argument, groups split by ';'): WebKit's WebContent reserves a 64 GiB Gigacage aligned to 64 GiB, which the 39-bit
 # user space (the GPU carveout at 64-448 GiB) cannot hold; without the cage Safari's pages load instead of WebContent crashing at launch
@@ -177,10 +174,8 @@ def template(persistent):
 
 
 def disk_options():
-    """The virtio-mmio disks: os.img and systemos.img (read-only) and the Data store, or the store alone in the single-volume layout
-    (MACOS_ROOT_UUID: the root is the System volume of the Data container, docs/k27-real-disk-layout-plan.md)."""
-    images = [] if run.ROOT_UUID else [FOLDER + '/os.img,ro=true,lock=false', FOLDER + '/systemos.img,ro=true,lock=false']
-    return [o for image in images + [run.STORE + ',lock=false'] for o in ('--virtio-mmio-block', image)]
+    """The single APFS container: System/Data volume group and auxiliary volumes."""
+    return ['--virtio-mmio-block', run.STORE + ',lock=false']
 
 
 def media_options():
@@ -238,11 +233,7 @@ ios.vm_config = template
 
 
 def push_images(args):
-    artifacts = ROOT / f'artifacts/{TAG}'
-    if not run.ROOT_UUID:
-        run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'os.raw', 'os.img')
-        run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'systemos.img', 'systemos.img')
-    run.ensure_store(['adb', '-s', ios.SERIAL])
+    run.require_store(['adb', '-s', ios.SERIAL])
     if sh(f'test -e {BOOT} && echo yes', check=False).strip() != 'yes':
         placeholder = OUT / 'placeholder.img'
         OUT.mkdir(parents=True, exist_ok=True)
@@ -278,7 +269,7 @@ def boot_disk(args):
     local.mkdir()
     # MACOS_TRUSTCACHE / MACOS_DATA_SEED: replacements staged by scripts/stage-gpu-plugin.py (the Metal plugin and its CDHashes)
     trust = Path(os.environ.get('MACOS_TRUSTCACHE') or artifacts / 'boot/kernel.macho.trustcache')
-    seed = Path(os.environ.get('MACOS_DATA_SEED') or artifacts / 'data-seed/scratch-data.img')
+    seed = Path(os.environ.get('MACOS_DATA_SEED') or artifacts / 'disk/scratch-data.img')
     disk = run.build_boot_disk(local, trust, seed, adt, line)
     adb('push', str(disk), BOOT, timeout=900)
     fix_owner(BOOT)
