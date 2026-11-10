@@ -255,4 +255,13 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 
 收尾：工具仓库 `python3 -m unittest discover -s tests -v` 的 13 项测试通过（[输出](../out/p6-validation-2026-11-10/tests.txt)）。测试 guest 执行 shutdown，日志确认七卷均卸载、`CPU halted`；crosvm 仍驻留，由 daemon stop 后退出码 0。主 VM 首次启动遇到大页控制忙，重试后已恢复 RUNNING。
 
-待核实：[关机日志](../out/p6-validation-2026-11-10/shutdown.txt) 的 System 卷卸载出现 `fs_alloc_count 5015528 != count 5021011`，随后删除只读卷 shadow_fs_root；目前未确认是只读 shadow 统计还是镜像元数据问题，不能视为完整文件系统验证已结束。fsck shim 去除测试也仍待做。
+### 关机块计数提示（11-10，已定位并修复生成端）
+
+[关机日志](../out/p6-validation-2026-11-10/shutdown.txt) 的 System/Preboot 都有 `fs_alloc_count mismatch`。停机测试盘经主 VM 的原版 `fsck_apfs -n` 只读检查，七卷和容器均通过，退出码 0（[完整输出](../out/p6-fsck-2026-11-10/fsck-phone.txt)）。不是只读 shadow 导致，也未发现文件系统结构损坏。
+
+根因：APFS kext 的 `sanity_check_alloced_blocks` 把 `apfs_total_blocks_alloced - apfs_total_blocks_freed` 当作用户数据块数，再加各元数据树及 omap 对象。Linux APFS 驱动却在创建、删除或保留元数据节点时也增减这两个累计字段，导致卸载重复计数。`fs_alloc_count` 本身仍要计入元数据，不应修改它或屏蔽日志。[反编译记录](../out/p6-fsck-2026-11-10/sanity-pseudocode.txt)。
+
+修复：`patches/linux-apfs-rw/0001-user-data-block-counters.patch`，元数据路径只更新 `fs_alloc_count`，累计计数留给数据 extent 路径。宿主模块已用 `make LLVM=-21` 重编并加载。
+- 同一 1 GiB 空卷上创建 1400 文件、删半数、再写 700 文件：旧驱动累计净分配 3719，实际用户数据 3500，差 219；新驱动净分配 3500，差 0，元数据均为 224 块，总分配均为 3724 块。
+- 新镜像通过 Linux apfsck 和 Apple fsck_apfs；Apple 只读挂载、读取 1400 文件、卸载后不再报 mismatch；旧镜像同样操作复现 `3724 != 3943`。
+- [旧计数](../out/p6-fsck-2026-11-10/counts-before.json)、[新计数](../out/p6-fsck-2026-11-10/counts-after.json)、[Apple 旧镜像日志](../out/p6-fsck-2026-11-10/apple-fixtures.txt)、[Apple 新镜像日志](../out/p6-fsck-2026-11-10/apple-after.txt)、[复现脚本](../out/p6-fsck-2026-11-10/write-fixture.py)。旧产物的累计字段不会因重编模块自动恢复，应重新生成或单独校正。fsck shim 去除测试仍待做。

@@ -1,0 +1,83 @@
+From 131f6b30b5e7af212f9b749e1bf3029981f0f53e Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Tue, 10 Nov 2026 20:18:52 +0800
+Subject: [PATCH] fix: keep APFS cumulative block counters exclusive to user
+ data
+
+---
+ apfs_raw.h | 1 +
+ node.c     | 5 -----
+ object.c   | 1 -
+ 3 files changed, 1 insertion(+), 6 deletions(-)
+
+diff --git a/apfs_raw.h b/apfs_raw.h
+index 415e6b7..4dd6fde 100644
+--- a/apfs_raw.h
++++ b/apfs_raw.h
+@@ -1242,6 +1242,7 @@ struct apfs_superblock {
+ 	__le64 apfs_num_other_fsobjects;
+ 	__le64 apfs_num_snapshots;
+ 
++/* Cumulative user-data blocks only; metadata is accounted in apfs_fs_alloc_count. */
+ /*E0*/	__le64 apfs_total_blocks_alloced;
+ 	__le64 apfs_total_blocks_freed;
+ 
+diff --git a/node.c b/node.c
+index cc332da..886af36 100644
+--- a/node.c
++++ b/node.c
+@@ -279,7 +279,6 @@ int apfs_make_empty_btree_root(struct super_block *sb, u32 subtype, u64 *oid)
+ 	}
+ 	apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+ 	le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+-	le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
+ 
+ 	bh = apfs_getblk(sb, bno);
+ 	if (!bh)
+@@ -362,7 +361,6 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
+ 		}
+ 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+ 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+-		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
+ 
+ 		oid = le64_to_cpu(msb_raw->nx_next_oid);
+ 		le64_add_cpu(&msb_raw->nx_next_oid, 1);
+@@ -381,7 +379,6 @@ static struct apfs_node *apfs_create_node(struct super_block *sb, u32 storage)
+ 		/* We don't write to the container's omap */
+ 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+ 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+-		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
+ 		oid = bno;
+ 		break;
+ 	case APFS_OBJ_EPHEMERAL:
+@@ -494,7 +491,6 @@ int apfs_delete_node(struct apfs_node *node, int type)
+ 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
+ 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+ 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
+-		le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, 1);
+ 		return 0;
+ 	case APFS_QUERY_OMAP:
+ 	case APFS_QUERY_EXTENTREF:
+@@ -508,7 +504,6 @@ int apfs_delete_node(struct apfs_node *node, int type)
+ 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
+ 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+ 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, -1);
+-		le64_add_cpu(&vsb_raw->apfs_total_blocks_freed, 1);
+ 		return 0;
+ 	case APFS_QUERY_FREE_QUEUE:
+ 		eph_info_end = &nxi->nx_eph_list[nxi->nx_eph_count];
+diff --git a/object.c b/object.c
+index 9636a9a..bc44248 100644
+--- a/object.c
++++ b/object.c
+@@ -289,7 +289,6 @@ struct buffer_head *apfs_read_object_block(struct super_block *sb, u64 bno, bool
+ 		vsb_raw = APFS_SB(sb)->s_vsb_raw;
+ 		apfs_assert_in_transaction(sb, &vsb_raw->apfs_o);
+ 		le64_add_cpu(&vsb_raw->apfs_fs_alloc_count, 1);
+-		le64_add_cpu(&vsb_raw->apfs_total_blocks_alloced, 1);
+ 	}
+ 
+ 	brelse(bh);
+-- 
+2.53.0
+
