@@ -252,3 +252,7 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 - 旧 SystemOS/Data 种子生成脚本已标为旧布局专用。`/sbin/fsck` shim 仍保留，尚未验证去掉它的启动路径。
 
 本轮原始记录：[SSH 系统和挂载](../out/p6-validation-2026-11-10/guest.txt)、[firmlink](../out/p6-validation-2026-11-10/firmlinks.txt)、[root 检查](../out/p6-validation-2026-11-10/root.txt)、[桌面截图](../out/p6-validation-2026-11-10/desktop.png)。生成和宿主校验记录仍在 `out/a0test/`。
+
+收尾：工具仓库 `python3 -m unittest discover -s tests -v` 的 13 项测试通过（[输出](../out/p6-validation-2026-11-10/tests.txt)）。测试 guest 执行 shutdown，日志确认七卷均卸载、`CPU halted`；crosvm 仍驻留，由 daemon stop 后退出码 0。主 VM 首次启动遇到大页控制忙，重试后已恢复 RUNNING。
+
+待核实：[关机日志](../out/p6-validation-2026-11-10/shutdown.txt) 的 System 卷卸载出现 `fs_alloc_count 5015528 != count 5021011`，随后删除只读卷 shadow_fs_root；目前未确认是只读 shadow 统计还是镜像元数据问题，不能视为完整文件系统验证已结束。fsck shim 去除测试也仍待做。
