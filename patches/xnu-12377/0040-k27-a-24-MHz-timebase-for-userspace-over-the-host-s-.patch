@@ -1,7 +1,7 @@
-From 7264fed254dee06bb1a90701d1c57ab461fb7b31 Mon Sep 17 00:00:00 2001
+From e8fe86875dc07ec6cfa17e74d89d7d15c9480e77 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <rcastillo@oxyqube.com>
 Date: Thu, 5 Nov 2026 14:52:45 -0500
-Subject: [PATCH 40/49] k27: a 24 MHz timebase for userspace over the host's
+Subject: [PATCH 40/47] k27: a 24 MHz timebase for userspace over the host's
  19.2 MHz counter (droidvm-timebase-hz)
 
 From Droid-VM/UniXNU-droidvm 5edbbfc (ipados27/patches/xnu-12377/droidvm-timebase-24mhz.patch), unchanged: every kernel read of

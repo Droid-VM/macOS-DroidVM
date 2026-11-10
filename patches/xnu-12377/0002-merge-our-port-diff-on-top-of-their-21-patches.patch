@@ -1,7 +1,7 @@
-From e83d9fafd90f4fbd6a676b90bc718f830dd63a1f Mon Sep 17 00:00:00 2001
+From cb3bc1390a787c9e0ffd661864b9da4628888e7a Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 07:58:07 -0400
-Subject: [PATCH 02/49] merge: our port diff on top of their 21 patches
+Subject: [PATCH 02/47] merge: our port diff on top of their 21 patches
 
 (cherry picked from commit ad4b23eda10a734db9796d31943954488be749fb)
 ---
@@ -26,7 +26,7 @@ Subject: [PATCH 02/49] merge: our port diff on top of their 21 patches
  bsd/dev/arm/systemcalls.c                     |  23 ++
  bsd/kern/bsd_init.c                           | 203 ++++++++-
  bsd/kern/kern_core.c                          |   7 +
- bsd/kern/kern_exec.c                          | 232 ++++++++++-
+ bsd/kern/kern_exec.c                          | 159 ++++++-
  bsd/kern/kern_exit.c                          |  24 ++
  bsd/kern/kern_priv.c                          |  10 +
  bsd/kern/lockdown_mode.c                      |   2 +
@@ -54,7 +54,7 @@ Subject: [PATCH 02/49] merge: our port diff on top of their 21 patches
  iokit/Kernel/IOUserClient.cpp                 |  87 +++-
  iokit/KernelConfigTables.cpp                  |  61 +++
  iokit/Makefile                                |   6 +
- iokit/bsddev/IOKitBSDInit.cpp                 |  63 +++
+ iokit/bsddev/IOKitBSDInit.cpp                 |  59 +++
  iokit/conf/Makefile.template                  |   2 +-
  libkern/conf/Makefile.template                |   2 +-
  libkern/libkern/Makefile                      |   2 +-
@@ -103,7 +103,7 @@ Subject: [PATCH 02/49] merge: our port diff on top of their 21 patches
  security/mac_internal.h                       |  22 +-
  security/mac_process.c                        |  18 +-
  security/mac_vfs.c                            |  20 +-
- 98 files changed, 3300 insertions(+), 105 deletions(-)
+ 98 files changed, 3223 insertions(+), 105 deletions(-)
  create mode 100644 EXTERNAL_HEADERS/CoreEntitlements/V2/API.h
  create mode 100644 EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h
  create mode 100644 EXTERNAL_HEADERS/TrustCache/API.h
@@ -1954,7 +1954,7 @@ index b422eaa..a70cc74 100644
  	size_t          command_size, header_size, tstate_size;
  	size_t          hoffset;
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 2467b24..0ec83d5 100644
+index 2467b24..992b9b1 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -1,3 +1,4 @@
@@ -2001,7 +2001,7 @@ index 2467b24..0ec83d5 100644
  #if CONFIG_DTRACE
  	dtrace_proc_exec(p);
  #endif
-@@ -7940,8 +7956,169 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
+@@ -7940,8 +7956,96 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
   *		word width of the kernel. Once the self-exec completes, the
   *		initproc might be different.
   */
@@ -2009,9 +2009,8 @@ index 2467b24..0ec83d5 100644
 +#if !DEVELOPMENT && !DEBUG
 +#error The offline owner cache mount is a development instrument
 +#endif
-+extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
 +#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
-+extern int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);
++extern int native_owner_publish_boot_manifest(dev_t, const char *);
 +#endif
 +#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
 +extern void commpage_update_dyld_flags(uint64_t);
@@ -2020,17 +2019,9 @@ index 2467b24..0ec83d5 100644
 +extern int native_verified_block_root_authorized(dev_t);
 +volatile int native_owner_cache_stage = 0;
 +volatile int native_owner_cache_status = -1;
-+volatile int native_owner_cache_mount_status = -1;
-+volatile int native_owner_cache_readonly = 0;
 +volatile int native_owner_cache_authorized = 0;
 +volatile int native_owner_cache_root_recheck = 0;
-+volatile uint64_t native_owner_cache_actual_mount_flags = 0;
 +volatile uintptr_t native_owner_cache_original_root = 0;
-+volatile uintptr_t native_owner_cache_current_root = 0;
-+volatile int native_owner_cache_native_union = 0;
-+volatile dev_t native_owner_cache_selected_device = NODEV;
-+volatile dev_t native_owner_cache_mounted_device = NODEV;
-+char native_owner_cache_device_path[64];
 +void native_owner_cache_checkpoint(int, int);
 +__attribute__((noinline)) void
 +native_owner_cache_checkpoint(int status, int authorized)
@@ -2038,116 +2029,53 @@ index 2467b24..0ec83d5 100644
 +	__asm__ volatile("" : : "r"(status), "r"(authorized) : "memory");
 +}
 +
++/* The volume UUID of the mounted OS root, as text: the kernel follows whichever OS image it was booted from. */
++int native_owner_root_volume_uuid(mount_t, uuid_string_t);
++int
++native_owner_root_volume_uuid(mount_t mp, uuid_string_t text)
++{
++	struct vfs_attr va;
++	VFSATTR_INIT(&va);
++	VFSATTR_WANTED(&va, f_uuid);
++	if (!mp || vfs_getattr(mp, &va, vfs_context_current()) || !VFSATTR_IS_SUPPORTED(&va, f_uuid)) {
++		return 0;
++	}
++	uuid_unparse_upper(va.f_uuid, text);
++	return 1;
++}
++
++/* The root is the System volume of the Data container's volume group and holds the shared cache itself (docs/k27-real-disk-layout-plan.md):
++ * nothing is mounted over it, launchd's mount phases mount the other volumes. Checks the read-only, verified APFS root and publishes the
++ * boot manifest for it. */
 +static int
 +native_owner_cache_prepare(proc_t p, user_addr_t scratch, user_addr_t *envp)
 +{
-+	const char *volume = "8846FE78-2910-4297-AF97-D59BB6F8FC16";
-+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
-+#if !CONFIG_UNION_MOUNTS
-+#error The owner composition requires the original native union-mount implementation
-+#endif
-+	const char *mountpoint = "/";
-+#else
-+	const char *mountpoint = "/private/preboot";
-+#endif
-+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
-+	const char *environment = "DYLD_SHARED_CACHE_DIR=/private/preboot/System/Library/Caches/com.apple.dyld";
-+#endif
++	(void)p;
++	(void)scratch;
 +	vnode_t original_os_root = rootvnode;
 +	native_owner_cache_original_root = (uintptr_t)original_os_root;
 +	mount_t root_mount = vnode_mount(original_os_root);
 +	vnode_t device_vnode = vfs_devvp(root_mount);
 +	dev_t root_device = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
-+	dev_t selected = NODEV;
-+	vnode_t mounted_root = NULLVP;
 +	int error = EAUTH, root_authorized = 0, cache_authorized = 0;
-+	int32_t result = 0;
-+	user64_addr_t spec = scratch + 0x160;
-+	char device_path[64] = {0};
-+	uint8_t mount_data[0x150] = {0};
-+	uint64_t mount_flags = MNT_RDONLY;
-+	uint16_t mount_mode = 1;
-+	uint32_t anonymous_owner = 99;
-+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
-+#if defined(XNU_OWNER_CRYPTEX_FILES) && XNU_OWNER_CRYPTEX_FILES
-+	const char *fallback = "DYLD_FALLBACK_LIBRARY_PATH=/private/preboot/usr/lib";
-+	user64_addr_t environment_vector[3] = {scratch + 0x400, scratch + 0x600, USER_ADDR_NULL};
-+#else
-+	user64_addr_t environment_vector[2] = {scratch + 0x400, USER_ADDR_NULL};
-+#endif
-+#endif
-+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
-+	    .flags = MNT_RDONLY, .data = scratch + 0x200};
-+	request.flags = (int)mount_flags;
-+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
-+	request.flags |= MNT_UNION;
-+#endif
 +	if (device_vnode) vnode_put(device_vnode);
++	*envp = USER_ADDR_NULL;
 +	root_authorized = (vfs_flags(root_mount) & MNT_RDONLY) && root_device != NODEV &&
 +	    native_verified_block_root_authorized(root_device);
 +	if (!root_authorized) goto done;
 +	native_owner_cache_stage = 1;
-+	if (!native_verified_block_volume_device(volume, &selected, device_path,
-+	    sizeof(device_path))) goto done;
-+	strlcpy(native_owner_cache_device_path, device_path, sizeof(native_owner_cache_device_path));
-+	native_owner_cache_selected_device = selected;
-+	native_owner_cache_stage = 2;
-+	/* Exact user-mount payload already qualified against this original APFS. */
-+	memcpy(mount_data, &spec, sizeof(spec));
-+	memcpy(mount_data + 8, &mount_flags, sizeof(mount_flags));
-+	memcpy(mount_data + 16, &mount_mode, sizeof(mount_mode));
-+	memcpy(mount_data + 0x144, &anonymous_owner, sizeof(anonymous_owner));
-+	memcpy(mount_data + 0x148, &anonymous_owner, sizeof(anonymous_owner));
-+	if ((error = copyout("apfs", request.type, 5)) != 0 ||
-+	    (error = copyout(mountpoint, request.path, strlen(mountpoint) + 1)) != 0 ||
-+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) != 0 ||
-+	    (error = copyout(mount_data, request.data, sizeof(mount_data))) != 0) goto done;
-+	native_owner_cache_stage = 3;
-+	error = mount(p, &request, &result);
-+	native_owner_cache_mount_status = error;
-+	if (error) goto done;
-+	native_owner_cache_stage = 4;
-+	error = vnode_lookup(mountpoint, 0, &mounted_root, vfs_context_current());
-+	if (error) goto done;
-+	mount_t cache_mount = vnode_mount(mounted_root);
-+	device_vnode = vfs_devvp(cache_mount);
-+	dev_t actual = device_vnode ? vnode_specrdev(device_vnode) : NODEV;
-+	if (device_vnode) vnode_put(device_vnode);
-+	native_owner_cache_mounted_device = actual;
-+	int readonly = (vfs_flags(cache_mount) & MNT_RDONLY) != 0;
-+	native_owner_cache_readonly = readonly;
-+	native_owner_cache_actual_mount_flags = vfs_flags(cache_mount);
-+	native_owner_cache_current_root = (uintptr_t)rootvnode;
-+	int native_union = (vfs_flags(cache_mount) & MNT_UNION) &&
-+	    vnode_mountedhere(original_os_root) == cache_mount && rootvnode == mounted_root;
-+	native_owner_cache_native_union = native_union;
-+	cache_authorized = readonly && actual == selected &&
-+	    !strcmp(vfs_statfs(cache_mount)->f_fstypename, "apfs") && native_verified_block_root_authorized(actual);
-+#if defined(XNU_OWNER_UNION_SYSTEMOS) && XNU_OWNER_UNION_SYSTEMOS
-+	cache_authorized = cache_authorized && native_union;
-+#endif
-+	if (!cache_authorized) { error = EAUTH; goto done; }
-+	native_owner_cache_stage = 5;
-+#if !defined(XNU_OWNER_UNION_SYSTEMOS) || !XNU_OWNER_UNION_SYSTEMOS
-+	if ((error = copyout(environment, environment_vector[0], strlen(environment) + 1)) != 0 ||
-+	    (error = copyout(environment_vector, scratch + 0x500, sizeof(environment_vector))) != 0) goto done;
-+#if defined(XNU_OWNER_CRYPTEX_FILES) && XNU_OWNER_CRYPTEX_FILES
-+	if ((error = copyout(fallback, scratch + 0x600, strlen(fallback) + 1)) != 0) goto done;
-+#endif
-+	*envp = scratch + 0x500;
-+#else
-+	*envp = USER_ADDR_NULL;
-+#endif
++	cache_authorized = !strcmp(vfs_statfs(root_mount)->f_fstypename, "apfs");
++	error = cache_authorized ? 0 : EAUTH;
 +	native_owner_cache_stage = 6;
-+done:
-+	if (mounted_root) vnode_put(mounted_root);
++done:;
 +	int root_recheck = root_authorized && native_verified_block_root_authorized(root_device);
 +	native_owner_cache_root_recheck = root_recheck;
 +	if (!root_recheck) error = EAUTH;
 +#if defined(XNU_OWNER_BOOT_MANIFEST) && XNU_OWNER_BOOT_MANIFEST
++	uuid_string_t root_uuid;
 +	if (!error && cache_authorized && root_recheck &&
-+	    !native_owner_publish_boot_manifest(root_device, "C73696D4-CAC4-40A0-90CB-7D0463E4E3E6",
-+	        selected, volume)) error = EAUTH;
++	    (!native_owner_root_volume_uuid(root_mount, root_uuid) ||
++	    !native_owner_publish_boot_manifest(root_device, root_uuid))) error = EAUTH;
 +#endif
 +#if defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP
 +	if (!error && cache_authorized && root_recheck) {
@@ -2165,14 +2093,13 @@ index 2467b24..0ec83d5 100644
 +}
 +#endif
 +
-+
  static int
 -load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
 +load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, user_addr_t envp)
  {
  	int retval[2];
  	int error;
-@@ -7955,6 +8132,20 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+@@ -7955,6 +8059,20 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
  	assert(scratch_addr);
  	assert(path);
  
@@ -2193,7 +2120,7 @@ index 2467b24..0ec83d5 100644
  	/*
  	 * Copy out program name.
  	 */
-@@ -8013,7 +8204,7 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+@@ -8013,7 +8131,7 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
  	 */
  	init_exec_args.fname = argv0;
  	init_exec_args.argp = scratch_addr;
@@ -2202,7 +2129,7 @@ index 2467b24..0ec83d5 100644
  
  	/*
  	 * So that init task is set with uid,gid 0 token
-@@ -8068,6 +8259,7 @@ static const char * init_programs[] = {
+@@ -8068,6 +8186,7 @@ static const char * init_programs[] = {
  void
  load_init_program(proc_t p)
  {
@@ -2210,16 +2137,16 @@ index 2467b24..0ec83d5 100644
  	uint32_t i;
  	int error;
  	vm_map_t map = current_map();
-@@ -8075,6 +8267,20 @@ load_init_program(proc_t p)
+@@ -8075,6 +8194,20 @@ load_init_program(proc_t p)
  	mach_vm_size_t map_page_size = vm_map_page_size(map);
  
  #if DEVELOPMENT || DEBUG
 +	user_addr_t init_envp = USER_ADDR_NULL;
 +#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-+	boot_progress_stage("SystemOS mount enter");
++	boot_progress_stage("root check enter");
 +	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
-+	boot_progress_stage("SystemOS mount returned");
-+	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
++	boot_progress_stage("root check returned");
++	if (cache_error) panic("offline owner root check failed: %d", cache_error);
 +#endif
 +#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
 +	extern int sheng_boot_watchdog_policy(void *, uint64_t);
@@ -2231,7 +2158,7 @@ index 2467b24..0ec83d5 100644
  	/* Use the opportunity to initialize exec's debug log stream */
  	exec_log_handle = os_log_create("com.apple.xnu.bsd", "exec");
  #endif /* DEVELOPMENT || DEBUG */
-@@ -8085,6 +8291,17 @@ load_init_program(proc_t p)
+@@ -8085,6 +8218,17 @@ load_init_program(proc_t p)
  	(void) memorystatus_init_at_boot_snapshot();
  #endif /* CONFIG_MEMORYSTATUS */
  
@@ -2249,7 +2176,7 @@ index 2467b24..0ec83d5 100644
  #if DEBUG || DEVELOPMENT
  	/* Check for boot-arg suffix first */
  	char launchd_suffix[64];
-@@ -8095,7 +8312,7 @@ load_init_program(proc_t p)
+@@ -8095,7 +8239,7 @@ load_init_program(proc_t p)
  
  		if (is_release_suffix) {
  			printf("load_init_program: attempting to load /sbin/launchd\n");
@@ -2258,7 +2185,7 @@ index 2467b24..0ec83d5 100644
  			if (!error) {
  				return;
  			}
-@@ -8106,7 +8323,7 @@ load_init_program(proc_t p)
+@@ -8106,7 +8250,7 @@ load_init_program(proc_t p)
  			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
  
  			printf("load_init_program: attempting to load %s\n", launchd_path);
@@ -2267,7 +2194,7 @@ index 2467b24..0ec83d5 100644
  			if (!error) {
  				return;
  			} else if (error != ENOENT) {
-@@ -8119,7 +8336,7 @@ load_init_program(proc_t p)
+@@ -8119,7 +8263,7 @@ load_init_program(proc_t p)
  	error = ENOENT;
  	for (i = 0; i < sizeof(init_programs) / sizeof(init_programs[0]); i++) {
  		printf("load_init_program: attempting to load %s\n", init_programs[i]);
@@ -2276,7 +2203,7 @@ index 2467b24..0ec83d5 100644
  		if (!error) {
  			return;
  		} else if (error != ENOENT) {
-@@ -8597,6 +8814,7 @@ process_signature(proc_t p, struct image_params *imgp)
+@@ -8597,6 +8741,7 @@ process_signature(proc_t p, struct image_params *imgp)
  	 * approve of exec, kill and return immediately.
  	 */
  	if (imgp->ip_mac_return != 0) {
@@ -2284,7 +2211,7 @@ index 2467b24..0ec83d5 100644
  		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
  		    proc_getpid(p), OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
  		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY);
-@@ -8773,7 +8991,9 @@ done:
+@@ -8773,7 +8918,9 @@ done:
  		 * state.
  		 */
  
@@ -3671,10 +3598,10 @@ index 78f8686..0cf8bc9 100644
  
  include $(MakeInc_rule)
 diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
-index 2bbd161..2b49e3c 100644
+index 2bbd161..9fa400e 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -572,6 +572,69 @@ IOGetBootManifestHash(char *hash_data, size_t *hash_data_size)
+@@ -572,6 +572,65 @@ IOGetBootManifestHash(char *hash_data, size_t *hash_data_size)
  	return result;
  }
  
@@ -3684,22 +3611,20 @@ index 2bbd161..2b49e3c 100644
 +#endif
 +#include <libkern/crypto/sha2.h>
 +extern "C" int native_verified_block_manifest_sha384(dev_t, const char *, uint8_t[48]);
-+extern "C" int native_owner_publish_boot_manifest(dev_t, const char *, dev_t, const char *);
++extern "C" int native_owner_publish_boot_manifest(dev_t, const char *);
 +extern "C" {
 +volatile int native_owner_boot_manifest_status = -1;
 +uint8_t native_owner_boot_manifest_hash[48];
 +}
 +
 +extern "C" int
-+native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID,
-+    dev_t cacheDevice, const char *cacheUUID)
++native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID)
 +{
 +	static const char domain[] = "VerifiedRoot.OwnerBootSet.v1";
-+	uint8_t rootDigest[48], cacheDigest[48], digest[48];
-+	uint8_t rootRole = 1, cacheRole = 2;
-+	if (rootDevice == cacheDevice ||
-+	    !native_verified_block_manifest_sha384(rootDevice, rootUUID, rootDigest) ||
-+	    !native_verified_block_manifest_sha384(cacheDevice, cacheUUID, cacheDigest)) {
++	uint8_t rootDigest[48], digest[48];
++	uint8_t rootRole = 1;
++	// k27 single-volume layout: the set is the root alone (the System volume holds the shared cache).
++	if (!native_verified_block_manifest_sha384(rootDevice, rootUUID, rootDigest)) {
 +		native_owner_boot_manifest_status = 1;
 +		return 0;
 +	}
@@ -3708,8 +3633,6 @@ index 2bbd161..2b49e3c 100644
 +	SHA384_Update(&context, domain, sizeof(domain));
 +	SHA384_Update(&context, &rootRole, sizeof(rootRole));
 +	SHA384_Update(&context, rootDigest, sizeof(rootDigest));
-+	SHA384_Update(&context, &cacheRole, sizeof(cacheRole));
-+	SHA384_Update(&context, cacheDigest, sizeof(cacheDigest));
 +	SHA384_Final(digest, &context);
 +	IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
 +	if (!chosen) { native_owner_boot_manifest_status = 2; return 0; }

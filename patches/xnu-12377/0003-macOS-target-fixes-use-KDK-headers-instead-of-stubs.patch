@@ -1,7 +1,7 @@
-From 49f98c0059de41370b45d9ac82147623bcbcad7e Mon Sep 17 00:00:00 2001
+From f7e4c279d8de760056a85d38341a27e5bddd238c Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 08:01:11 -0400
-Subject: [PATCH 03/49] macOS target fixes; use KDK headers instead of stubs
+Subject: [PATCH 03/47] macOS target fixes; use KDK headers instead of stubs
 
 (cherry picked from commit 5cff9b00dad33a275b66af2fa7cc59c25e593d12)
 ---

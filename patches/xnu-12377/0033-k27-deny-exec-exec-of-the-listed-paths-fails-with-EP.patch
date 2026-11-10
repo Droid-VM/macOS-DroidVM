@@ -1,7 +1,7 @@
-From da74219b82a28e5cca81acade7fdb1a58be83e6b Mon Sep 17 00:00:00 2001
+From 08694f7e68a373f7ea7e4ce911f46d16744a114d Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 07:50:55 -0400
-Subject: [PATCH 33/49] k27-deny-exec: exec of the listed paths fails with
+Subject: [PATCH 33/47] k27-deny-exec: exec of the listed paths fails with
  EPERM (default /usr/libexec/mobileactivationd, which launchd starts despite a
  disabled.plist and which crash-looped)
 
@@ -11,7 +11,7 @@ Subject: [PATCH 33/49] k27-deny-exec: exec of the listed paths fails with
  1 file changed, 41 insertions(+)
 
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 0ccb42e..8dba649 100644
+index 5ba400c..2bf34ab 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -7473,6 +7473,42 @@ bad:

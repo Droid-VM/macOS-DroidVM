@@ -1,7 +1,7 @@
-From 90804ba0a6b3ee141648b49f6c3b1d1b75ea5e93 Mon Sep 17 00:00:00 2001
+From 9a9a06159c99104dd39ff91e03a4d38ed60b43db Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 03:31:00 -0400
-Subject: [PATCH 30/49] k27: the owner boot manifest replaces the all-zero
+Subject: [PATCH 30/47] k27: the owner boot manifest replaces the all-zero
  boot-manifest-hash placeholder (27 Image4 needs one at start)
 
 (cherry picked from commit 7b0eea541248f1da67050621685c084ce553ce0a)
@@ -10,10 +10,10 @@ Subject: [PATCH 30/49] k27: the owner boot manifest replaces the all-zero
  1 file changed, 8 insertions(+), 1 deletion(-)
 
 diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
-index afee67a..cafc29f 100644
+index 5257b2f..ae82fc8 100644
 --- a/iokit/bsddev/IOKitBSDInit.cpp
 +++ b/iokit/bsddev/IOKitBSDInit.cpp
-@@ -607,7 +607,14 @@ native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID,
+@@ -603,7 +603,14 @@ native_owner_publish_boot_manifest(dev_t rootDevice, const char *rootUUID)
  	SHA384_Final(digest, &context);
  	IORegistryEntry *chosen = IORegistryEntry::fromPath("/chosen", gIODTPlane);
  	if (!chosen) { native_owner_boot_manifest_status = 2; return 0; }

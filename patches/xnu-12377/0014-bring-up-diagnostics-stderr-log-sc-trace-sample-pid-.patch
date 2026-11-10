@@ -1,7 +1,7 @@
-From c6c776375f7fb2c9d7430fb2574d2f81e56a31cb Mon Sep 17 00:00:00 2001
+From 2be17c281f784188490e584583295219fd9c0857 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 14/49] bring-up diagnostics: stderr-log, sc-trace, sample-pid
+Subject: [PATCH 14/47] bring-up diagnostics: stderr-log, sc-trace, sample-pid
  helpers, crash-log registers, port_crumb/port_exc breadcrumbs
 
 (cherry picked from commit ba207d7757c23962c22ff85ca8d866d8728fdcf8)

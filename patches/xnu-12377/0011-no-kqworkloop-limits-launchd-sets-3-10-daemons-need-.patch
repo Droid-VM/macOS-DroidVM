@@ -1,7 +1,7 @@
-From c20a60498510aa7c10511043192bb6f69850e53b Mon Sep 17 00:00:00 2001
+From ef51c57f2fa5f2cc546e01e931fb874fcf4701cf Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 11/49] no kqworkloop limits (launchd sets 3/10, daemons need
+Subject: [PATCH 11/47] no kqworkloop limits (launchd sets 3/10, daemons need
  more)
 
 (cherry picked from commit 799147af3e189e3e68ed33e78a75f195c8a01b4e)

@@ -9,8 +9,12 @@ Build: `bash k27/build-kernel27.sh` (out/k27/kernel-k27.macho), then `k27/try.sh
 Bring-up workarounds that a later commit took out again are not in the series (the 26.5 Sandbox calls and allow-all profile,
 k27-sandbox-native, the /private/var/.data firmlink path rewrite, the one-entitlement copyClientEntitlementVnode): the history with
 them is branch `k27-unlayered` (23a75df, same tree).
-Likewise the union layout of the OS and SystemOS images (union-hide-lower, the union lookup fixes, the kernel's Data mount and its
-firmlinks, the gpu-addon and staged-apps bindfs unions) is not in the series since the single-volume layout (0049,
-docs/k27-real-disk-layout-plan.md): the history with it is branch `k27-before-reexport-20261110` (one commit behind in
-osfmk/kern/thread_policy.c, otherwise the same tree). The series was re-exported from a history rebuilt without that code; two
-patches went (union-hide-lower's MNT_ROOTFS, the union create lookup) and others kept only their other parts.
+The 47-patch series contains only the single-container layout: the System volume is the root; launchd and APFS mount the other
+volumes and stitch their firmlinks. The owner root check and root-only boot manifest are introduced directly in 0002. The former
+SystemOS mount and two-volume manifest are absent from every intermediate tree, so no later patch is needed to remove them.
+The former UUID patch and final single-volume conversion patch became empty and were dropped; later patches were renumbered.
+CONFIG_FIRMLINKS remains enabled for APFS's native firmlinks.
+
+Validation (2026-11-11): all 47 patches replayed with `git am` from ac9718f; the resulting tree is exactly the previously verified
+k27 tree `c97cc109b2b49890091f3fb035777204c2fd1e4b`. No kernel behavior changed. Rebuild/replay records are in
+`out/layout-cleanup-2026-11-11/`. This rewrites the local k27 patch branch, not the repository's published history.

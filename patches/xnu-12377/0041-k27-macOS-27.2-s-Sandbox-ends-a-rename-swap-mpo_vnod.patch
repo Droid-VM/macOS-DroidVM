@@ -1,7 +1,7 @@
-From 369cd0de5f36885b3ded444aed1dc65181cba5a7 Mon Sep 17 00:00:00 2001
+From d044ae8610e885f3663f20c25b81b61751e9e796 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 7 Nov 2026 01:04:03 -0500
-Subject: [PATCH 41/49] k27: macOS 27.2's Sandbox ends a rename swap:
+Subject: [PATCH 41/47] k27: macOS 27.2's Sandbox ends a rename swap:
  mpo_vnode_notify_end_rename_swap
 
 27.2's Sandbox pairs two hooks around a rename swap: hook_vnode_notify_begin_rename_swap, in the

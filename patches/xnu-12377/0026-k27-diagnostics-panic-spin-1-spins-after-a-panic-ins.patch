@@ -1,7 +1,7 @@
-From 86960dfd82fe7df05a6e532531d5ab66e1b49fd9 Mon Sep 17 00:00:00 2001
+From 2c5b5b88734c2431ecab3a03aa4c7f650959e085 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 01:59:01 -0400
-Subject: [PATCH 26/49] k27 diagnostics: panic-spin=1 spins after a panic
+Subject: [PATCH 26/47] k27 diagnostics: panic-spin=1 spins after a panic
  instead of restarting the VM
 
 (cherry picked from commit 8191eace65d48359c69df0081bb524a3caea1c96)

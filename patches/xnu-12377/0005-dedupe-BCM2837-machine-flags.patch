@@ -1,7 +1,7 @@
-From 65a088890374ac371c468eaf3ae245331d35e031 Mon Sep 17 00:00:00 2001
+From adcfeea678c3cc6c8930775319620fee30bb64bf Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 08:04:54 -0400
-Subject: [PATCH 05/49] dedupe BCM2837 machine flags
+Subject: [PATCH 05/47] dedupe BCM2837 machine flags
 
 (cherry picked from commit 3cae342edf5bf6504b4b911afe6d44c6971ea908)
 ---

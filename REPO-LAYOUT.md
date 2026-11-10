@@ -61,7 +61,7 @@
 
 | 目录 | 打到哪里 | 说明 |
 |---|---|---|
-| `xnu-12377/` | `sources/xnu-12377` | 42 个 + README，`git format-patch ac9718f..k27` 导出；改内核后要重新导出。0041 来自未提交的工作树 diff，提交前别按区间重导（会被 0042 的提交顶掉），单独 `format-patch -1 --start-number` |
+| `xnu-12377/` | `sources/xnu-12377` | 47 个补丁 + README，`git format-patch ac9718f..k27` 导出；已重建为仅单容器布局，所有补丁重放后的最终源码树与已验证内核一致。 |
 | `droidvm-audio/` | UniXNU-droidvm `e29d087` 的 DroidVMAudio 源 | 0001 不自己做模块加载、0002 开播垫 40 ms、0003 输出延迟加宿主 1536 帧；`k27/build-native-audio.sh` 构建 |
 | `droidvm-video/` | UniXNU-droidvm `706338e` 的 VT 源 | 0001–0011（0006 已弃）；0011 = Apple vtpv 语义 + 会话生命周期 |
 | `droidvm-display/` | UniXNU-droidvm 的 virtio-gpu 源 | 0001 |

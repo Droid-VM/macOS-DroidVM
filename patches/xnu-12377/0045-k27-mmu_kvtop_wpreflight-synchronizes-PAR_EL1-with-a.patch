@@ -1,7 +1,7 @@
-From f68198137061575ea6f7a071e067faadee68c4da Mon Sep 17 00:00:00 2001
+From 75364faa7e55adec674170d4ce91fbc1f624fd4c Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 7 Nov 2026 12:42:39 -0500
-Subject: [PATCH 46/49] k27: mmu_kvtop_wpreflight synchronizes PAR_EL1 with an
+Subject: [PATCH 45/47] k27: mmu_kvtop_wpreflight synchronizes PAR_EL1 with an
  ISB (a stale fault sent bcopy_phys to a copy window, a DMG read panicked)
 
 ---

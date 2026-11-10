@@ -1,7 +1,7 @@
-From 524941e2d6a62283bf991843d39af855079b2a74 Mon Sep 17 00:00:00 2001
+From e087d9d602b83ebc3622d54104d5a37d53c2a4b9 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 19:18:25 -0400
-Subject: [PATCH 17/49] native 4K code signing: a 4K page wholly past codeLimit
+Subject: [PATCH 17/47] native 4K code signing: a 4K page wholly past codeLimit
  in the last 16K block is validated NX, as on 16K pages (it was tainted:
  dyld's PrebuiltLoader reads a dylib's code signature through such a page, and
  every loginwindow after the first died with KERN_CODESIGN_ERROR); crash-log

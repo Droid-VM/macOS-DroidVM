@@ -1,7 +1,7 @@
-From 6d983e3d9190b61924b8c1021a8183e7136feb6a Mon Sep 17 00:00:00 2001
+From 2ac2903ad8f7886fdd9c171b3d2cde2b970b3264 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 7 Nov 2026 23:09:34 -0500
-Subject: [PATCH 48/49] k27: per-process jetsam floors (jetsam-floor=NAME:MB,
+Subject: [PATCH 47/47] k27: per-process jetsam floors (jetsam-floor=NAME:MB,
  default WallpaperAerialsExtension:2048)
 
 The Mac's jetsamproperties table has no entry for the aerial wallpaper, so it runs at

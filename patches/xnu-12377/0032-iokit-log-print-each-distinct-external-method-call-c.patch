@@ -1,7 +1,7 @@
-From c09e476ef2a4caa4a5fa03bf3c5f162473e0f265 Mon Sep 17 00:00:00 2001
+From 3cc5e48bade782585a0a297a0ac7d25bf7851366 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 05:29:42 -0400
-Subject: [PATCH 32/49] iokit-log: print each distinct external method call
+Subject: [PATCH 32/47] iokit-log: print each distinct external method call
  (class, selector, result) of the named processes once
 
 (cherry picked from commit 97f9ce032f5311fb58451a200489bd3c2fe875cd)

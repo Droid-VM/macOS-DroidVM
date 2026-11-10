@@ -1,7 +1,7 @@
-From 60b4e4aca642205ca090c347e4fbf341cc1874bc Mon Sep 17 00:00:00 2001
+From 6058220d447083617afaade02141ba77cbecc477 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Wed, 4 Nov 2026 13:40:00 -0500
-Subject: [PATCH 39/49] k27: a realtime computation past the maximum is held to
+Subject: [PATCH 39/47] k27: a realtime computation past the maximum is held to
  it rather than refused
 
 The board's timer runs at 19.2 MHz, where max_rt_quantum (50 ms) is 960000 ticks. coreaudiod asks for its I/O thread

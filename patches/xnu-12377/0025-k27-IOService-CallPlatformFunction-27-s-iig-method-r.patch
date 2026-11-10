@@ -1,7 +1,7 @@
-From 07f2b481519cd0cad5432e8eb5184d456153cc92 Mon Sep 17 00:00:00 2001
+From 3b95f7b464708da3d84935ae09ae6cd62ef8d70c Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 01:55:48 -0400
-Subject: [PATCH 25/49] k27: IOService::CallPlatformFunction (27's iig method,
+Subject: [PATCH 25/47] k27: IOService::CallPlatformFunction (27's iig method,
  referenced by AppleARMPlatform)
 
 (cherry picked from commit 6191d97946f40ae10a197e363b0d817fda974ce9)

@@ -1,7 +1,7 @@
-From 64953e513317390ce78aab311c5fe1076d96e17e Mon Sep 17 00:00:00 2001
+From 2c0edcda8c9866df341a9565fdda7e854425bca9 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sun, 25 Oct 2026 01:27:00 -0400
-Subject: [PATCH 19/49] bring-up profiling: pc-sample=<seconds> reports, every
+Subject: [PATCH 19/47] bring-up profiling: pc-sample=<seconds> reports, every
  period, the timer interrupts' idle/user/kernel split, the busiest tasks and
  kernel pcs (a sample taken where interrupts are unmasked is charged to the
  code that masked them), decrementer values by log2, deadlines already past by

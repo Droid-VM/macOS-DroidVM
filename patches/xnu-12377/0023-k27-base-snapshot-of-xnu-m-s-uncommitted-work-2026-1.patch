@@ -1,7 +1,7 @@
-From 37196974b1107eca68775d291578645bb2ddd8fe Mon Sep 17 00:00:00 2001
+From 7c493f228c0eb03382ce56fb4b684709eecec68c Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 01:47:48 -0400
-Subject: [PATCH 23/49] k27 base: snapshot of xnu-m's uncommitted work
+Subject: [PATCH 23/47] k27 base: snapshot of xnu-m's uncommitted work
  (2026-10-30)
 
 ---
@@ -24,7 +24,7 @@ index 60d8aa6..4202ae9 100644
  bsd/vfs/vfs_syscalls.c			standard
  bsd/vfs/vfs_support.c			standard
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index dcb0dbd..0ccb42e 100644
+index d8d2cd7..5ba400c 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -6922,9 +6922,10 @@ exec_extract_strings(struct image_params *imgp)

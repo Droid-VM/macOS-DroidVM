@@ -1,7 +1,7 @@
-From f3054fefab310ff12a01a7bee3fa499d5a85f8a9 Mon Sep 17 00:00:00 2001
+From bdde4d88100293a48d4c4502d3d5430ac2cadcc0 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 11:50:11 -0400
-Subject: [PATCH 36/49] k27: CONFIG_FIRMLINKS on
+Subject: [PATCH 36/47] k27: CONFIG_FIRMLINKS on
 
 APFS sets the firmlinks of the System volume (com.apple.fs.firmlink) through vnode_setasfirmlink and the name cache follows them;
 without CONFIG_FIRMLINKS the KPI is a stub and no firmlink of the volume group is stitched.

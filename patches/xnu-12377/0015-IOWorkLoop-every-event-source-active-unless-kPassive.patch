@@ -1,7 +1,7 @@
-From c46574563f41b37cfb2ee2302e08228ddc6e7f94 Mon Sep 17 00:00:00 2001
+From 71c54f43e0c34eb5485208b112f72db3d909fe61 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 17:19:00 -0400
-Subject: [PATCH 15/49] IOWorkLoop: every event source active unless kPassive
+Subject: [PATCH 15/47] IOWorkLoop: every event source active unless kPassive
  when the compiler cannot resolve virtual member function pointers
 
 Upstream LLVM: OSMemberFunctionCast yields the virtual thunk, all sources compared passive, no IOInterruptEventSource ever ran.

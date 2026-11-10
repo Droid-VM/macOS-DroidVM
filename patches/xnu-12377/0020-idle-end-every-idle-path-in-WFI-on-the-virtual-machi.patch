@@ -1,7 +1,7 @@
-From 2fad4f75febb283318760d9fbf1e85bade475d4c Mon Sep 17 00:00:00 2001
+From 1ae0626f80c5fed52b1e6953942bf87cc29cf713 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sun, 25 Oct 2026 13:28:49 -0400
-Subject: [PATCH 20/49] idle: end every idle path in WFI on the virtual machine
+Subject: [PATCH 20/47] idle: end every idle path in WFI on the virtual machine
  boards, and report the idle loop's branches from pc-sample
 
 Gunyah traps WFI (the vCPU blocks and the host gets the physical core back) but runs WFE in the guest. The idle loop polls with
