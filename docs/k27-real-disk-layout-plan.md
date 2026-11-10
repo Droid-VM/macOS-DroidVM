@@ -277,4 +277,4 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 - `make-macos-disk.py` 已去掉 fsck shim 的安装逻辑和命令行开关，新生成盘保留 Apple 原版 fsck；旧布局脚本的 shim 暂留。
 - 收尾 13 项 unittest 全部通过；测试实例 STOPPED，主实例恢复 RUNNING，SSH 确认根为 `/dev/disk1s2`。[恢复记录](../out/p6-fsck-2026-11-10/main-restored.txt)。
 
-范围：使用已完成首次登录的测试盘做恢复原版 fsck 后的重启验证，尚未单独验证全新 Data 的首次启动；未捕获 launchd fsck 任务的逐阶段退出码，不能把正常启动等同于该任务退出码已确认。旧产物应重做或单独校正累计字段，加载新模块本身不会修复旧字段。测试记录见 `out/p6-fsck-2026-11-10/`。
+范围：本轮采集覆盖已完成首次登录的测试盘恢复原版 fsck 后的重启；全新 Data 的首次启动也已由用户确认验证通过。未捕获 launchd fsck 任务的逐阶段退出码，不能把正常启动等同于该任务退出码已确认。旧产物应重做或单独校正累计字段，加载新模块本身不会修复旧字段。测试记录见 `out/p6-fsck-2026-11-10/`。
