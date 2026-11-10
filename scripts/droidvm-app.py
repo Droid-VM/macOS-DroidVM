@@ -15,6 +15,10 @@
                                                          new FDT, keeping every other setting made in the app; then boot
   droidvm-app.py media                                   only switch the registered VM's virtio-media codecs (MACOS_MEDIA) and dump
                                                          its new FDT, keeping every other setting made in the app; then boot
+  droidvm-app.py disks                                   only switch the registered VM's disks to the layout of MACOS_ROOT_UUID
+                                                         (default: the Data store alone, the root is its System volume; empty: os.img and
+                                                         systemos.img ahead of it) and dump its new FDT, keeping every other setting
+                                                         made in the app; then boot
   droidvm-app.py store-patch                             write out/metal/stage/store-patch.{bin,txt} (stage-gpu-plugin.py --store) into
                                                          the stopped VM's Data store, the blocks it replaces saved beside it first
   droidvm-app.py start|stop|status
@@ -50,6 +54,9 @@ def load(path, name):
 
 
 ios = load(ROOT.parent / 'ios/tools/droidvm-app.py', 'ios_droidvm_app')
+# The k27 kernel boots the single-volume layout only (docs/k27-real-disk-layout-plan.md P5): the root is the System volume DroidVMSystem
+# of the Data store's container. MACOS_ROOT_UUID= (empty) selects the old union layout of os.img and systemos.img, for older kernels.
+os.environ.setdefault('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF7FB')
 run = load(ROOT / 'scripts/run-macos-vm.py', 'run_macos_vm')
 
 FOLDER = run.FOLDER
@@ -116,6 +123,10 @@ REQUIRED_ARGS.append('ml-timeout-lock-scale=40')
 # without the kernel scaling it (patch 0042) the HAL writes every 80 ms instead of 64 ms and the sound stutters and falls behind the picture
 REQUIRED_ARGS.append('droidvm-timebase-hz=24000000')
 # MACOS_DROP_ARGS=NAME[,NAME]: leave those of the arguments above (and of GPU_ARGS) out
+# MACOS_ROOT_UUID (docs/k27-real-disk-layout-plan.md P5): launchd's mount phases mount Preboot, VM, Update, xART and Data and APFS
+# stitches the firmlinks stored on the System volume; Preboot is its own volume, so it needs no hiding from statfs.
+if os.environ.get('MACOS_ROOT_UUID'):
+    REQUIRED_ARGS.remove('union-hide-lower=1')
 REQUIRED_ARGS = [a for a in REQUIRED_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')]
 # exec-env (one boot argument, groups split by ';'): WebKit's WebContent reserves a 64 GiB Gigacage aligned to 64 GiB, which the 39-bit
 # user space (the GPU carveout at 64-448 GiB) cannot hold; without the cage Safari's pages load instead of WebContent crashing at launch
@@ -139,9 +150,7 @@ def template(persistent):
     vm = ORIGINAL_VM_CONFIG(persistent)
     vm.update({'cpu_count': CPUS, 'cpu_affinity': CPU_AFFINITY, 'disks': [],
                'extra_options': ['--block', BOOT + ',lock=false', '--dump-device-tree-blob', DTB,
-                                 '--virtio-mmio-block', FOLDER + '/os.img,ro=true,lock=false',
-                                 '--virtio-mmio-block', FOLDER + '/systemos.img,ro=true,lock=false',
-                                 '--virtio-mmio-block', run.STORE + ',lock=false',
+                                 *disk_options(),
                                  *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else []),
                                  *snd_options(), *media_options()]})
     if NET:
@@ -156,6 +165,13 @@ def template(persistent):
                          # simplefb stays (edk2's GOP, DarwinBoot and the boot console draw there) but is not shown
                          'simplefb': dict(vm['screens']['simplefb'], exporter='none', width=WIDTH, height=HEIGHT)}
     return vm
+
+
+def disk_options():
+    """The virtio-mmio disks: os.img and systemos.img (read-only) and the Data store, or the store alone in the single-volume layout
+    (MACOS_ROOT_UUID: the root is the System volume of the Data container, docs/k27-real-disk-layout-plan.md)."""
+    images = [] if run.ROOT_UUID else [FOLDER + '/os.img,ro=true,lock=false', FOLDER + '/systemos.img,ro=true,lock=false']
+    return [o for image in images + [run.STORE + ',lock=false'] for o in ('--virtio-mmio-block', image)]
 
 
 def media_options():
@@ -214,8 +230,9 @@ ios.vm_config = template
 
 def push_images(args):
     artifacts = ROOT / f'artifacts/{TAG}'
-    run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'os.raw', 'os.img')
-    run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'systemos.img', 'systemos.img')
+    if not run.ROOT_UUID:
+        run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'os.raw', 'os.img')
+        run.push_cached(['adb', '-s', ios.SERIAL], artifacts / 'systemos.img', 'systemos.img')
     run.ensure_store(['adb', '-s', ios.SERIAL])
     if sh(f'test -e {BOOT} && echo yes', check=False).strip() != 'yes':
         placeholder = OUT / 'placeholder.img'
@@ -301,6 +318,26 @@ def net(args):
     dump_fdt()
 
 
+def disks(args):
+    """The registered VM with the disks of disk_options(), every other setting kept. The disks' windows come first, so every other
+    one moves: the FDT is dumped again."""
+    ipc = ios.Ipc()
+    row = ios.find_vm(ipc)
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
+    options = vm['extra_options']
+    first = options.index('--virtio-mmio-block')
+    rest = [o for i, o in enumerate(options[first:]) if o != '--virtio-mmio-block' and (i == 0 or options[first + i - 1] != '--virtio-mmio-block')]
+    vm['extra_options'] = options[:first] + disk_options() + rest
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
+    print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
+    if not reply.get('success'):
+        raise SystemExit(1)
+    dump_fdt()
+
+
 def media(args):
     """The registered VM with (MACOS_MEDIA=1) or without the virtio-media decoder and encoder, every other setting kept; their windows
     come last, so the others stay where they were, but the FDT gains them: it is dumped again."""
@@ -360,7 +397,7 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
-    for name in ('push', 'register', 'net', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'disks', 'net', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -371,6 +408,8 @@ def main():
         boot_disk(args)
     elif args.cmd == 'prepare':
         prepare(args)
+    elif args.cmd == 'disks':
+        disks(args)
     elif args.cmd == 'net':
         net(args)
     elif args.cmd == 'snd':

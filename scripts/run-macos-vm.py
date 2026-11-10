@@ -65,8 +65,14 @@ def image_volume_uuid(name, role=None):
     return found[0]
 
 
-# the OS volume the kernel mounts as root: from the image itself, else the one the legacy kernel's policy pins
-OS_UUID = (image_volume_uuid('os.raw', 'System') or (json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists()
+# the OS volume the kernel mounts as root: from the image itself, else the one the legacy kernel's policy pins.
+# MACOS_ROOT_UUID (k27 single-volume layout, docs/k27-real-disk-layout-plan.md): the System volume in the Data container instead,
+# and no SystemOS volume is unioned over it.
+ROOT_UUID = os.environ.get('MACOS_ROOT_UUID', '').upper()
+# the virtio-mmio window of the Data store disk: after os.img and systemos.img, or the first one when the single-volume layout has
+# dropped those two disks (droidvm-app.py disks)
+DATA_STORE_MMIO = 0x0a000000 if ROOT_UUID else 0x0a002000
+OS_UUID = ROOT_UUID or (image_volume_uuid('os.raw', 'System') or (json.loads(PINS.read_text())['os']['volume_uuid'].upper() if PINS.exists()
                                else '63E8D68F-1310-4609-8FD8-CA9501AAFAD4'))
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
@@ -160,7 +166,7 @@ def last_virtio_mmio(tool, fdt, skip=0):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     base = sorted(base for base, _ in module.describe(module.parse_fdt(Path(fdt).read_bytes()))['virtio_mmio'])[-1 - skip]
-    if base <= 0x0a002000:
+    if base <= DATA_STORE_MMIO:
         raise SystemExit(f'{fdt} has no virtio-mmio window after the data store: prepare again with --droidvm-gpu in the VM')
     return base
 
@@ -237,7 +243,7 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         if os.environ.get('MACOS_BOOT_MANIFEST_HASH') == '1':
             text = text.replace(marker, "('boot-manifest-hash', bytes(48)), " + marker)
         # /chosen/owner-systemos-uuid: the SystemOS volume the k27 kernel mounts as the shared-cache carrier, read from the image
-        systemos_uuid = image_volume_uuid('systemos.img')
+        systemos_uuid = None if ROOT_UUID else image_volume_uuid('systemos.img')
         if systemos_uuid:
             text = text.replace(marker, f"('owner-systemos-uuid', {systemos_uuid.encode() + bytes(1)!r}), " + marker)
         text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
@@ -325,7 +331,7 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                     *(['--cpu-regs', cpu_regs] if cpu_regs else []),
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
-                    '--trust-cache', '--data-ramdisk', '--data-store-mmio', '0x0a002000', '--reclaim-memory',
+                    '--trust-cache', '--data-ramdisk', '--data-store-mmio', hex(DATA_STORE_MMIO), '--reclaim-memory',
                     *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt, media + int(snd) + int(virtio_gpu) + int(net)))] if gpu else []),
                     *(['--net-mmio', hex(last_virtio_mmio(tool, fdt, media + int(snd) + int(virtio_gpu)))] if net else []),
                     *(['--virtio-gpu-mmio', hex(last_virtio_mmio(tool, fdt, media + int(snd)))] if virtio_gpu else []),

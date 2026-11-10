@@ -443,3 +443,23 @@ IOPerfControlClient 1 槽，27 kext 无 adrp 进内核；只能整体换 KC，�
       注入 dylib 让 +[BTAudioRoutingRequest isSupported] 返回假 / 登录后才 enable audiomxd。
     - 坑：k27/try.sh 先写 nm 再写 KC，rig-dmesg 见 KC 更新就用 KC 重生 nm（无符号）→ 读 msgbuf 失败；重生 nm 后 touch。WebKit Network 日志会把 1 MiB msgbuf 刷成 30 s，查完要从谓词里去掉。
 - 当前手机启动盘（11-06）：kc-k27.bin 含内核 0042 与 DroidVMAudio 0001–0003，带 stderr-log=1、droidvm-vt-paravirt=1、droidvm-vt-direct=1、msgbuf=1048576，`droidvm-timebase-hz=24000000` 已是 REQUIRED_ARGS 默认（vgpu-3d=1 是 GPU_ARGS 默认）；手机 crosvm 为 11-06 音频版（备份 crosvm.bak-1105）。启动盘重建命令见记忆 macos-k27-repo-layout。
+
+## installer / softwareupdate（2026-11-09）
+
+- 已修（guest 内，存在 Data 覆盖层里）：Apple 签名的包 `installer` 报 Code=100 "Authorization is required"，其实不是授权问题。PackageKit 给 Apple 软件准备安装沙盒时会解析符号链接，落到 `/Library/Apple/System/Library/InstallerSandboxes`；而种子把 `Library/Apple` 链到只读的 SystemOS（`/System/Library/DroidVMData/Library/Apple`），所以 mkdir 返回 EROFS（fs_usage 抓到）。处理：在 guest 里把这个链接换成真实目录，用 ditto 拷 121 MB。之后 CLTools_macOS_SDK.pkg 安装成功。
+  - 待做：`scripts/make-macos-data-seed.sh` 的 READONLY 里还有 `Library/Apple`。下次真要重做种子时得把它拷成真实目录（受种子 256 MiB 上限影响）。不要为此重做种子。
+- 已修（2026-11-09，内核未提交）：softwareupdate 列不出 CLT（xcode-select 报 "not currently available"），XProtect 一类 dist 的路径检查也都失败。
+  - 根因：dist 脚本访问路径要过 Install.framework 的 `IFJS_IsPathSafe`。它逐级 lstat，`st_dev` 必须等于根卷，或者等于 `+[IASFilesystemUtils dataVolumePathGivenSystemPath:@"/"]` 给出的 Data 卷。
+  - 后者的做法：statfs("/") 取设备名，读 `APFSVolumeRole`（要 System），再读 IOMedia 上的 `VolGroupUUID`，经 `IORegistryEntryGetParentEntry` 在同一个容器里找同组、角色为 Data 的卷，最后用 getmntinfo 求它的挂载点。
+  - 旧布局下根是 SystemOS（disk3/disk2，无角色），Data 在另一个容器，所以返回 nil，Data 卷上的路径（如 `/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress`）全被拒。
+  - 布局改动（guest 内，写在 Data 覆盖层里；改前在手机上备份了 `data-store.img.before-volgroup`）：
+    - `diskutil apfs changeVolumeRole disk5s1 D`
+    - `diskutil apfs addVolume disk5 APFS DroidVMSystem -role S -groupWith disk5s1 -nomount`，得到 disk5s2，UUID 4646A7E0-…；卷组 UUID 等于 Data 卷的 UUID 8748FE31-…。
+  - 内核改动（out/k27/xnu，未提交）：挂完 Data 后，`native_owner_root_device_prepare` 用 IOKit 找 Data 卷所在卷组里 RoleValue=1 的卷（IOKitBSDInit.cpp `native_volume_group_system_device`）。statfs/getfsstat/vfs sysctl/`ATTR_VOL_MOUNTEDDEVICE` 对代替根的那个 union 挂载报这个设备名（vfs_subr.c `virt_union_mntfromname`）。根的文件、设备号、卷 UUID 都不变；没有这个卷就照旧报 SystemOS；可用 `k27-root-system-volume=0` 关闭。
+  - 没有把空 System 卷真 union 到 `/` 上：getattrlistbulk 不穿透 union，`/` 在 Finder 里会变成空目录。
+  - 验证（kc 48 kexts）：`mount`/`diskutil info /` 显示 `/dev/disk5s2` DroidVMSystem 及其卷组；`dataVolumePathGivenSystemPath:@"/"` 返回 `/System/Volumes/Data`；有触发文件时 `softwareupdate --list` 列出 "Command Line Tools for Xcode 27.2"；`/Volumes/DroidVMSystem -> /`，和真机一样。
+  - 余下：`softwareupdate -i` 报 "Not enough free disk space: a total of 9.54 GB is required"，而 Data 只剩 2.2 GB（要扩 Data，用 grow-data-store.py）。如果 Data 种子或覆盖层被重置，卷组会丢失，要在 guest 里重跑上面两条 diskutil（内核会自动回退）。
+- 11-09 后续：根设备名替换已撤（存档 out/k27/root-rename-20261109.diff），改为真机式单卷布局：Data 扩到 48 GiB，系统内容拷进 DroidVMSystem，根直接从它启动（`MACOS_ROOT_UUID=4646A7E0-5598-41A2-B158-E1AF6D3CF7FB`）。见 docs/k27-real-disk-layout-plan.md。已起到登录界面，`df /` 是容器空间；11-10 softwareupdate 已能列出 CLT，空间够。
+- 11-10 P5：单卷布局改由 launchd/APFS 原生挂载（Preboot/VM/Update/xART/Hardware/Data 各自成卷，firmlink 原生拼接），`/sbin/mount` shim 已去掉，单卷不再传 `union-hide-lower=1`。工具 k27/disk-tools/setfirmlink.c、k27/disk-tools/mkxart.c（都要进信任缓存）。细节见 docs/k27-real-disk-layout-plan.md 文末。同日删除了内核里 union 布局那一串（union-hide-lower、内核挂 Data/firmlink、SystemOS union 挂载），k27 内核只支持单卷布局，droidvm-app 默认 MACOS_ROOT_UUID=DroidVMSystem。
+- 预期不可用：系统更新（scan 8401，机型 droidvm、根卷未封印）。
+- 工具：在 guest 里用 `echo droid | sudo -S lldb` 调试自己编的小程序，可以在运行时把共享缓存的桩解析成符号（静态 image lookup 解析不了桩岛）；lldb Python 脚本思路是读 adrp/add 得到 GOT，再 ResolveLoadAddress。

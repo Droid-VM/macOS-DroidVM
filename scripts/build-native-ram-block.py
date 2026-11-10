@@ -27,7 +27,25 @@ if text.count(old) != 1 or text.count(start) != 1:
 # com_apple_filesystems_apfs both match IOResources with IOBSD). Published from start(), AppleAPFSContainer::start could run on the new
 # disk first: it takes APFS's module lock and waits for IOResources matched with IOBSD, while that matching waits in
 # com_apple_filesystems_apfs::start for the lock: a deadlock, and the root never appears. Once matched, the container never waits.
+# docs/k27-real-disk-layout-plan.md P5: launchd's mount-phase-1 (apfs_boot_util) must mount the xART volume of
+# the iBoot System Container and aborts without it; it takes for that container the APFS volume of role xART whose nearest plain
+# IOMedia has the Content Hint of an ISC partition. This disk is a whole-disk container (IOBlockStorageDriver gives its IOMedia an
+# empty hint), so the hint is put on that IOMedia once it appears, and the container holds the xART and Hardware volumes too.
 publish = '''#include <kern/thread.h>
+// build-native-ram-block.py: label the whole-disk IOMedia as an iBoot System Container partition (the union layout ignores it)
+static void markSystemContainer(NativeRamBlock *ram)
+{
+  for (int i = 0; i < 300; i++) {
+    IORegistryEntry *driver = ram->getChildEntry(gIOServicePlane);
+    IORegistryEntry *media = driver ? driver->getChildEntry(gIOServicePlane) : nullptr;
+    if (media && media->metaCast("IOMedia")) {
+      media->setProperty("Content Hint", "69646961-6700-11AA-AA11-00306543ECAC");
+      return;
+    }
+    IOSleep(100);
+  }
+}
+
 // build-native-ram-block.py: publish the disk once IOResources has matched IOBSD (APFS deadlocks otherwise)
 static void publishWhenBSDMatched(void *argument, wait_result_t)
 {
@@ -38,6 +56,7 @@ static void publishWhenBSDMatched(void *argument, wait_result_t)
   }
   ram->registerService();
   ram->attachStore();   // this kernel never asks the driver for the Data volume
+  markSystemContainer(ram);
   ram->release();
 }
 

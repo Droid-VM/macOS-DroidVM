@@ -13,7 +13,7 @@ what it held; only its header (page count, seed identity) and the place of each 
 
 The container grows the way Apple's resize leaves a whole-disk container: the superblock's block count and volume limit, the
 space manager's device counts and main free-queue node limit, and new chunks (no bitmap: all free) appended to the chunk-info
-block. Only a growth that still fits the existing chunk-info blocks is handled.
+block, and more chunk-info blocks (from the grown internal pool) when the chunks outgrow them; no chunk-address blocks.
 """
 import mmap
 import os
@@ -42,15 +42,31 @@ def fletcher64(data):
     return struct.pack('<II', c0, c1)
 
 
-def main_fq_node_limit(blocks):
-    """apfsprogs lib/parameters.c"""
-    if blocks < 0x40000:
-        limit = 1 + (blocks - 1) // 4544
-    elif blocks < 0x100000:
-        limit = 116 + (blocks - 261281) // 2272
-    else:
-        limit = 512
-    return 3 if limit == 2 else limit
+def spaceman_expect(block_size, blocks):
+    """The space manager layout APFS expects for a container of BLOCKS blocks: its spaceman_sanity_check compares these with the
+    space manager and refuses the checkpoint on any difference (macOS 27's apfs kext, the function at 0xfffffe0009bbe230 of kc27)."""
+    per_chunk = 8 * block_size
+    per_cib = (block_size - 40) >> 5
+    per_cab = (block_size - 40) >> 3
+    chunks = (blocks + per_chunk - 1) // per_chunk
+    cibs = (chunks + per_cib - 1) // per_cib
+    cabs = (cibs + per_cab - 1) // per_cab
+    cabs = 0 if cabs == 1 else cabs
+    ip_blocks = 3 * (cibs + chunks + cabs)
+    ip_bm_blocks = (((ip_blocks + 63) >> 3 & ~7) + block_size - 1) // block_size
+    unit = (block_size - 96) & 0xffff
+    per_node = (block_size - 96 - ((((18725 * (unit >> 2)) >> 15) & 0x3FFC) + 28 & 0x7FE0)) // 0x30
+    cap = 0x200000 // block_size
+    rounding, shift = (15, 4) if blocks >= 0x100000 else (31, 5) if blocks >= 0x40000 else (63, 6)
+
+    def node_limit(entries):
+        limit = min((per_node - 1 + entries) // per_node, cap)
+        return 3 if limit == 2 else limit
+    main_limit = node_limit((blocks + rounding) >> shift)
+    ip_entries = (ip_blocks + 15) >> 4 if blocks >> 20 else (ip_blocks + 31) >> 5 if blocks >> 18 else (ip_blocks + 63) >> 6
+    return {'per_chunk': per_chunk, 'per_cib': per_cib, 'per_cab': per_cab, 'chunks': chunks, 'cibs': cibs, 'cabs': cabs,
+            'ip_blocks': ip_blocks, 'ip_bm_blocks': ip_bm_blocks, 'ip_fq_node_limit': node_limit(ip_entries),
+            'main_fq_node_limit': main_limit}
 
 
 def max_volumes(size):
@@ -115,29 +131,53 @@ def grow_container(image, blocks):
     if block_size != PAGE or dev_blocks != old_blocks or cab_count or old_blocks % per_chunk:
         raise SystemExit(f'space manager layout unsupported: bs {block_size} blocks {dev_blocks} cabs {cab_count}')
     chunks = (blocks + per_chunk - 1) // per_chunk
-    if (chunks + per_cib - 1) // per_cib != cib_count:
-        raise SystemExit(f'{chunks} chunks need another chunk-info block')
-    cib_block, = struct.unpack_from('<Q', sm, addr_offset + 8 * (cib_count - 1))
-    cib = image.block(cib_block, CIB)
-    cib_xid, = struct.unpack_from('<Q', cib, 16)
-    infos, = struct.unpack_from('<I', cib, 36)
+    new_cib_count = (chunks + per_cib - 1) // per_cib
+    # More chunk-info blocks: their addresses follow the last one in the space manager (no chunk-address blocks), which must have
+    # the room, past the internal-pool bitmap arrays; the blocks themselves come from the grown internal pool.
+    if new_cib_count != cib_count and addr_offset + 8 * new_cib_count > PAGE:
+        raise SystemExit(f'{chunks} chunks need {new_cib_count} chunk-info blocks: no room for their addresses')
+    # every chunk-info block, existing ones at their address and new ones (address None) after them
+    cibs = [[block, image.block(block, CIB)] for block in struct.unpack_from(f'<{cib_count}Q', sm, addr_offset)]
+    cib_xid, = struct.unpack_from('<Q', cibs[-1][1], 16)
+    cibs += [[None, bytearray(PAGE)] for _ in range(new_cib_count - cib_count)]
     added = 0
     for chunk in range(dev_chunks, chunks):
         count = min(per_chunk, blocks - chunk * per_chunk)
-        struct.pack_into('<QQIIQ', cib, 40 + 32 * infos, cib_xid, chunk * per_chunk, count, count, 0)
-        infos += 1
+        struct.pack_into('<QQIIQ', cibs[chunk // per_cib][1], 40 + 32 * (chunk % per_cib), cib_xid, chunk * per_chunk, count, count, 0)
         added += count
-    struct.pack_into('<I', cib, 36, infos)
-    struct.pack_into('<QQ', sm, 48, blocks, chunks)
+    for number, (_, data) in enumerate(cibs):
+        if number >= cib_count:
+            struct.pack_into('<QII', data, 16, cib_xid, 0x40000000 | CIB, 0)
+        struct.pack_into('<II', data, 32, number, min(per_cib, chunks - number * per_cib))
+    struct.pack_into('<QQI', sm, 48, blocks, chunks, new_cib_count)
+    # The tier-2 device's address array follows the main one: APFS (spaceman_sanity_check) refuses a space manager whose main
+    # array runs into it, and mkapfs left room for the chunk-info blocks the container was made with. Tier 2 is unused here.
+    tier2_cibs, tier2_cabs = struct.unpack_from('<II', sm, 96 + 16)
+    tier2_offset, = struct.unpack_from('<I', sm, 96 + 32)
+    if tier2_offset < addr_offset + 8 * new_cib_count:
+        if tier2_cibs or tier2_cabs or addr_offset + 8 * new_cib_count > PAGE:
+            raise SystemExit(f'no room for {new_cib_count} chunk-info addresses before the tier-2 array at {tier2_offset}')
+        struct.pack_into('<I', sm, 96 + 32, addr_offset + 8 * new_cib_count)
     struct.pack_into('<Q', sm, 48 + 24, dev_free + added)
-    struct.pack_into('<H', sm, 200 + 40 + 24, main_fq_node_limit(blocks))   # sm_fq[SFQ_MAIN].sfq_tree_node_limit
-    cib_block = grow_internal_pool(image, sm, cib, cib_block, maps, dev_chunks, chunks + cib_count)
+    expect = spaceman_expect(block_size, blocks)
+    if (expect['chunks'], expect['cibs'], expect['cabs'], expect['per_chunk'], expect['per_cib']) != (chunks, new_cib_count, 0, per_chunk, per_cib):
+        raise SystemExit(f'APFS expects {expect}: unsupported')
+    struct.pack_into('<H', sm, 200 + 24, expect['ip_fq_node_limit'])         # sm_fq[SFQ_IP].sfq_tree_node_limit
+    struct.pack_into('<H', sm, 200 + 40 + 24, expect['main_fq_node_limit'])  # sm_fq[SFQ_MAIN].sfq_tree_node_limit
+    grow_internal_pool(image, sm, cibs, maps, dev_chunks, chunks + new_cib_count)
+    ip_count, = struct.unpack_from('<Q', sm, 152)
+    ip_bm_size, = struct.unpack_from('<I', sm, 160)
+    if ip_count != expect['ip_blocks'] or ip_bm_size != expect['ip_bm_blocks']:
+        raise SystemExit(f'internal pool {ip_count} blocks, bitmap {ip_bm_size}: APFS expects {expect}')
+    for number, (block, data) in enumerate(cibs):
+        struct.pack_into('<Q', data, 8, block)   # o_oid: a physical object's is its address
+        struct.pack_into('<Q', sm, addr_offset + 8 * number, block)
+        image.put(block, data)
     for number, data in ((sb_block, sb), (0, block0)):
         struct.pack_into('<Q', data, 40, blocks)
         struct.pack_into('<I', data, 180, max_volumes(blocks * PAGE))
         image.put(number, data)
     image.put(spaceman_block, sm)
-    image.put(cib_block, cib)
     print(f'container xid {xid}: {old_blocks} -> {blocks} blocks, {dev_chunks} -> {chunks} chunks, +{added} free, '
           f'max volumes {max_volumes(blocks * PAGE)}, changed blocks {sorted(image.changed)}')
     return image.changed
@@ -152,20 +192,27 @@ def bit(data, index, value=None):
         data[index // 8] &= ~(1 << (index % 8)) & 0xff
 
 
-def grow_internal_pool(image, sm, cib, cib_block, maps, first_new_chunk, entries):
+def grow_internal_pool(image, sm, cibs, maps, first_new_chunk, entries):
     """The internal pool (chunk bitmaps, chunk-info blocks) is sized 3 blocks per chunk and chunk-info block (apfsprogs mkapfs,
     checked by apfsck), and is contiguous: the one the container was made with is boxed in by data, so it moves to the start of
     the first new chunk, whole (every block at the same offset: live ones, and those the internal-pool free queue still holds),
-    and grows there. Its references (the chunk-info block's address and object id, every chunk's bitmap address, the free
-    queue's keys) shift by the same distance; the old place goes back to its chunk. Returns the chunk-info block's new address."""
-    per_chunk, = struct.unpack_from('<I', sm, 36)
+    and grows there. Its references (the chunk-info blocks' addresses, every chunk's bitmap address, the free queue's keys)
+    shift by the same distance; the old place goes back to its chunk. CIBS lists [address, block] of every chunk-info block,
+    None for the new ones, which get pool blocks past the first new chunk's bitmap; the addresses are updated in place."""
+    per_chunk, per_cib = struct.unpack_from('<II', sm, 36)
     old_count, = struct.unpack_from('<Q', sm, 152)
     bm_size, bm_blocks, bm_base, old_base = struct.unpack_from('<IIQQ', sm, 160)
     need = 3 * entries
-    if old_count >= need:
-        return cib_block
+    new = [entry for entry in cibs if entry[0] is None]
+    if old_count >= need and not new:
+        return
+    if old_count >= need or old_count + 1 + len(new) > need:
+        raise SystemExit(f'internal pool of {old_count} blocks for {need}, {len(new)} new: unsupported')
     if bm_size != 1 or need > 8 * PAGE or need >= per_chunk:
         raise SystemExit(f'internal pool of {need} blocks: unsupported')
+
+    def info(chunk):
+        return cibs[chunk // per_cib][1], 40 + 32 * (chunk % per_cib)
     new_base = first_new_chunk * per_chunk
     shift = new_base - old_base
     moved = lambda addr: addr + shift if old_base <= addr < old_base + old_count else addr   # noqa: E731
@@ -183,34 +230,34 @@ def grow_internal_pool(image, sm, cib, cib_block, maps, first_new_chunk, entries
         xid, paddr = struct.unpack_from('<QQ', node, keys + k)
         struct.pack_into('<Q', node, keys + k + 8, moved(paddr))
     image.put(fq_block, node)
-    # the pool itself, then what points into it
+    # the pool itself, then what points into it: the existing chunk-info blocks and every chunk's bitmap
     for offset in range(old_count):
         image.map[(new_base + offset) * PAGE:(new_base + offset + 1) * PAGE] = image.map[(old_base + offset) * PAGE:(old_base + offset + 1) * PAGE]
         image.changed.add(new_base + offset)
-    new_cib = moved(cib_block)
-    struct.pack_into('<Q', cib, 8, new_cib)
-    addr_offset, = struct.unpack_from('<I', sm, 48 + 32)
-    cib_count, = struct.unpack_from('<I', sm, 48 + 16)
-    for i in range(cib_count):
-        address, = struct.unpack_from('<Q', sm, addr_offset + 8 * i)
-        struct.pack_into('<Q', sm, addr_offset + 8 * i, moved(address))
-    infos, = struct.unpack_from('<I', cib, 36)
-    for i in range(infos):
-        at = 40 + 32 * i
-        struct.pack_into('<Q', cib, at + 24, moved(struct.unpack_from('<Q', cib, at + 24)[0]))
-    # the current internal-pool bitmap: the new chunk's bitmap takes the first block past the copied pool
+    old_cibs = [entry[0] for entry in cibs]
+    for entry in cibs:
+        if entry[0] is not None:
+            entry[0] = moved(entry[0])
+        data = entry[1]
+        for i in range(struct.unpack_from('<I', data, 36)[0]):
+            at = 40 + 32 * i
+            struct.pack_into('<Q', data, at + 24, moved(struct.unpack_from('<Q', data, at + 24)[0]))
+    # the current internal-pool bitmap: the new chunk's bitmap takes the first block past the copied pool, new chunk-info blocks the next
     bm_index, = struct.unpack_from('<H', sm, struct.unpack_from('<I', sm, 328)[0])
     pool_bitmap = bytearray(image.map[(bm_base + bm_index) * PAGE:(bm_base + bm_index + 1) * PAGE])
     chunk_bitmap = new_base + old_count
     bit(pool_bitmap, old_count, 1)
+    for i, entry in enumerate(new):
+        entry[0] = chunk_bitmap + 1 + i
+        bit(pool_bitmap, old_count + 1 + i, 1)
     image.map[(bm_base + bm_index) * PAGE:(bm_base + bm_index + 1) * PAGE] = bytes(pool_bitmap)
     image.changed.add(bm_base + bm_index)
     # main bitmaps: the old place is free in its chunk, the new pool used in the first new chunk
-    cib_xid, = struct.unpack_from('<Q', cib, 16)
+    cib_xid, = struct.unpack_from('<Q', cibs[0][1], 16)
     old_chunk, new_chunk = old_base // per_chunk, first_new_chunk
     if (old_base + old_count - 1) // per_chunk != old_chunk:
         raise SystemExit('the old internal pool spans chunks: unsupported')
-    at = 40 + 32 * old_chunk
+    cib, at = info(old_chunk)
     _, _, _, free, bitmap_addr = struct.unpack_from('<QQIIQ', cib, at)
     data = bytearray(image.map[bitmap_addr * PAGE:(bitmap_addr + 1) * PAGE])
     for b in range(old_base, old_base + old_count):
@@ -226,16 +273,15 @@ def grow_internal_pool(image, sm, cib, cib_block, maps, first_new_chunk, entries
         bit(data, b, 1)
     image.map[chunk_bitmap * PAGE:(chunk_bitmap + 1) * PAGE] = bytes(data)
     image.changed.add(chunk_bitmap)
-    at = 40 + 32 * new_chunk
+    cib, at = info(new_chunk)
     _, _, count, free, _ = struct.unpack_from('<QQIIQ', cib, at)
     struct.pack_into('<QQIIQ', cib, at, cib_xid, new_chunk * per_chunk, count, free - need, chunk_bitmap)
     dev_free, = struct.unpack_from('<Q', sm, 48 + 24)
     struct.pack_into('<Q', sm, 48 + 24, dev_free + old_count - need)
     struct.pack_into('<Q', sm, 152, need)
     struct.pack_into('<Q', sm, 176, new_base)
-    print(f'internal pool: {old_count} blocks at {old_base} -> {need} at {new_base}, chunk-info block {cib_block} -> {new_cib}, '
-          f'{nkeys} free-queue keys moved')
-    return new_cib
+    print(f'internal pool: {old_count} blocks at {old_base} -> {need} at {new_base}, chunk-info blocks {old_cibs} -> '
+          f'{[entry[0] for entry in cibs]}, {nkeys} free-queue keys moved')
 
 
 def seed_regions(path):
@@ -280,14 +326,12 @@ def make_store(new_seed, store_path, raw, output):
         image = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
     if len(image) != logical:
         raise SystemExit(f'{raw} is {len(image)} bytes, the new seed {logical}')
+    window = 1 + 1 + (pages + 8 * PAGE - 1) // (8 * PAGE) + pages
     with open(output, 'xb') as handle:
-        handle.truncate(len(old.map))
+        handle.truncate(max(len(old.map), window * PAGE))   # a larger seed may need a larger store
         handle.write(old.map[:PAGE])
         handle.write(header(pages, digest, generation))
     new = Store(output, writable=True)
-    window = 1 + 1 + new.bitmap_blocks + pages
-    if window > len(old.map) // PAGE:
-        raise SystemExit(f'{pages} pages need {window} store blocks, the store has {len(old.map) // PAGE}')
     indexes = set(old.present())
     indexes.update(int(n) for n in Path(str(raw) + '.changed').read_text().split())
     seed = {}
