@@ -134,4 +134,4 @@ A2 macOS 校验：工具产出的测试容器（3 GiB：扩容 + System 入组 +
   1. OS cryptex 的解密内容：~~27.2 的 SystemOS cryptex 是 AEA 加密的，宿主上只有 systemos.img~~ 已解决（11-10）：`configs/macos-27.2-26B8125.json` + `macos-fetch-member.py Cryptex1,SystemOS --identity k114sap` 取回，`ipsw fw aea --key` 取 key、`-b KEY -o` 解出 `artifacts/27.2/dec/141-64957-077.dmg`（2.8 GB，裸 APFS，只读挂载见 27.2/26B8125 与 dyld 共享缓存）。.aea 与旧 systemos.img 已删。
   2. 宿主空间：~~只剩约 12 GB~~ 清理后约 49 GB（多数是 /tmp 下旧只读挂载占着已删文件的 loop 设备，卸载后才释放）。
 
-A3/A4 已完成（11-10）：`make-macos-disk.py` 生成 48 GiB 单容器新装盘，七卷经宿主 apfsck 检查，独立实例上机后可登录桌面并通过 SSH 检查卷组、挂载和 firmlink 读写。旧镜像生成脚本已标为旧布局专用；首次 clone 缺少 UEFI 固件的问题已补齐并定向验证。完整结果和原始记录见 [P6 上机验证](k27-real-disk-layout-plan.md#p6-上机验证11-10)。fsck shim 仍保留，去除后的启动未验证。
+A3/A4 已完成（11-10）：`make-macos-disk.py` 生成 48 GiB 单容器新装盘，七卷经宿主 apfsck 检查，独立实例上机后可登录桌面并通过 SSH 检查卷组、挂载和 firmlink 读写。旧镜像生成脚本已标为旧布局专用；首次 clone 缺少 UEFI 固件的问题已补齐并定向验证。完整结果和原始记录见 [P6 上机验证](k27-real-disk-layout-plan.md#p6-上机验证11-10)。fsck shim 已去除，已验证测试盘重启、登录、firmlink 读写及七卷正常卸载；全新 Data 的首次启动和 fsck 任务逐阶段退出码尚未单独验证。

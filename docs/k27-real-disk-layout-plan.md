@@ -208,7 +208,7 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 所以 System 卷直接用原卷，一个字节都不改。systemos.img 以前加的东西都搬到别处：
 - OS/App cryptex 和 cryptexd 状态目录 → Preboot 卷；
 - Data 模板内容 → Data 卷（`/System/Library/Templates/Data`，真机安装器也是这么做的）；
-- mount shim 已不需要；fsck shim 待验证（launchd 的 fsck 任务）。
+- mount shim 已不需要；fsck shim 也已去除，验证范围见下文。
 
 流程：
 1. 从 os.raw 的 GPT 分区取出 APFS 容器。
@@ -229,7 +229,7 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 新装镜像由 `scripts/make-macos-disk.py OUTPUT_DIR` 一步生成（宿主，需要 sudo）：
 - 输入：artifacts/27.2 下的 os.raw、`dec/*.dmg`（SystemOS cryptex，macos-fetch-member.py 下载后用 ipsw fw aea 解密）、`app-cryptex/*.dmg`。
 - 容器直接建在 Data store 的页窗口里：os.raw 用 dd 写到窗口偏移处，apfs-add-volumes 扩到 48 GiB，加 Data（与 System 同组）、Preboot、VM、Update、Hardware、xART。种子是同样大小的空盘（32 字节的 DBRDISK1），整盘都在 store 的覆盖层里，所有有数据的页都标为存在。不需要再拷一份 20 GB。
-- 计划里原想 System 卷一字节不改，这条做不到：内核让 dyld 走 no-ignition（kern_exec.c `native_owner_cache_prepare`），没有东西把 Preboot 里的 cryptex graft 上来，而 launchd 和挂载阶段在 Preboot 挂上之前就要用共享缓存。所以 OS cryptex 合并进 System 卷，Preboot 里放 `Cryptexes/OS -> /`，与现在机器上的布局一致。fsck shim 默认保留（原版另存为 fsck.real，`--no-fsck-shim` 可去掉，待上机验证）。
+- 计划里原想 System 卷一字节不改，这条做不到：内核让 dyld 走 no-ignition（kern_exec.c `native_owner_cache_prepare`），没有东西把 Preboot 里的 cryptex graft 上来，而 launchd 和挂载阶段在 Preboot 挂上之前就要用共享缓存。所以 OS cryptex 合并进 System 卷，Preboot 里放 `Cryptexes/OS -> /`，与现在机器上的布局一致。`/sbin/fsck` 保留 Apple 原版，不再安装 bring-up shim。
 - Data：整份 /System/Library/Templates/Data（不再受 256 MiB 种子限制，旧脚本的 DroidVMData 链接不再需要）。
 - 用户、GPU 插件等由 `stage-gpu-plugin.py --base DIR/scratch-data.img --disk DIR/data-store.img` 原地写入；stage-gpu-plugin 现在在所有模式下都按角色找 Data 卷。
 - 手机侧：`droidvm-app.py install DIR` 只传有数据的段，不会覆盖已有 store；`MACOS_INSTANCE=NAME` 在 MacOS-NAME 目录里放第二台 VM，`clone BOOT_IMG` 复制主 VM 的 App 配置。
@@ -249,7 +249,7 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 - `/Users`、`/Library`、`/Applications`、`/private` 与 Data 下对应目录的设备号和 inode 相同；`/Users/droid/../..` 回到 `/`；经 `/Users` 写入后从 Data 路径读回一致，临时文件已删除。
 - WindowServer、loginwindow、Dock、Finder、SystemUIServer、fseventsd、mds、kernelmanagerd 均在运行。Data 已用约 3.3 GiB，容器剩余约 25 GiB。
 - 首次 clone 漏了 UEFI 固件，报 `failed to open kernel image .../edk2-macos.fd`；clone 现同步复制实例目录内的固件。临时实例注册和固件 SHA-256 对比通过，临时实例已删除。
-- 旧 SystemOS/Data 种子生成脚本已标为旧布局专用。`/sbin/fsck` shim 仍保留，尚未验证去掉它的启动路径。
+- 旧 SystemOS/Data 种子生成脚本已标为旧布局专用。本次初验仍使用 `/sbin/fsck` shim；后续去除验证见下文。
 
 本轮原始记录：[SSH 系统和挂载](../out/p6-validation-2026-11-10/guest.txt)、[firmlink](../out/p6-validation-2026-11-10/firmlinks.txt)、[root 检查](../out/p6-validation-2026-11-10/root.txt)、[桌面截图](../out/p6-validation-2026-11-10/desktop.png)。生成和宿主校验记录仍在 `out/a0test/`。
 
@@ -264,4 +264,17 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 修复：`patches/linux-apfs-rw/0001-user-data-block-counters.patch`，元数据路径只更新 `fs_alloc_count`，累计计数留给数据 extent 路径。宿主模块已用 `make LLVM=-21` 重编并加载。
 - 同一 1 GiB 空卷上创建 1400 文件、删半数、再写 700 文件：旧驱动累计净分配 3719，实际用户数据 3500，差 219；新驱动净分配 3500，差 0，元数据均为 224 块，总分配均为 3724 块。
 - 新镜像通过 Linux apfsck 和 Apple fsck_apfs；Apple 只读挂载、读取 1400 文件、卸载后不再报 mismatch；旧镜像同样操作复现 `3724 != 3943`。
-- [旧计数](../out/p6-fsck-2026-11-10/counts-before.json)、[新计数](../out/p6-fsck-2026-11-10/counts-after.json)、[Apple 旧镜像日志](../out/p6-fsck-2026-11-10/apple-fixtures.txt)、[Apple 新镜像日志](../out/p6-fsck-2026-11-10/apple-after.txt)、[复现脚本](../out/p6-fsck-2026-11-10/write-fixture.py)。旧产物的累计字段不会因重编模块自动恢复，应重新生成或单独校正。fsck shim 去除测试仍待做。
+- [旧计数](../out/p6-fsck-2026-11-10/counts-before.json)、[新计数](../out/p6-fsck-2026-11-10/counts-after.json)、[Apple 旧镜像日志](../out/p6-fsck-2026-11-10/apple-fixtures.txt)、[Apple 新镜像日志](../out/p6-fsck-2026-11-10/apple-after.txt)、[复现脚本](../out/p6-fsck-2026-11-10/write-fixture.py)。旧产物的累计字段不会因重编模块自动恢复，应重新生成或单独校正。fsck shim 去除测试已完成，见下文。
+
+
+### 原版 fsck 启动及关机验证（11-10）
+
+测试实例停机后，在 COW 副本内恢复原版 `/sbin/fsck`，并校正旧 Linux APFS 驱动留下的累计分配字段（System、Preboot、Data）；未改 `fs_alloc_count`。只将差异块写回已停止的测试盘，保留原字节备份和写后比对。主 VM 及宿主原始产物未校正。
+
+- 原版 fsck 为 135152 字节，SHA-256 `9fe1cc4e195431152025f619981294386803f99fc21a04a937e2ea4b7938bcbf`，没有 fsck.real；重启可达登录窗口和 SSH。
+- 用户登录 droid 后，SSH 确认 console 属主 droid，WindowServer、Dock、Finder、SystemUIServer 运行；七卷挂载正确，四组 firmlink 的设备号/inode 相同，写入读回和 `..` 跳转通过。[桌面进程与读写记录](../out/p6-fsck-2026-11-10/no-shim-desktop.txt)。
+- 正常 shutdown 后七卷全部卸载，`numMountedAPFSVolumes 0`、`CPU halted`，日志没有 `fs_alloc_count mismatch`。[关机日志](../out/p6-fsck-2026-11-10/no-shim-shutdown.txt)。随后 daemon stop。
+- `make-macos-disk.py` 已去掉 fsck shim 的安装逻辑和命令行开关，新生成盘保留 Apple 原版 fsck；旧布局脚本的 shim 暂留。
+- 收尾 13 项 unittest 全部通过；测试实例 STOPPED，主实例恢复 RUNNING，SSH 确认根为 `/dev/disk1s2`。[恢复记录](../out/p6-fsck-2026-11-10/main-restored.txt)。
+
+范围：使用已完成首次登录的测试盘做恢复原版 fsck 后的重启验证，尚未单独验证全新 Data 的首次启动；未捕获 launchd fsck 任务的逐阶段退出码，不能把正常启动等同于该任务退出码已确认。旧产物应重做或单独校正累计字段，加载新模块本身不会修复旧字段。测试记录见 `out/p6-fsck-2026-11-10/`。

@@ -3,7 +3,7 @@
 container holding the IPSW's System volume as the root, in a volume group with a new Data volume, and Preboot, VM, Update, Hardware
 and xART volumes, the way an installed Mac's internal container is laid out.
 
-    make-macos-disk.py [--size-gib 48] [--data-uuid UUID] [--no-fsck-shim] OUTPUT_DIR        [MACOS_TAG=27.2]
+    make-macos-disk.py [--size-gib 48] [--data-uuid UUID] OUTPUT_DIR        [MACOS_TAG=27.2]
 
 Inputs (artifacts/TAG): os.raw (the OS member, a bare APFS container whose only volume is the System volume), dec/*.dmg (Cryptex1,SystemOS
 decrypted: macos-fetch-member.py, then ipsw fw aea), app-cryptex/*.dmg (Cryptex1,AppOS).
@@ -11,8 +11,7 @@ decrypted: macos-fetch-member.py, then ipsw fw aea), app-cryptex/*.dmg (Cryptex1
 What goes where:
 - System volume (os.raw's, firmlinks and mount points as Apple made them): the SystemOS cryptex's content merged in. The kernel
   starts dyld without ignition (kern_exec.c native_owner_cache_prepare), so nothing grafts the cryptex from Preboot: launchd and the
-  mount phases need the shared cache on the root before Preboot is mounted. /sbin/fsck is the bring-up shim (overlay/systemos-shims;
-  the original kept as fsck.real) unless --no-fsck-shim.
+  mount phases need the shared cache on the root before Preboot is mounted. /sbin/fsck remains Apple's original binary.
 - Preboot: Cryptexes/OS -> / (the cryptex is on the root), Cryptexes/App (the AppOS cryptex, where /System/Cryptexes/App leads), the
   state directory cryptexd opens. The same under the root's own /System/Volumes/Preboot, which is what shows until Preboot is mounted.
 - Data: /System/Library/Templates/Data of the System volume, as macOS's installer fills it. Users, the Metal plugin and the rest are
@@ -47,7 +46,6 @@ grow = volumes.grow
 TAG = os.environ.get('MACOS_TAG', '27.2')
 ARTIFACTS = ROOT / f'artifacts/{TAG}'
 APFS_KO = ROOT / 'sources/linux-apfs-rw/apfs.ko'
-FSCK_SHIM = ROOT / 'overlay/systemos-shims/sbin/fsck'
 LABEL = b'DroidVMDataStore\x01\x00\x00\x00'   # run-macos-vm.py ensure_store
 # as on the live disk (docs/k27-real-disk-layout-plan.md P5): Data in the System volume's group; Update, VM, Hardware, xART beside
 OTHER_VOLUMES = [('Preboot', 'B'), ('VM', 'V'), ('Update', 'E'), ('Hardware', 'H'), ('xART', 'X')]
@@ -85,7 +83,7 @@ def build_container(store_path, offset, logical, data_uuid):
     return volumes.role_volumes(grow.Image(store_path, offset, logical))
 
 
-def fill(loop, roles, scratch, fsck_shim):
+def fill(loop, roles, scratch):
     """One volume of the container mounted at a time (read-write), its source read-only from another image: with the System,
     Preboot and Data volumes mounted together, the Linux apfs-rw driver crashed the host twice in the cryptex's copy (apfs_node_query
     on a freed node; memory devbox-apfs-rw-panic-make-macos-disk). The Data template is read from os.raw, not the System volume."""
@@ -110,9 +108,6 @@ def fill(loop, roles, scratch, fsck_shim):
 
     def system(target, cryptex):
         sudo('rsync', '-aH', '--numeric-ids', *[f'--exclude={e}' for e in CRYPTEX_EXCLUDES], f'{cryptex}/', f'{target}/')
-        if fsck_shim:
-            sudo('mv', target / 'sbin/fsck', target / 'sbin/fsck.real')
-            sudo('install', '-o', '0', '-g', '0', '-m', '755', FSCK_SHIM, target / 'sbin/fsck')
         preboot_dirs(target / 'System/Volumes/Preboot')
 
     def preboot_dirs(base):
@@ -140,7 +135,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--size-gib', type=int, default=48)
     parser.add_argument('--data-uuid', default=None)
-    parser.add_argument('--no-fsck-shim', action='store_true')
     parser.add_argument('output', type=Path)
     args = parser.parse_args()
     logical = args.size_gib << 30
@@ -168,7 +162,7 @@ def main():
                                     str(store_path)], text=True).strip()
     try:
         with tempfile.TemporaryDirectory(prefix='macos-disk-', dir=str(args.output)) as scratch:
-            fill(loop, roles, Path(scratch), not args.no_fsck_shim)
+            fill(loop, roles, Path(scratch))
     finally:
         sudo('losetup', '-d', loop)
 
