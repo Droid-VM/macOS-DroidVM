@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Legacy union layout only: current k27 kernels need make-macos-disk.py instead.
 # Build the SystemOS disk of a macOS root for the virtual machine board on a Linux host with sudo (run on .53).
 #
 #   make-macos-systemos.sh APFSPROGS_DIR APFS_KO CRYPTEX OS_IMAGE OUTPUT [SIZE_MIB]

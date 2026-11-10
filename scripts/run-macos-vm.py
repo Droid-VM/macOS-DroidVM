@@ -28,6 +28,11 @@ import phone_pool  # noqa: E402
 APP = '/data/data/cn.classfun.droidvm/usr'
 CROSVM = APP + '/bin/crosvm-mmio'
 FOLDER = '/data/media/0/DroidVM/MacOS'              # /storage/emulated/0/DroidVM/MacOS: the images the app's VM and the test runs share
+# MACOS_INSTANCE=NAME: a second VM beside the usual one (its own folder MacOS-NAME, data store and App entry), e.g. a new install
+# (make-macos-disk.py) tried without touching the VM in use
+INSTANCE = os.environ.get('MACOS_INSTANCE', '')
+if INSTANCE:
+    FOLDER += '-' + INSTANCE
 OWNER = 'u0_a258:media_rw'                          # the owner of the DroidVM folder; the daemon opens leased disks as the app
 STORE = FOLDER + '/data-store.img'
 STORE_GIB = 16

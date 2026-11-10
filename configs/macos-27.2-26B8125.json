@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "macos-27.2-26B8125-touch-mbp",
+  "status": "metadata-only-not-boot-qualified",
+  "ipsw": {
+    "identifier": "Mac17,10",
+    "version": "27.2",
+    "buildid": "26B8125",
+    "url": "https://updates.cdn-apple.com/2026FallFCS/b83bb963-ebd8-4608-8b5d-fdc70cb24927/UniversalMac_27.2_26B8125_Restore.ipsw",
+    "filesize": 20928022286,
+    "manifest_sha256": "9316576826c0fc69beb12b45fffa5657f003b63b4a9d44248634fc042cecd5a2"
+  }
+}

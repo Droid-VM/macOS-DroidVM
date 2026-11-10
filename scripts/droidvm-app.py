@@ -21,6 +21,13 @@
                                                          made in the app; then boot
   droidvm-app.py store-patch                             write out/metal/stage/store-patch.{bin,txt} (stage-gpu-plugin.py --store) into
                                                          the stopped VM's Data store, the blocks it replaces saved beside it first
+  droidvm-app.py install DIR                             put a new install (make-macos-disk.py's DIR) on the phone as the Data store,
+                                                         only its data (the file is mostly holes); never over an existing store. Then
+                                                         `prepare` with MACOS_DATA_SEED=DIR/scratch-data.img and MACOS_ROOT_UUID from
+                                                         DIR/disk.json (MACOS_INSTANCE: beside the VM in use)
+  droidvm-app.py clone BOOT_IMG                          (MACOS_INSTANCE) register this instance as a copy of the usual VM's App entry
+                                                         (every setting made in the app kept; only its id, name and folder differ)
+                                                         with BOOT_IMG as its boot disk; never over an existing entry
   droidvm-app.py start|stop|status
 
 The daemon plumbing (IPC, configuration transaction, VM template) is the iOS tool's (ios/tools/droidvm-app.py, imported and
@@ -28,9 +35,11 @@ parameterised, never written to). The boot disk rides in "extra_options" as --bl
 SystemOS and Data disks are --virtio-mmio-block like in run-macos-vm.py.
 """
 import argparse
+import hashlib
 import os
 import importlib.util
 import json
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -60,8 +69,8 @@ os.environ.setdefault('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF7FB')
 run = load(ROOT / 'scripts/run-macos-vm.py', 'run_macos_vm')
 
 FOLDER = run.FOLDER
-VM_NAME = 'macOS 27 (DroidVM)'
-VM_ID = str(uuid.uuid5(uuid.NAMESPACE_DNS, 'macos-14.6.1.droidvm.macos'))
+VM_NAME = 'macOS 27 (DroidVM)' + (f' {run.INSTANCE}' if run.INSTANCE else '')
+VM_ID = str(uuid.uuid5(uuid.NAMESPACE_DNS, 'macos-14.6.1.droidvm.macos' + (f'.{run.INSTANCE}' if run.INSTANCE else '')))
 # MACOS_CPUS: vCPUs. Gunyah's idle vCPUs stay runnable on the host (WFI does not return), so eight of them on the eight cores left
 # the host's GPU proxy, display blit and SurfaceFlinger competing with them, and WindowServer's vCPU was descheduled for whole
 # frames (the guest's timers ran up to 0.5 s late during a window drag).
@@ -72,7 +81,7 @@ CPUS = int(os.environ.get('MACOS_CPUS') or 8)
 HOST_CORES = int(os.environ.get('MACOS_HOST_CORES') or 8)
 CPU_AFFINITY = '' if os.environ.get('MACOS_CPU_PIN') == '1' else ':'.join(f'{i}=0-{HOST_CORES - 1}' for i in range(CPUS))
 MEM_MB = int(os.environ.get('MACOS_MEM_MB') or 5120)   # MACOS_MEM_MB: the host's hugepage pool may not supply more (STARTING)
-OUT = ROOT / 'out/app'
+OUT = ROOT / 'out/app' / run.INSTANCE if run.INSTANCE else ROOT / 'out/app'
 BOOT = FOLDER + '/boot.img'
 DTB = FOLDER + '/generated.dtb'
 # MACOS_GPU=1: Metal (DroidVMGpu's NativeAdreno, Turnip) on the virtio GPU's 3D (vgpu-3d=1, drm2kgsl on the host): needs
@@ -392,11 +401,85 @@ def store_patch(args):
     print(sh(f'ls -la {store} {undo}.bin'))
 
 
+def install(args):
+    disk = Path(args.dir)
+    layout = json.loads((disk / 'disk.json').read_text())
+    if run.ROOT_UUID != layout['system']['uuid']:
+        raise SystemExit(f'MACOS_ROOT_UUID={layout["system"]["uuid"]} (the System volume of {disk})')
+    if sh(f'test -e {run.STORE} && echo yes', check=False).strip() == 'yes':
+        raise SystemExit(f'{run.STORE} exists: not replaced (it is a VM\'s Data); MACOS_INSTANCE for a VM beside it')
+    source = disk / layout['store']
+    part = run.STORE + '.part'
+    size = source.stat().st_size
+    sh(f'mkdir -p {FOLDER} && rm -f {part} && truncate -s {size} {part}')
+    with source.open('rb') as handle:
+        fd, at, runs = handle.fileno(), 0, []
+        while at < size:
+            try:
+                start = os.lseek(fd, at, os.SEEK_DATA)
+            except OSError:
+                break
+            at = os.lseek(fd, start, os.SEEK_HOLE)
+            runs.append((start, at))
+        for start, end in runs:
+            print(f'{start >> 20} MiB: {(end - start) >> 20} MiB', flush=True)
+            handle.seek(start)
+            writer = subprocess.Popen(['adb', '-s', ios.SERIAL, 'exec-in', f'dd of={part} bs=4096 seek={start // 4096} conv=notrunc 2>/dev/null'],
+                                      stdin=subprocess.PIPE)
+            left = end - start
+            while left:
+                chunk = handle.read(min(left, 8 << 20))
+                writer.stdin.write(chunk)
+                left -= len(chunk)
+            writer.stdin.close()
+            if writer.wait():
+                raise SystemExit('adb exec-in dd failed')
+    # the whole file read back would take as long as the push: compare the store's first blocks (label, header, bitmap) and the last run's end
+    with source.open('rb') as handle:
+        head = hashlib.sha256(handle.read(1 << 20)).hexdigest()
+    remote = sh(f'head -c 1048576 {part} | sha256sum').split()[0]
+    if remote != head:
+        raise SystemExit(f'{part}: first MiB differs')
+    sh(f'mv {part} {run.STORE} && chown {run.OWNER} {run.STORE} && chmod 660 {run.STORE}')
+    print(f'{run.STORE}: {sum(e - s for s, e in runs) >> 20} MiB in {len(runs)} runs; seed {disk / layout["seed"]}')
+
+
+def clone(args):
+    if not run.INSTANCE:
+        raise SystemExit('clone makes a second VM: set MACOS_INSTANCE')
+    ipc = ios.Ipc()
+    base_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, 'macos-14.6.1.droidvm.macos'))
+    current = {vm['id']: vm for vm in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms']}
+    if VM_ID in current:
+        raise SystemExit(f'{VM_NAME} ({VM_ID}) is registered already')
+    base_folder = FOLDER[:-len('-' + run.INSTANCE)]
+    vm = json.loads(json.dumps(current[base_id]).replace(base_folder + '/', FOLDER + '/'))
+    vm.update({'id': VM_ID, 'name': VM_NAME})
+    sh(f'mkdir -p {FOLDER}')
+    firmware = vm.get('boot', {}).get('uefi', {}).get('firmware', '')
+    if firmware.startswith(FOLDER + '/'):
+        source = base_folder + firmware[len(FOLDER):]
+        sh(f'mkdir -p {shlex.quote(str(Path(firmware).parent))} && '
+           f'cp -p {shlex.quote(source)} {shlex.quote(firmware)}')
+    adb('push', args.boot_img, BOOT, timeout=900)
+    fix_owner(BOOT)
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'create', 'config': vm}])
+    print('create', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
+    if not reply.get('success'):
+        raise SystemExit(1)
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / 'vm.json').write_text(json.dumps(vm, indent=1) + '\n')
+    print('registered', VM_ID, json.dumps(vm.get('extra_options')))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest='cmd', required=True)
     for name in ('prepare', 'boot'):
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
+    sub.add_parser('install').add_argument('dir')
+    sub.add_parser('clone').add_argument('boot_img')
     for name in ('push', 'register', 'disks', 'net', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
@@ -418,6 +501,10 @@ def main():
         media(args)
     elif args.cmd == 'store-patch':
         store_patch(args)
+    elif args.cmd == 'install':
+        install(args)
+    elif args.cmd == 'clone':
+        clone(args)
     else:
         {'register': ios.register, 'start': ios.start}[args.cmd](args)
 

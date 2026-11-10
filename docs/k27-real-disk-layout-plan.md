@@ -195,3 +195,60 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 保留的诊断开关：mount-log、symlink-log、k27-mkdir-log。27.2 的 rename-swap 通知也保留。
 
 从此 k27 内核只能起单卷布局。`droidvm-app.py` 的 `MACOS_ROOT_UUID` 默认是 DroidVMSystem，设成空串才是旧 union 布局（只给旧内核用）。上机验证：挂载与真机一致，firmlink 和 `..` 正常，fseventsd、mds、kernelmanagerd、WindowServer、loginwindow 都在跑。
+
+## P6 生成脚本适配（新装启动已验证，11-10）
+
+现状：生成脚本还在做 union 布局（make-macos-systemos.sh、make-macos-data-seed.sh、run-macos-vm.py 的 os/systemos），新内核已经起不来它们做出的镜像。手机上现在的盘是旧种子 + 覆盖层再在 guest 里手工迁移来的，从 IPSW 重做不出来。
+
+已核实（os.raw 只读挂载）：
+- os.raw 容器里只有一个卷：原版密封 System 卷 “Macintosh HD”。
+- 它自带全部 firmlink：源目录为空，带 `com.apple.fs.firmlink` xattr，值是相对 Data 根的路径，与 /usr/share/firmlinks 一致。根目录的 var/etc/tmp 链接齐全，System/Volumes 下的挂载点也齐全。
+- `/System/Cryptexes/{OS,App,…}` 都是指向 `../../System/Volumes/Preboot/Cryptexes/…` 的链接。真机在 Preboot 里挂 cryptex，这里在 Preboot 卷里放普通目录即可。
+
+所以 System 卷直接用原卷，一个字节都不改。systemos.img 以前加的东西都搬到别处：
+- OS/App cryptex 和 cryptexd 状态目录 → Preboot 卷；
+- Data 模板内容 → Data 卷（`/System/Library/Templates/Data`，真机安装器也是这么做的）；
+- mount shim 已不需要；fsck shim 待验证（launchd 的 fsck 任务）。
+
+流程：
+1. 从 os.raw 的 GPT 分区取出 APFS 容器。
+2. 结构步骤（要 macOS 的 diskutil）：在原容器里加 Data（role D，与 System 同组）、Preboot、VM、Hardware 和 xART（mkxart）。
+   - 在 guest 里对挂进来的镜像做，镜像放在宿主网络共享上，guest 用 hdiutil attach，不占 guest 和 Data store 的空间。
+   - 只依赖 os.raw，每个系统版本做一次，结果缓存在 artifacts/TAG/ 下。
+3. 宿主扩容：复用 grow-data-store.py 的扩容逻辑，加一个裸容器模式。
+4. 宿主用 Linux apfs-rw 按卷号挂载填内容：
+   - Preboot：cryptex；
+   - Data：模板，加上 make-macos-data-seed.sh、stage-gpu-plugin.py 的定制（用户、任务、GPU 插件）。
+5. 打包：全零种子 + 一个含全部非零页的 store。种子打包后极小，逻辑上限 1 TiB；store 格式本来就是页覆盖。
+6. 清理旧脚本：make-macos-systemos.sh 等标为仅旧内核使用，或删除。stage-gpu-plugin.py 挂 Data 时要显式按卷号或角色挂，现在默认挂第 0 个卷。
+
+不动用户现有的种子和 store：新流程只用于新装。
+
+### P6 进展（11-10）
+
+新装镜像由 `scripts/make-macos-disk.py OUTPUT_DIR` 一步生成（宿主，需要 sudo）：
+- 输入：artifacts/27.2 下的 os.raw、`dec/*.dmg`（SystemOS cryptex，macos-fetch-member.py 下载后用 ipsw fw aea 解密）、`app-cryptex/*.dmg`。
+- 容器直接建在 Data store 的页窗口里：os.raw 用 dd 写到窗口偏移处，apfs-add-volumes 扩到 48 GiB，加 Data（与 System 同组）、Preboot、VM、Update、Hardware、xART。种子是同样大小的空盘（32 字节的 DBRDISK1），整盘都在 store 的覆盖层里，所有有数据的页都标为存在。不需要再拷一份 20 GB。
+- 计划里原想 System 卷一字节不改，这条做不到：内核让 dyld 走 no-ignition（kern_exec.c `native_owner_cache_prepare`），没有东西把 Preboot 里的 cryptex graft 上来，而 launchd 和挂载阶段在 Preboot 挂上之前就要用共享缓存。所以 OS cryptex 合并进 System 卷，Preboot 里放 `Cryptexes/OS -> /`，与现在机器上的布局一致。fsck shim 默认保留（原版另存为 fsck.real，`--no-fsck-shim` 可去掉，待上机验证）。
+- Data：整份 /System/Library/Templates/Data（不再受 256 MiB 种子限制，旧脚本的 DroidVMData 链接不再需要）。
+- 用户、GPU 插件等由 `stage-gpu-plugin.py --base DIR/scratch-data.img --disk DIR/data-store.img` 原地写入；stage-gpu-plugin 现在在所有模式下都按角色找 Data 卷。
+- 手机侧：`droidvm-app.py install DIR` 只传有数据的段，不会覆盖已有 store；`MACOS_INSTANCE=NAME` 在 MacOS-NAME 目录里放第二台 VM，`clone BOOT_IMG` 复制主 VM 的 App 配置。
+
+坑：
+- Linux apfs-rw 同时以读写方式挂同一容器的多个卷时，开发机两次内核 panic（apfs_node_query UAF）。现在每次只读写挂一个卷，源从别的镜像只读挂（Data 模板读 os.raw）。
+- mkapfs 用自己的 euid 作新卷根目录属主：apfs-add-volumes 改用 `unshare -r` 跑 mkapfs，卷根为 root:wheel。
+- apfsck 检查 Apple 原版 System 卷不要加 `-u`（cloneinfo epoch 报 not supported 后直接退出）；`-cw` 的退出码 1 只是因为有 weird 提示（压缩元数据），不算错误。
+
+结果：apfsck 全容器通过；7 个卷，System UUID 354D4F10-…，store 约 20 GB 数据。
+
+### P6 上机验证（11-10）
+
+新实例 `macOS 27 (DroidVM) new`（`MacOS-new/`，VM ID `e38b5f50-8527-5d1f-b687-1b42f8d260f0`）已启动，droid/droid 登录桌面成功，用户开启远程登录后 SSH `droid@192.168.1.196` 可用。
+- 系统为 macOS 27.2 / 26B8125，内核 Darwin 25.5.0。System UUID `354D4F10-9A79-4243-BA00-60FAB89D7561`；System/Data 同组，组 UUID 等于 Data UUID `3E85A466-1B38-4F91-A4F1-696737AFE9AF`。
+- 七卷均已挂载：System 只读根，Data 为 root data，Preboot、VM、Update、Hardware、xART 各在标准挂载点。未取到 apfs_boot_util 的阶段日志，不把挂载结果记成逐阶段退出码验证。
+- `/Users`、`/Library`、`/Applications`、`/private` 与 Data 下对应目录的设备号和 inode 相同；`/Users/droid/../..` 回到 `/`；经 `/Users` 写入后从 Data 路径读回一致，临时文件已删除。
+- WindowServer、loginwindow、Dock、Finder、SystemUIServer、fseventsd、mds、kernelmanagerd 均在运行。Data 已用约 3.3 GiB，容器剩余约 25 GiB。
+- 首次 clone 漏了 UEFI 固件，报 `failed to open kernel image .../edk2-macos.fd`；clone 现同步复制实例目录内的固件。临时实例注册和固件 SHA-256 对比通过，临时实例已删除。
+- 旧 SystemOS/Data 种子生成脚本已标为旧布局专用。`/sbin/fsck` shim 仍保留，尚未验证去掉它的启动路径。
+
+本轮原始记录：[SSH 系统和挂载](../out/p6-validation-2026-11-10/guest.txt)、[firmlink](../out/p6-validation-2026-11-10/firmlinks.txt)、[root 检查](../out/p6-validation-2026-11-10/root.txt)、[桌面截图](../out/p6-validation-2026-11-10/desktop.png)。生成和宿主校验记录仍在 `out/a0test/`。

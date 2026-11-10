@@ -3,6 +3,7 @@ it NativeRamBlock's SHNGDATA overlay over the Data seed (sources/UniXNU/drivers/
 seed's identity, a presence bitmap with one bit per page of the disk, then page i at a fixed block. Used by fold-overlay.py (the
 overlay into a new seed) and stage-gpu-plugin.py --store (a change to the Data volume written back into the overlay, the seed kept)."""
 import mmap
+import os
 import sys
 from pathlib import Path
 
@@ -84,6 +85,31 @@ class Store:
                     before = self.page(index) if self.has(index) else seed.get(index, zero)
                     if data != before:
                         self.put(index, data)
+
+    def window(self):
+        """The byte offset of page 0 in the file: the whole disk as one image from there (make-macos-disk.py mounts it through a
+        loop device with this offset)."""
+        return (2 + self.bitmap_blocks) * PAGE
+
+    def mark_data(self):
+        """Set the bit of every page the file holds data for (written in place through window(), not with put()). Returns the number
+        of pages present."""
+        with open(self.path, 'rb') as handle:
+            fd = handle.fileno()
+            base, end = self.window(), self.window() + self.pages * PAGE
+            at = base
+            while at < end:
+                try:
+                    start = os.lseek(fd, at, os.SEEK_DATA)
+                except OSError:
+                    break
+                if start >= end:
+                    break
+                stop = min(os.lseek(fd, start, os.SEEK_HOLE), end)
+                for index in range((start - base) // PAGE, (stop - base + PAGE - 1) // PAGE):
+                    self.map[2 * PAGE + index // 8] |= 1 << (index % 8)
+                at = stop
+        return sum(1 for _ in self.present())
 
     def runs(self):
         """The written store blocks as (first, count) runs."""

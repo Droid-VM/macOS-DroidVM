@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Legacy separate Data seed only: current k27 installs use make-macos-disk.py.
 # Build the Data volume seed of a macOS root for the virtual machine board on a Linux host with sudo (run on .53).
 #
 #   make-macos-data-seed.sh APFSPROGS_DIR APFS_KO PACKED_RAMDISK_PY OS_IMAGE OUTPUT_DIR [SIZE_MIB]

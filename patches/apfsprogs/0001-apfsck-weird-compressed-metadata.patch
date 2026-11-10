@@ -1,0 +1,77 @@
+apfsck: a resource-compressed file whose block metadata runs past its resource fork is weird, not an error
+
+macOS 27.2's own system volume (os.raw of the IPSW) has such files: apfsck stopped at the first one, so it could not check the
+container scripts/apfs-add-volumes.py writes. The file's compressed data is left unchecked; on top of apfsprogs 1bd1c1c.
+Apply: git -C sources/apfsprogs apply ../../patches/apfsprogs/0001-apfsck-weird-compressed-metadata.patch
+
+diff --git a/apfsck/compress.c b/apfsck/compress.c
+index a12e91f..fa7c68c 100644
+--- a/apfsck/compress.c
++++ b/apfsck/compress.c
+@@ -60,7 +60,7 @@ static inline bool apfs_compressed_in_dstream(struct compress *compress)
+     return compress->rsrc_dstream && !compress->rsrc_dstream->d_inline;
+ }
+ 
+-void apfs_compress_open(struct compress *compress)
++bool apfs_compress_open(struct compress *compress)
+ {
+     struct dstream *rsrc = compress->rsrc_dstream;
+     struct apfs_compress_file_data *fd;
+@@ -103,8 +103,14 @@ void apfs_compress_open(struct compress *compress)
+         compress->data_offs = be32_to_cpu(rsrc_hdr->data_offs);
+         compress->data_size = be32_to_cpu(rsrc_hdr->data_size);
+         data_end = compress->data_offs + compress->data_size;
+-        if(data_end < compress->data_offs || data_end > fd->size)
+-            report("Resource compressed file", "block metadata is too big.");
++        if(data_end < compress->data_offs || data_end > fd->size) {
++            /* macOS 27's own system volume has such files: not an error of the container */
++            report_weird("Resource compressed file: block metadata is too big");
++            free(fd->data);
++            free(fd->buf);
++            free(fd);
++            return false;
++        }
+ 
+         if(compress->data_size < sizeof(*rsrc_data))
+             report("Resource compressed file", "block metadata header won't fit.");
+@@ -185,6 +191,7 @@ void apfs_compress_open(struct compress *compress)
+         }
+     }
+     compress->compress_data = fd;
++    return true;
+ }
+ 
+ /* If @buf is NULL, just return the size */
+diff --git a/apfsck/compress.h b/apfsck/compress.h
+index e4c4cb1..34c524a 100644
+--- a/apfsck/compress.h
++++ b/apfsck/compress.h
+@@ -28,7 +28,7 @@ struct compress {
+ 	struct apfs_compress_file_data *compress_data;
+ };
+ 
+-extern void apfs_compress_open(struct compress *compress);
++extern bool apfs_compress_open(struct compress *compress);
+ extern void apfs_compress_check(struct compress *compress);
+ extern ssize_t apfs_compress_read(struct compress *compress, char *buf, size_t size, loff_t *off);
+ extern void apfs_compress_close(struct compress *compress);
+diff --git a/apfsck/inode.c b/apfsck/inode.c
+index 7ee9d24..936c07f 100644
+--- a/apfsck/inode.c
++++ b/apfsck/inode.c
+@@ -252,10 +252,11 @@ static void free_inode(struct htable_entry *entry)
+ 	cnid_set_state_flag(cnid, CNID_IN_INODE);
+ 
+ 	if (compress) {
+-		apfs_compress_open(compress);
+-		apfs_compress_check(compress);
+-		verify_dstream_hashes(compress->rsrc_dstream, compress);
+-		apfs_compress_close(compress);
++		if (apfs_compress_open(compress)) {
++			apfs_compress_check(compress);
++			verify_dstream_hashes(compress->rsrc_dstream, compress);
++			apfs_compress_close(compress);
++		}
+ 		free(compress->decmpfs);
+ 		free(compress);
+ 		inode->i_compress = NULL;

@@ -30,6 +30,10 @@ changes made, and every page that came out different is written into STORE's ove
 store stale (it only applies to the exact seed it was made against: an empty Data volume), and a used one does not fit the packed
 seed format (256 MiB). Output: STORE changed in place and out/metal/stage/store-patch.{bin,txt}, the written blocks for the phone
 (scripts/droidvm-app.py store-patch).
+--disk STORE: change a new install (make-macos-disk.py: the store's window is the whole disk over an empty seed, --base) in place: its
+Data volume is mounted through a loop device at the window and every page holding data is marked present afterwards; no patch (the
+whole store goes to the phone). The Data volume is found by its role in the container in every mode (vol= of the Linux driver: in the
+single-volume layout the System volume comes first).
 --data-size-mib makes the Data volume's container that large (the seed's is 1 GiB, which the first login's caches fill to 91%).
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
@@ -45,6 +49,7 @@ Output: out/metal/stage/{scratch-data.img,kernel.macho.trustcache}; boot with MA
 (the APFS image is mounted read-write with sources/linux-apfs-rw/apfs.ko)."""
 import argparse
 import hashlib
+import importlib.util
 import os
 import plistlib
 import shlex
@@ -59,6 +64,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'sources/UniXNU/drivers/DarwinBoot/Test'))
 import packed_ramdisk  # noqa: E402
 from data_store import PAGE, Store  # noqa: E402
+
+spec = importlib.util.spec_from_file_location('apfs_add_volumes', ROOT / 'scripts/apfs-add-volumes.py')
+apfs_volumes = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(apfs_volumes)
 
 TAG = os.environ.get('MACOS_TAG', '27.2')
 ARTIFACTS = ROOT / f'artifacts/{TAG}'
@@ -211,10 +220,13 @@ def main():
     parser.add_argument('--file', metavar='SOURCE:DEST', action='append', default=[])
     parser.add_argument('--base', type=Path, default=ARTIFACTS / 'data-seed/scratch-data.img')
     parser.add_argument('--store', type=Path)
+    parser.add_argument('--disk', type=Path)
     parser.add_argument('bundles', nargs='+', type=Path)
     args = parser.parse_args()
-    if args.store and args.data_size_mib:
-        raise SystemExit('--data-size-mib makes a new seed: not with --store')
+    if (args.store or args.disk) and args.data_size_mib:
+        raise SystemExit('--data-size-mib makes a new seed: not with --store or --disk')
+    if args.store and args.disk:
+        raise SystemExit('--store or --disk')
     bundles = [b.resolve() for b in args.bundles]
     if any(not (b / 'Contents/Info.plist').is_file() for b in bundles):
         raise SystemExit('a bundle needs Contents/Info.plist (the macOS layout)')
@@ -229,24 +241,43 @@ def main():
     logical, extents = packed_ramdisk.regions(args.base.read_bytes())
     with tempfile.TemporaryDirectory(prefix='data-seed-', dir=str(OUT)) as scratch:
         raw = Path(scratch) / 'seed.raw'
-        with raw.open('wb') as handle:
-            handle.truncate(logical)
-            for offset, data in extents:
-                handle.seek(offset)
-                handle.write(data)
-            store = Store(args.store, writable=True) if args.store else None
-            if store:
-                store.check(logical, extents)
-                print(f'{args.store}: {store.fold_into(handle)} pages folded in')
+        store = None
+        if args.disk:
+            disk = Store(args.disk)
+            disk.check(logical, extents)
+            if extents:
+                raise SystemExit(f'--disk: {args.base} is not an empty seed (make-macos-disk.py)')
+            window = disk.window()
+            disk.close()
+        else:
+            with raw.open('wb') as handle:
+                handle.truncate(logical)
+                for offset, data in extents:
+                    handle.seek(offset)
+                    handle.write(data)
+                store = Store(args.store, writable=True) if args.store else None
+                if store:
+                    store.check(logical, extents)
+                    print(f'{args.store}: {store.fold_into(handle)} pages folded in')
         mount = Path(scratch) / 'mount'
         mount.mkdir()
         if subprocess.run(['grep', '-q', '^apfs ', '/proc/modules']).returncode:
             subprocess.run(['sudo', 'insmod', str(ROOT / 'sources/linux-apfs-rw/apfs.ko')], check=True)
         if args.data_size_mib and args.data_size_mib << 20 > logical:
             raw = grow_volume(raw, args.data_size_mib << 20, Path(scratch))
-        loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', str(raw)], text=True).strip()
+        if args.disk:
+            image = apfs_volumes.grow.Image(args.disk, window, logical)
+            loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', '--offset', str(window), '--sizelimit', str(logical),
+                                            str(args.disk)], text=True).strip()
+        else:
+            image = apfs_volumes.grow.Image(raw)
+            loop = subprocess.check_output(['sudo', 'losetup', '--find', '--show', str(raw)], text=True).strip()
+        # an older seed's only volume (mkapfs gives it no role) is the Data volume
+        data_volume = apfs_volumes.role_volumes(image).get(apfs_volumes.ROLES['D'], (0,))[0]
+        image.map.close()
+        image.handle.close()
         try:
-            subprocess.run(['sudo', 'mount', '-t', 'apfs', '-o', 'readwrite', loop, str(mount)], check=True)
+            subprocess.run(['sudo', 'mount', '-t', 'apfs', '-o', f'readwrite,vol={data_volume}', loop, str(mount)], check=True)
             try:
                 target = mount / GPU_BUNDLES
                 subprocess.run(['sudo', 'mkdir', '-p', str(target)], check=True)
@@ -373,6 +404,12 @@ def main():
                 subprocess.run(['sudo', 'umount', str(mount)], check=True)
         finally:
             subprocess.run(['sudo', 'losetup', '-d', loop], check=True)
+        if args.disk:
+            disk = Store(args.disk, writable=True)
+            present = disk.mark_data()
+            disk.close()
+            print(f'{args.disk}: changed in place, {present} pages present; seed {args.base}')
+            return
         if store:
             store.refresh(raw, extents)
             runs = store.runs()

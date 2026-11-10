@@ -76,9 +76,13 @@ def max_volumes(size):
 
 
 class Image:
-    def __init__(self, path):
+    def __init__(self, path, offset=0, length=None):
+        """OFFSET, LENGTH: a container inside a larger file (the page window of a Data store, make-macos-disk.py)."""
         self.handle = open(path, 'r+b')
-        self.map = mmap.mmap(self.handle.fileno(), 0)
+        # the length explicitly: a block device (a dm snapshot of a container) has no size for mmap to take
+        if length is None:
+            length = os.lseek(self.handle.fileno(), 0, os.SEEK_END) - offset
+        self.map = mmap.mmap(self.handle.fileno(), length, offset=offset)
         self.changed = set()
 
     def block(self, number, kind=None):
@@ -95,40 +99,56 @@ class Image:
         self.changed.add(number)
 
 
+class Checkpoint:
+    """The latest checkpoint of the container in IMAGE: its superblock (SB at SB_BLOCK, and BLOCK0, the copy in block 0) and MAPS,
+    every ephemeral object's oid -> (block, size) (the space manager, the reaper, the free queues)."""
+    def __init__(self, image):
+        self.block0 = image.block(0, NXSB)
+        desc_blocks, = struct.unpack_from('<I', self.block0, 104)
+        desc_base, = struct.unpack_from('<q', self.block0, 112)
+        if desc_blocks & 0x80000000:
+            raise SystemExit('checkpoint descriptor area not contiguous: unsupported')
+        latest = None
+        for index in range(desc_blocks):
+            data = bytearray(image.map[(desc_base + index) * PAGE:(desc_base + index + 1) * PAGE])
+            if data[32:36] == b'NXSB' and fletcher64(data[8:]) == data[:8]:
+                xid, = struct.unpack_from('<Q', data, 16)
+                if latest is None or xid > latest[0]:
+                    latest = (xid, desc_base + index, data)
+        self.xid, self.sb_block, self.sb = latest
+        desc_index, desc_len = struct.unpack_from('<II', self.sb, 136)
+        self.maps = {}
+        for k in range(desc_len):
+            cpm = image.block(desc_base + (desc_index + k) % desc_blocks)
+            if struct.unpack_from('<I', cpm, 24)[0] & 0xffff != CHECKPOINT_MAP:
+                continue
+            count, = struct.unpack_from('<I', cpm, 36)
+            for e in range(count):
+                _, _, size, _, _, oid, paddr = struct.unpack_from('<IIIIQQQ', cpm, 40 + 40 * e)
+                self.maps[oid] = (paddr, size)
+
+    def put_superblock(self, image):
+        """Write the superblock: the checkpoint's copy and block 0's, which follow it (every field but the checksum the same)."""
+        image.put(self.sb_block, self.sb)
+        self.block0[:] = self.sb
+        image.put(0, self.block0)
+
+
 def grow_container(image, blocks):
-    block0 = image.block(0, NXSB)
-    desc_blocks, = struct.unpack_from('<I', block0, 104)
-    desc_base, = struct.unpack_from('<q', block0, 112)
-    latest = None
-    for index in range(desc_blocks):
-        data = bytearray(image.map[(desc_base + index) * PAGE:(desc_base + index + 1) * PAGE])
-        if data[32:36] == b'NXSB' and fletcher64(data[8:]) == data[:8]:
-            xid, = struct.unpack_from('<Q', data, 16)
-            if latest is None or xid > latest[0]:
-                latest = (xid, desc_base + index, data)
-    xid, sb_block, sb = latest
+    cp = Checkpoint(image)
+    xid, sb_block, sb, maps, block0 = cp.xid, cp.sb_block, cp.sb, cp.maps, cp.block0
     old_blocks, = struct.unpack_from('<Q', sb, 40)
     if blocks <= old_blocks:
         raise SystemExit(f'the container already has {old_blocks} blocks')
     # the space manager: an ephemeral object, found through this checkpoint's maps
-    desc_index, desc_len = struct.unpack_from('<II', sb, 136)
     spaceman_oid, = struct.unpack_from('<Q', sb, 152)
-    maps = {}   # ephemeral oid -> (block, size)
-    for k in range(desc_len):
-        cpm = image.block(desc_base + (desc_index + k) % desc_blocks)
-        if struct.unpack_from('<I', cpm, 24)[0] & 0xffff != CHECKPOINT_MAP:
-            continue
-        count, = struct.unpack_from('<I', cpm, 36)
-        for e in range(count):
-            _, _, size, _, _, oid, paddr = struct.unpack_from('<IIIIQQQ', cpm, 40 + 40 * e)
-            maps[oid] = (paddr, size)
     spaceman_block, size = maps.get(spaceman_oid, (None, 0))
     if spaceman_block is None or size != PAGE:
         raise SystemExit(f'space manager: {spaceman_block} of {size} bytes: unsupported')
     sm = image.block(spaceman_block, SPACEMAN)
     block_size, per_chunk, per_cib = struct.unpack_from('<III', sm, 32)
     dev_blocks, dev_chunks, cib_count, cab_count, dev_free, addr_offset = struct.unpack_from('<QQIIQI', sm, 48)
-    if block_size != PAGE or dev_blocks != old_blocks or cab_count or old_blocks % per_chunk:
+    if block_size != PAGE or dev_blocks != old_blocks or cab_count:
         raise SystemExit(f'space manager layout unsupported: bs {block_size} blocks {dev_blocks} cabs {cab_count}')
     chunks = (blocks + per_chunk - 1) // per_chunk
     new_cib_count = (chunks + per_cib - 1) // per_cib
@@ -141,6 +161,19 @@ def grow_container(image, blocks):
     cib_xid, = struct.unpack_from('<Q', cibs[-1][1], 16)
     cibs += [[None, bytearray(PAGE)] for _ in range(new_cib_count - cib_count)]
     added = 0
+    if old_blocks % per_chunk:
+        # a container not made a whole number of chunks (an IPSW's OS image): its last chunk grows to full first, the blocks past
+        # its old end free in its bitmap
+        last = dev_chunks - 1
+        cib, at = cibs[last // per_cib][1], 40 + 32 * (last % per_cib)
+        _, addr, count, free, bitmap = struct.unpack_from('<QQIIQ', cib, at)
+        grown = min(per_chunk, blocks - addr)
+        if bitmap:
+            data = image.map[bitmap * PAGE:(bitmap + 1) * PAGE]
+            if any(bit(data, b) for b in range(count, grown)):
+                raise SystemExit(f'chunk {last}: blocks past its end marked used')
+        struct.pack_into('<QQIIQ', cib, at, cib_xid, addr, grown, free + grown - count, bitmap)
+        added += grown - count
     for chunk in range(dev_chunks, chunks):
         count = min(per_chunk, blocks - chunk * per_chunk)
         struct.pack_into('<QQIIQ', cibs[chunk // per_cib][1], 40 + 32 * (chunk % per_cib), cib_xid, chunk * per_chunk, count, count, 0)
