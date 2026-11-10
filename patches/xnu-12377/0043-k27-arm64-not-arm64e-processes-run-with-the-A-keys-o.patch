@@ -1,7 +1,7 @@
-From 1af6e09a6de57dda9832e76fa2cb7f54bf8ed8e3 Mon Sep 17 00:00:00 2001
+From 450fb0a959ee1b7f35d1ddd0ad8da0e8a36d6b28 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 7 Nov 2026 12:42:39 -0500
-Subject: [PATCH 45/49] k27: arm64 (not arm64e) processes run with the A keys
+Subject: [PATCH 43/49] k27: arm64 (not arm64e) processes run with the A keys
  off (SCTLR_EL1.EnIA/EnDA per thread), as on Apple's CPUs
 
 ---

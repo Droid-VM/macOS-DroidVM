@@ -1,7 +1,7 @@
-From f77a1aed5528a2655a809bce94b768d843fabd3a Mon Sep 17 00:00:00 2001
+From e5c7345cf2bea9ceef97edeb038e658c60816fbf Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 03:38:40 -0400
-Subject: [PATCH 33/40] k27: mpo_vnode_check_lookup_preflight gains macOS 27's
+Subject: [PATCH 31/49] k27: mpo_vnode_check_lookup_preflight gains macOS 27's
  int flags argument (PAC type discriminator 0x3ad2); pass 0
 
 (cherry picked from commit 03f44346f642ef3ae934965ee1a516d56605eed4)

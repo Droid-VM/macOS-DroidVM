@@ -1,7 +1,7 @@
-From 728461e31e74be499fad60be39aef589a2486bbd Mon Sep 17 00:00:00 2001
+From 9628bf27833cb3696ddff3000d15cc6a32737c55 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 02:35:38 -0400
-Subject: [PATCH 30/40] k27 diagnostics: stall-panic=SECONDS panics from the
+Subject: [PATCH 28/49] k27 diagnostics: stall-panic=SECONDS panics from the
  timer interrupt while launchd has not started (every core's PC in the panic
  log)
 

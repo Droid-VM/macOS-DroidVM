@@ -9,3 +9,8 @@ Build: `bash k27/build-kernel27.sh` (out/k27/kernel-k27.macho), then `k27/try.sh
 Bring-up workarounds that a later commit took out again are not in the series (the 26.5 Sandbox calls and allow-all profile,
 k27-sandbox-native, the /private/var/.data firmlink path rewrite, the one-entitlement copyClientEntitlementVnode): the history with
 them is branch `k27-unlayered` (23a75df, same tree).
+Likewise the union layout of the OS and SystemOS images (union-hide-lower, the union lookup fixes, the kernel's Data mount and its
+firmlinks, the gpu-addon and staged-apps bindfs unions) is not in the series since the single-volume layout (0049,
+docs/k27-real-disk-layout-plan.md): the history with it is branch `k27-before-reexport-20261110` (one commit behind in
+osfmk/kern/thread_policy.c, otherwise the same tree). The series was re-exported from a history rebuilt without that code; two
+patches went (union-hide-lower's MNT_ROOTFS, the union create lookup) and others kept only their other parts.

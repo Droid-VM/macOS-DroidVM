@@ -1,7 +1,7 @@
-From 2079cf520c23c2c3da2d4b697574a8504fb8094e Mon Sep 17 00:00:00 2001
+From 5b00f846192047fa9b650bc4ef428e69d8bce260 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 00:52:10 -0400
-Subject: [PATCH 07/40] macOS target build: ext_resolver config, KC segment
+Subject: [PATCH 07/49] macOS target build: ext_resolver config, KC segment
  addresses, arm64e PAC defines, kext kalloc type views, 4 KiB contiguous-hint
  and CTRR fallbacks, DriverKit sed
 

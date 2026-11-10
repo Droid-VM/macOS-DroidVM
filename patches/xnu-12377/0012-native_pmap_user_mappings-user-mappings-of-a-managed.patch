@@ -1,7 +1,7 @@
-From 118ee990c1a1260c0ae68fb0859690402e548b27 Mon Sep 17 00:00:00 2001
+From 1e1cb027480a1fc5ee2255fa84535b96f974d0b6 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 03:04:15 -0400
-Subject: [PATCH 12/40] native_pmap_user_mappings: user mappings of a managed
+Subject: [PATCH 12/49] native_pmap_user_mappings: user mappings of a managed
  page (UniXNU zzx-pmap-user-mappings, for DroidVMGpu's BO release)
 
 (cherry picked from commit b5302f936b70573ae63d82e5542586bac324a18f)

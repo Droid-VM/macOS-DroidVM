@@ -1,7 +1,7 @@
-From 09e03f2e0f0a66687434eaf894aad27f6fb2027d Mon Sep 17 00:00:00 2001
+From 90804ba0a6b3ee141648b49f6c3b1d1b75ea5e93 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 03:31:00 -0400
-Subject: [PATCH 32/40] k27: the owner boot manifest replaces the all-zero
+Subject: [PATCH 30/49] k27: the owner boot manifest replaces the all-zero
  boot-manifest-hash placeholder (27 Image4 needs one at start)
 
 (cherry picked from commit 7b0eea541248f1da67050621685c084ce553ce0a)

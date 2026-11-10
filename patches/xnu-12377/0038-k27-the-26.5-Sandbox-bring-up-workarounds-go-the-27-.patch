@@ -1,7 +1,7 @@
-From 2039a2217e1f514a8743aceb11681a3c5ea4cbd5 Mon Sep 17 00:00:00 2001
+From af5f92d7f669bc69715452c0638550ad66905eb6 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 31 Oct 2026 06:10:02 -0400
-Subject: [PATCH 40/40] k27: the 26.5 Sandbox bring-up workarounds go; the 27
+Subject: [PATCH 38/49] k27: the 26.5 Sandbox bring-up workarounds go; the 27
  Sandbox kext runs with 27's profiles natively
 
 Removed: mac-sandbox-permissive (every Sandbox denial dropped by the MAC check filter, failed Sandbox calls ignored) and

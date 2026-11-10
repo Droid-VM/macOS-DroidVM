@@ -1,7 +1,7 @@
-From 49c082fd258c661aad4341d4757f4b63f236a91b Mon Sep 17 00:00:00 2001
+From cd17d52f643d52d908d04b83dc2df0b0072a9df0 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 22:05:02 -0400
-Subject: [PATCH 18/40] virt_set_external_method_hook: a driver may rewrite an
+Subject: [PATCH 18/49] virt_set_external_method_hook: a driver may rewrite an
  external method's inband input in place before the user client's dispatch
  checks it (DroidVMDisplay converts macOS 27's 1760-byte IOMobileFramebuffer
  swap record to the 1416 bytes the 26.5 family takes; every swap_end failed

@@ -1,7 +1,7 @@
-From 0e7d3ee65b5610e37e428f64aacbb8b022938307 Mon Sep 17 00:00:00 2001
+From e7596ef9c8c423a38aeda7acbab0cffb37c9f19c Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 7 Nov 2026 12:42:39 -0500
-Subject: [PATCH 46/49] k27: the GPU carveout ends at 256 GiB, room for
+Subject: [PATCH 44/49] k27: the GPU carveout ends at 256 GiB, room for
  Chromium's 16 GiB pools in the 512 GiB user VA
 
 ---

@@ -1,7 +1,7 @@
-From f43da0f9d3cb6f59859ced60d94c9a8bd0d6a9b3 Mon Sep 17 00:00:00 2001
+From 683f295dba7a9d1ebdb04fda56c4a95b63bd5409 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Tue, 27 Oct 2026 12:07:31 -0400
-Subject: [PATCH 22/40] exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each
+Subject: [PATCH 22/49] exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each
  VAR=VALUE to the environment of every executable whose file name is NAME, at
  exec (a variable for one system daemon, whose launchd job lives on the
  read-only system volume: launchctl setenv does not reach WindowServer).
@@ -16,7 +16,7 @@ Subject: [PATCH 22/40] exec-env=NAME:VAR=VALUE[,VAR=VALUE...] appends each
  1 file changed, 40 insertions(+)
 
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 8345155..af28273 100644
+index 29bf2ac..dcb0dbd 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -6921,6 +6921,46 @@ exec_extract_strings(struct image_params *imgp)

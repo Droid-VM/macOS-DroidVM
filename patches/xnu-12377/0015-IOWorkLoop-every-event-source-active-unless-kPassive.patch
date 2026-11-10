@@ -1,0 +1,43 @@
+From c46574563f41b37cfb2ee2302e08228ddc6e7f94 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sat, 24 Oct 2026 17:19:00 -0400
+Subject: [PATCH 15/49] IOWorkLoop: every event source active unless kPassive
+ when the compiler cannot resolve virtual member function pointers
+
+Upstream LLVM: OSMemberFunctionCast yields the virtual thunk, all sources compared passive, no IOInterruptEventSource ever ran.
+
+(cherry picked from commit 4410b357a071e9a4b3b0fac653d2e7ce600d1c22)
+---
+ iokit/Kernel/IOWorkLoop.cpp | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/IOWorkLoop.cpp b/iokit/Kernel/IOWorkLoop.cpp
+index 1d93f46..e8e8de3 100644
+--- a/iokit/Kernel/IOWorkLoop.cpp
++++ b/iokit/Kernel/IOWorkLoop.cpp
+@@ -706,7 +706,16 @@ IOWorkLoop::eventSourcePerformsWork(IOEventSource *inEventSource)
+ 		result = false;
+ 	} else if (IOEventSource::kActive & inEventSource->flags) {
+ 		result = true;
+-	} else if (controlG) {
++	}
++#if !__has_builtin(__builtin_load_member_function_pointer) && __has_feature(ptrauth_member_function_pointer_type_discrimination)
++	/*
++	 * Not with this compiler: without Apple clang's __builtin_load_member_function_pointer, OSMemberFunctionCast of a
++	 * virtual function is its virtual thunk, the same for every object, so every event source compared passive and an
++	 * IOInterruptEventSource never ran (IOMobileFramebufferLegacy's power state changes). Polling a passive source is
++	 * harmless (IOEventSource::checkForWork does nothing), so all are active unless marked kPassive.
++	 */
++#else
++	else if (controlG) {
+ 		void *  ptr1;
+ 		void *  ptr2;
+ 
+@@ -717,6 +726,7 @@ IOWorkLoop::eventSourcePerformsWork(IOEventSource *inEventSource)
+ 			result = false;
+ 		}
+ 	}
++#endif
+ 
+ 	return result;
+ }

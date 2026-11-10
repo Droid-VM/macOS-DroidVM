@@ -1,7 +1,7 @@
-From 34cb6b19ea6ffaff217473640aebfdd85dc14709 Mon Sep 17 00:00:00 2001
+From 830cd0c8d5216bf841fa09a36c0ea979496b2b21 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 7 Nov 2026 12:42:39 -0500
-Subject: [PATCH 49/49] k27: macOS's syscalls the iOS-based config left out:
+Subject: [PATCH 47/49] k27: macOS's syscalls the iOS-based config left out:
  sendfile, System V IPC, searchfs, file leases
 
 ---

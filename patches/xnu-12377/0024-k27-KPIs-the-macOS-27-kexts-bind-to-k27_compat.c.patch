@@ -1,7 +1,7 @@
-From 00a459b48195101cdd64be5e3ac60c845a0480bf Mon Sep 17 00:00:00 2001
+From 84076c3df0e6334d2f61750235b07c88c4507db2 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 01:52:33 -0400
-Subject: [PATCH 26/40] k27: KPIs the macOS 27 kexts bind to (k27_compat.c)
+Subject: [PATCH 24/49] k27: KPIs the macOS 27 kexts bind to (k27_compat.c)
 
 (cherry picked from commit 692af4a4d1f169c17902fe3a527a217f34422bdd)
 ---

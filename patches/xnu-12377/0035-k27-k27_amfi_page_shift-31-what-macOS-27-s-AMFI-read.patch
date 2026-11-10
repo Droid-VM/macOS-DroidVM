@@ -1,7 +1,7 @@
-From 8a8393057b252e3394d8fa8410f5f0080e6be3f4 Mon Sep 17 00:00:00 2001
+From 0f7de89b1e2afa4e887c154c37bdd7936cf5f7b8 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 10:07:51 -0400
-Subject: [PATCH 37/40] k27: k27_amfi_page_shift (31), what macOS 27's AMFI
+Subject: [PATCH 35/49] k27: k27_amfi_page_shift (31), what macOS 27's AMFI
  reads as PAGE_SHIFT_CONST: k27/kc-build27.py binds its one GOT slot here so
  CoreEntitlements' CEElementIterate stack-page check (sp within 0x80 of a page
  start -> fail) cannot trip on fixed call chains; AMFI's bytes stay as shipped

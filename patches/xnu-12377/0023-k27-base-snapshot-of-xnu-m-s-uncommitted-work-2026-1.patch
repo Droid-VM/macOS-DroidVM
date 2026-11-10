@@ -1,15 +1,14 @@
-From fd136eaee48b06e6f28a19a3b3d688347e46e4ab Mon Sep 17 00:00:00 2001
+From 37196974b1107eca68775d291578645bb2ddd8fe Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Fri, 30 Oct 2026 01:47:48 -0400
-Subject: [PATCH 25/40] k27 base: snapshot of xnu-m's uncommitted work
+Subject: [PATCH 23/49] k27 base: snapshot of xnu-m's uncommitted work
  (2026-10-30)
 
 ---
  bsd/conf/files       |  2 +-
  bsd/kern/kern_exec.c | 29 +++++++++++++++++++++--------
- bsd/vfs/vfs_lookup.c | 20 +++++++++++++++++++-
  security/mac_base.c  |  6 ++++++
- 4 files changed, 47 insertions(+), 10 deletions(-)
+ 3 files changed, 28 insertions(+), 9 deletions(-)
 
 diff --git a/bsd/conf/files b/bsd/conf/files
 index 60d8aa6..4202ae9 100644
@@ -25,7 +24,7 @@ index 60d8aa6..4202ae9 100644
  bsd/vfs/vfs_syscalls.c			standard
  bsd/vfs/vfs_support.c			standard
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index af28273..28d6eaa 100644
+index dcb0dbd..0ccb42e 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -6922,9 +6922,10 @@ exec_extract_strings(struct image_params *imgp)
@@ -84,37 +83,6 @@ index af28273..28d6eaa 100644
  		}
  	}
  
-diff --git a/bsd/vfs/vfs_lookup.c b/bsd/vfs/vfs_lookup.c
-index fc7e7e5..a83e6b9 100644
---- a/bsd/vfs/vfs_lookup.c
-+++ b/bsd/vfs/vfs_lookup.c
-@@ -1899,7 +1899,25 @@ lookup_traverse_union(vnode_t dvp, vnode_t *new_dvp, vfs_context_t ctx)
- 	NDINIT(&nd, LOOKUP, OP_LOOKUP, USEDVP, UIO_SYSSPACE, CAST_USER_ADDR_T(pp), ctx);
- 	nd.ni_dvp = dvp->v_mount->mnt_vnodecovered;
- 	error = namei(&nd);
--	if (error == 0) {
-+	if (error == 0 && nd.ni_vp->v_mount == dvp->v_mount) {
-+		/*
-+		 * The path in the covered mount led back into this one (the owner chain's SystemOS volume over the OS volume at "/":
-+		 * the OS volume's /System/Cryptexes/App links to /System/Volumes/Preboot/Cryptexes/App, which only the SystemOS volume
-+		 * has), so there is no underlying directory: a readdir that went on with this vnode would read the same directory again
-+		 * from offset 0 forever (Safari's CFBundle scan of its own bundle never returned), as a lookup would retry it.
-+		 */
-+		vnode_put(nd.ni_vp);
-+		error = ENOENT;
-+	} else if (error == 0 && nd.ni_vp->v_type != VDIR) {
-+		/*
-+		 * The covered mount has no directory there, only a symbolic link: the OS volume's
-+		 * /System/Library/PrivateFrameworks/Safari.framework links to /System/Cryptexes/OS/..., a directory of the SystemOS
-+		 * volume. getdirentries64 then failed with EINVAL after the upper entries, so CFBundle could not create the bundle
-+		 * (bundleWithIdentifier: nil, Safari crashed at launch) and lookups below it failed with ENOTDIR.
-+		 */
-+		vnode_put(nd.ni_vp);
-+		error = ENOENT;
-+	} else if (error == 0) {
- 		*new_dvp = nd.ni_vp;
- 	}
- 	nameidone(&nd);
 diff --git a/security/mac_base.c b/security/mac_base.c
 index 6dc2004..738358a 100644
 --- a/security/mac_base.c

@@ -1,18 +1,18 @@
-From 496c5d2b4394fdd7d64f04e6d75d3532107719af Mon Sep 17 00:00:00 2001
+From e83d9fafd90f4fbd6a676b90bc718f830dd63a1f Mon Sep 17 00:00:00 2001
 From: t <t@t>
 Date: Fri, 23 Oct 2026 07:58:07 -0400
-Subject: [PATCH 02/40] merge: our port diff on top of their 21 patches
+Subject: [PATCH 02/49] merge: our port diff on top of their 21 patches
 
 (cherry picked from commit ad4b23eda10a734db9796d31943954488be749fb)
 ---
  .../CoreEntitlements/CoreEntitlements.h       |   5 +
  EXTERNAL_HEADERS/CoreEntitlements/V2/API.h    |  51 +++
  EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h |   1 +
- EXTERNAL_HEADERS/TrustCache/API.h             | 188 ++++++++
+ EXTERNAL_HEADERS/TrustCache/API.h             | 188 +++++++++
  EXTERNAL_HEADERS/TrustCache/RawTypes.h        | 103 +++++
- EXTERNAL_HEADERS/TrustCache/Return.h          | 123 +++++
- EXTERNAL_HEADERS/TrustCache/Types.h           | 320 +++++++++++++
- EXTERNAL_HEADERS/TrustCache/TypesConfig.h     | 389 ++++++++++++++++
+ EXTERNAL_HEADERS/TrustCache/Return.h          | 123 ++++++
+ EXTERNAL_HEADERS/TrustCache/Types.h           | 320 ++++++++++++++
+ EXTERNAL_HEADERS/TrustCache/TypesConfig.h     | 389 ++++++++++++++++++
  Makefile                                      |  16 +
  SETUP/config/Makefile                         |   9 +-
  SETUP/config/doconf                           |   2 +-
@@ -23,22 +23,19 @@ Subject: [PATCH 02/40] merge: our port diff on top of their 21 patches
  SETUP/setsegname/Makefile                     |   9 +-
  bsd/conf/Makefile.template                    |   2 +-
  bsd/dev/arm/kern_machdep.c                    |   3 +
- bsd/dev/arm/systemcalls.c                     |  23 +
+ bsd/dev/arm/systemcalls.c                     |  23 ++
  bsd/kern/bsd_init.c                           | 203 ++++++++-
  bsd/kern/kern_core.c                          |   7 +
- bsd/kern/kern_exec.c                          | 421 +++++++++++++++++-
- bsd/kern/kern_exit.c                          |  24 +
+ bsd/kern/kern_exec.c                          | 232 ++++++++++-
+ bsd/kern/kern_exit.c                          |  24 ++
  bsd/kern/kern_priv.c                          |  10 +
  bsd/kern/lockdown_mode.c                      |   2 +
  bsd/kern/mach_loader.c                        |   4 +
  bsd/kern/makesyscalls.sh                      |   4 +-
- bsd/kern/source_pthread_bootstrap.c           |  23 +
+ bsd/kern/source_pthread_bootstrap.c           |  23 ++
  bsd/kern/subr_xxx.c                           |   7 +
  bsd/kern/sys_work_interval.c                  |  18 +
  bsd/kern/ubc_subr.c                           | 175 +++++++-
- bsd/miscfs/bindfs/bind_vfsops.c               |  10 +-
- bsd/miscfs/bindfs/bind_vnops.c                |   8 +
- bsd/miscfs/bindfs/bindfs.h                    |   3 +
  bsd/miscfs/mockfs/mockfs_fsnode.c             |  21 +-
  bsd/miscfs/mockfs/mockfs_fsnode.h             |   5 +-
  bsd/miscfs/mockfs/mockfs_vfsops.c             |  87 +++-
@@ -46,11 +43,9 @@ Subject: [PATCH 02/40] merge: our port diff on top of their 21 patches
  bsd/net/necp_client.c                         |   2 +-
  bsd/security/audit/audit_syscalls.c           |   6 +-
  bsd/sys/ubc_internal.h                        |   7 +
- bsd/vfs/vfs_attrlist.c                        |  57 +++
- bsd/vfs/vfs_subr.c                            |  31 ++
- bsd/vfs/vfs_syscalls.c                        | 110 ++++-
- bsd/vfs/vfs_vnops.c                           |   6 +-
- bsd/vm/vm_unix.c                              |  87 +++-
+ bsd/vfs/vfs_subr.c                            |   7 +
+ bsd/vfs/vfs_syscalls.c                        |  45 ++
+ bsd/vm/vm_unix.c                              |  10 +
  config/MASTER.arm64.iPhoneOS                  |   2 +-
  gunyah-linux.mk                               |  43 ++
  iokit/IOKit/IOLib.h                           |   4 +-
@@ -75,7 +70,7 @@ Subject: [PATCH 02/40] merge: our port diff on top of their 21 patches
  .../corecrypto/arm64_isa_compatibility.h      |   2 +-
  osfmk/arm64/genassym.c                        |   1 +
  osfmk/arm64/proc_reg.h                        |   6 +
- osfmk/arm64/sleh.c                            | 214 +++++++++
+ osfmk/arm64/sleh.c                            | 214 ++++++++++
  osfmk/arm64/start.s                           |  14 +-
  osfmk/conf/Makefile.template                  |   2 +-
  osfmk/conf/files                              |   1 +
@@ -108,7 +103,7 @@ Subject: [PATCH 02/40] merge: our port diff on top of their 21 patches
  security/mac_internal.h                       |  22 +-
  security/mac_process.c                        |  18 +-
  security/mac_vfs.c                            |  20 +-
- 103 files changed, 3729 insertions(+), 115 deletions(-)
+ 98 files changed, 3300 insertions(+), 105 deletions(-)
  create mode 100644 EXTERNAL_HEADERS/CoreEntitlements/V2/API.h
  create mode 100644 EXTERNAL_HEADERS/CoreEntitlements/V2/Kernel.h
  create mode 100644 EXTERNAL_HEADERS/TrustCache/API.h
@@ -1959,7 +1954,7 @@ index b422eaa..a70cc74 100644
  	size_t          command_size, header_size, tstate_size;
  	size_t          hoffset;
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 2467b24..cb4882e 100644
+index 2467b24..0ec83d5 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -1,3 +1,4 @@
@@ -2006,7 +2001,7 @@ index 2467b24..cb4882e 100644
  #if CONFIG_DTRACE
  	dtrace_proc_exec(p);
  #endif
-@@ -7940,8 +7956,352 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
+@@ -7940,8 +7956,169 @@ create_unix_stack(vm_map_t map, load_result_t* load_result,
   *		word width of the kernel. Once the self-exec completes, the
   *		initproc might be different.
   */
@@ -2170,197 +2165,14 @@ index 2467b24..cb4882e 100644
 +}
 +#endif
 +
-+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
-+#if !defined(XNU_OWNER_BOOT_MANIFEST) || !XNU_OWNER_BOOT_MANIFEST
-+#error Scratch Data mounting requires the authenticated original OS startup path
-+#endif
-+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
-+#ifndef XNU_OWNER_DATA_VOLUME_UUID
-+#error Supply the observed scratch volume UUID for the IOKit backend
-+#endif
-+extern int native_ram_block_volume_seed(const char *, dev_t *, char *, size_t, uint64_t *, uint64_t *, uint8_t *);
-+#endif
-+extern dev_t mdevlookup(int);
-+extern int mdevgetrange(int, uint64_t *, uint64_t *);
-+volatile int native_owner_data_status = -1;
-+volatile int native_owner_data_stage = 0;
-+volatile int native_owner_data_readonly = -1;
-+volatile dev_t native_owner_data_device = NODEV;
-+uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
-+uint8_t native_owner_data_seed_sha256[32];
-+char native_owner_data_device_path[64];
-+
-+/* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
-+ * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
-+ * /System/Library/Extensions/<MetalPluginName>.bundle) and an owner launchd job over /System/Library/LaunchDaemons (a process outside
-+ * every sandbox profile). Only with boot-arg sheng-gpu-addon=1. Never panics: a missing source directory or a refused mount only
-+ * records its status. The backing directories are owner Data (not an authenticated immutable volume); code in them still has to
-+ * pass AMFI through the loaded trust cache. */
-+extern volatile int native_bindfs_boot_mount;
-+volatile int native_gpu_addon_stage = 0;
-+volatile int native_gpu_addon_status = -1;
-+volatile int native_gpu_addon2_stage = 0;
-+volatile int native_gpu_addon2_status = -1;
-+static void
-+native_gpu_addon_mount(proc_t p, user_addr_t scratch, user_addr_t offset, const char *source, size_t source_size,
-+    const char *point, size_t point_size, const char *visible, const char *own, volatile int *stage, volatile int *status)
-+{
-+	vnode_t probe = NULLVP;
-+	int error;
-+	*stage = 1;
-+	error = vnode_lookup(source, 0, &probe, vfs_context_current());
-+	if (error) {
-+		*status = error;
-+		return;
-+	}
-+	vnode_put(probe);
-+	probe = NULLVP;
-+	*stage = 2;
-+	struct mount_args request = {.type = scratch + offset, .path = scratch + offset + 0x20,
-+	    .flags = MNT_RDONLY | MNT_UNION, .data = scratch + offset + 0x100};
-+	int32_t result = 0;
-+	if ((error = copyout("bindfs", request.type, 7)) || (error = copyout(point, request.path, point_size)) ||
-+	    (error = copyout(source, request.data, source_size))) {
-+		*status = error;
-+		return;
-+	}
-+	native_bindfs_boot_mount = 1;
-+	error = mount(p, &request, &result);
-+	native_bindfs_boot_mount = 0;
-+	if (error) {
-+		*status = error;
-+		return;
-+	}
-+	*stage = 3;
-+	/* The union must still show a sealed lower entry next to the owner's. */
-+	error = vnode_lookup(visible, 0, &probe, vfs_context_current());
-+	if (!error) {
-+		vnode_put(probe);
-+		probe = NULLVP;
-+		*stage = 4;
-+		/* ... and the owner's own entry must be visible through it (stage 5). */
-+		error = vnode_lookup(own, 0, &probe, vfs_context_current());
-+		if (!error) {
-+			vnode_put(probe);
-+			probe = NULLVP;
-+			*stage = 5;
-+		}
-+	}
-+	*status = error;
-+}
-+static void
-+native_gpu_addon_prepare(proc_t p, user_addr_t scratch)
-+{
-+	uint32_t enabled = 0;
-+	if (!PE_parse_boot_argn("sheng-gpu-addon", &enabled, sizeof(enabled)) || enabled != 1) {
-+		return;
-+	}
-+	static const char extensions_source[] = "/private/var/ngpu/addons", extensions_point[] = "/System/Library/Extensions";
-+	static const char daemons_source[] = "/private/var/ngpu/daemons", daemons_point[] = "/System/Library/LaunchDaemons";
-+	native_gpu_addon_mount(p, scratch, 0x400, extensions_source, sizeof(extensions_source), extensions_point,
-+	    sizeof(extensions_point), "/System/Library/Extensions/AGXMetalA10.bundle",
-+	    "/System/Library/Extensions/NativeAdrenoMetal.bundle/Info.plist", &native_gpu_addon_stage,
-+	    &native_gpu_addon_status);
-+	native_gpu_addon_mount(p, scratch, 0x600, daemons_source, sizeof(daemons_source), daemons_point, sizeof(daemons_point),
-+	    "/System/Library/LaunchDaemons/com.apple.backboardd.plist",
-+	    "/System/Library/LaunchDaemons/org.blu-sharky.adrenoprobed.plist", &native_gpu_addon2_stage, &native_gpu_addon2_status);
-+}
-+
-+/* The deletable system apps (Weather, Calendar, Notes, Maps, ...) ship in the OS volume's /private/var/staged_system_apps: a restore copies
-+ * that directory into the Data volume, and the first boot's data migration (SystemAppMigrator) installs the apps from there. An owner
-+ * Data seed carries no copy and marks the migration done, so with boot-arg owner-staged-apps=1 the sealed directory itself is shown as a
-+ * read-only union view over /Applications, mounted while /private/var still resolves to the OS volume (the Data mount covers it next).
-+ * The apps then register as built-in system apps; their code is in the static trust cache with the rest of the OS. Never panics: a
-+ * refused mount only records its status. */
-+volatile int native_staged_apps_stage = 0;
-+volatile int native_staged_apps_status = -1;
-+static void
-+native_staged_apps_prepare(proc_t p, user_addr_t scratch)
-+{
-+	uint32_t enabled = 0;
-+	if (!PE_parse_boot_argn("owner-staged-apps", &enabled, sizeof(enabled)) || enabled != 1) {
-+		return;
-+	}
-+	static const char source[] = "/private/var/staged_system_apps", point[] = "/Applications";
-+	native_gpu_addon_mount(p, scratch, 0x800, source, sizeof(source), point, sizeof(point), "/Applications/Preferences.app/Info.plist",
-+	    "/Applications/Weather.app/Info.plist", &native_staged_apps_stage, &native_staged_apps_status);
-+}
 +
  static int
 -load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
-+native_owner_data_prepare(proc_t p, user_addr_t scratch)
-+{
-+	uint64_t base = 0, size = 0;
-+	dev_t device = NODEV;
-+	int error = EINVAL;
-+	vnode_t data_root = NULLVP;
-+	char device_path[64] = "/dev/md0";
-+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
-+	/* The typed provider supplies logical seed identity for both dense and
-+	 * sparse media. A sparse disk has no contiguous logical-byte address. */
-+	if (!native_ram_block_volume_seed(XNU_OWNER_DATA_VOLUME_UUID, &device, device_path,
-+	    sizeof(device_path), &base, &size, native_owner_data_seed_sha256)) { error = ENOENT; goto done; }
-+	/* The typed provider's disk may be far larger than 2 GiB (a persistent Data disk keeps only its seed's nonzero pages). */
-+	if (!size || size > UINT64_C(0x10000000000) || (size & 4095)) goto done;
-+#else
-+	device = mdevlookup(0);
-+	if (device == NODEV || mdevgetrange(0, &base, &size) || base < VM_MIN_KERNEL_ADDRESS ||
-+	    !size || size > UINT64_C(0x80000000) || (base & 4095) || (size & 4095)) goto done;
-+	SHA256_CTX context;
-+	SHA256_Init(&context);
-+	SHA256_Update(&context, (const void *)base, size);
-+	SHA256_Final(native_owner_data_seed_sha256, &context);
-+#endif
-+	native_owner_data_seed_base = base;
-+	native_owner_data_seed_size = size;
-+	native_owner_data_stage = 1;
-+	strlcpy(native_owner_data_device_path, device_path, sizeof(native_owner_data_device_path));
-+	uint8_t payload[0x150] = {0};
-+	user64_addr_t spec = scratch + 0x160;
-+	uint16_t mode = 1;
-+	uint32_t anonymous_owner = 99;
-+	memcpy(payload, &spec, sizeof(spec));
-+	memcpy(payload + 16, &mode, sizeof(mode));
-+	memcpy(payload + 0x144, &anonymous_owner, sizeof(anonymous_owner));
-+	memcpy(payload + 0x148, &anonymous_owner, sizeof(anonymous_owner));
-+	struct mount_args request = {.type = scratch + 0x100, .path = scratch + 0x120,
-+	    .flags = 0, .data = scratch + 0x200};
-+	int32_t result = 0;
-+	if ((error = copyout("apfs", request.type, 5)) ||
-+	    (error = copyout("/private/var", request.path, 13)) ||
-+	    (error = copyout(device_path, spec, strlen(device_path) + 1)) ||
-+	    (error = copyout(payload, request.data, sizeof(payload)))) goto done;
-+	/* still the OS volume's /private/var */
-+	native_staged_apps_prepare(p, scratch);
-+	native_owner_data_stage = 2;
-+	error = mount(p, &request, &result);
-+	if (error) goto done;
-+	native_owner_data_stage = 3;
-+	error = vnode_lookup("/private/var", 0, &data_root, vfs_context_current());
-+	if (error) goto done;
-+	mount_t data_mount = vnode_mount(data_root);
-+	vnode_t device_node = vfs_devvp(data_mount);
-+	dev_t actual = device_node ? vnode_specrdev(device_node) : NODEV;
-+	if (device_node) vnode_put(device_node);
-+	native_owner_data_device = actual;
-+	native_owner_data_readonly = (vfs_flags(data_mount) & MNT_RDONLY) != 0;
-+	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
-+	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
-+	if (!error) native_owner_data_stage = 4;
-+	if (!error) native_gpu_addon_prepare(p, scratch);
-+done:
-+	if (data_root) vnode_put(data_root);
-+	native_owner_data_status = error;
-+	return error;
-+}
-+#endif
-+
-+static int
 +load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, user_addr_t envp)
  {
  	int retval[2];
  	int error;
-@@ -7955,6 +8315,20 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+@@ -7955,6 +8132,20 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
  	assert(scratch_addr);
  	assert(path);
  
@@ -2381,7 +2193,7 @@ index 2467b24..cb4882e 100644
  	/*
  	 * Copy out program name.
  	 */
-@@ -8013,7 +8387,7 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
+@@ -8013,7 +8204,7 @@ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path)
  	 */
  	init_exec_args.fname = argv0;
  	init_exec_args.argp = scratch_addr;
@@ -2390,7 +2202,7 @@ index 2467b24..cb4882e 100644
  
  	/*
  	 * So that init task is set with uid,gid 0 token
-@@ -8068,6 +8442,7 @@ static const char * init_programs[] = {
+@@ -8068,6 +8259,7 @@ static const char * init_programs[] = {
  void
  load_init_program(proc_t p)
  {
@@ -2398,7 +2210,7 @@ index 2467b24..cb4882e 100644
  	uint32_t i;
  	int error;
  	vm_map_t map = current_map();
-@@ -8075,6 +8450,26 @@ load_init_program(proc_t p)
+@@ -8075,6 +8267,20 @@ load_init_program(proc_t p)
  	mach_vm_size_t map_page_size = vm_map_page_size(map);
  
  #if DEVELOPMENT || DEBUG
@@ -2409,11 +2221,6 @@ index 2467b24..cb4882e 100644
 +	boot_progress_stage("SystemOS mount returned");
 +	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
 +#endif
-+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
-+	boot_progress_stage("Data mount enter");
-+	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
-+	boot_progress_stage("Data mount returned");
-+	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
 +#if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
 +	extern int sheng_boot_watchdog_policy(void *, uint64_t);
 +	boot_progress_stage("temporary watchdog launch policy enter");
@@ -2421,11 +2228,10 @@ index 2467b24..cb4882e 100644
 +	if (policy_error) panic("sheng watchdog launch policy failed: %d", policy_error);
 +	boot_progress_stage("temporary watchdog launch policy ready");
 +#endif
-+#endif
  	/* Use the opportunity to initialize exec's debug log stream */
  	exec_log_handle = os_log_create("com.apple.xnu.bsd", "exec");
  #endif /* DEVELOPMENT || DEBUG */
-@@ -8085,6 +8480,17 @@ load_init_program(proc_t p)
+@@ -8085,6 +8291,17 @@ load_init_program(proc_t p)
  	(void) memorystatus_init_at_boot_snapshot();
  #endif /* CONFIG_MEMORYSTATUS */
  
@@ -2443,7 +2249,7 @@ index 2467b24..cb4882e 100644
  #if DEBUG || DEVELOPMENT
  	/* Check for boot-arg suffix first */
  	char launchd_suffix[64];
-@@ -8095,7 +8501,7 @@ load_init_program(proc_t p)
+@@ -8095,7 +8312,7 @@ load_init_program(proc_t p)
  
  		if (is_release_suffix) {
  			printf("load_init_program: attempting to load /sbin/launchd\n");
@@ -2452,7 +2258,7 @@ index 2467b24..cb4882e 100644
  			if (!error) {
  				return;
  			}
-@@ -8106,7 +8512,7 @@ load_init_program(proc_t p)
+@@ -8106,7 +8323,7 @@ load_init_program(proc_t p)
  			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
  
  			printf("load_init_program: attempting to load %s\n", launchd_path);
@@ -2461,7 +2267,7 @@ index 2467b24..cb4882e 100644
  			if (!error) {
  				return;
  			} else if (error != ENOENT) {
-@@ -8119,7 +8525,7 @@ load_init_program(proc_t p)
+@@ -8119,7 +8336,7 @@ load_init_program(proc_t p)
  	error = ENOENT;
  	for (i = 0; i < sizeof(init_programs) / sizeof(init_programs[0]); i++) {
  		printf("load_init_program: attempting to load %s\n", init_programs[i]);
@@ -2470,7 +2276,7 @@ index 2467b24..cb4882e 100644
  		if (!error) {
  			return;
  		} else if (error != ENOENT) {
-@@ -8597,6 +9003,7 @@ process_signature(proc_t p, struct image_params *imgp)
+@@ -8597,6 +8814,7 @@ process_signature(proc_t p, struct image_params *imgp)
  	 * approve of exec, kill and return immediately.
  	 */
  	if (imgp->ip_mac_return != 0) {
@@ -2478,7 +2284,7 @@ index 2467b24..cb4882e 100644
  		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_PROC, BSD_PROC_EXITREASON_CREATE) | DBG_FUNC_NONE,
  		    proc_getpid(p), OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY, 0, 0);
  		signature_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_SECURITY_POLICY);
-@@ -8773,7 +9180,9 @@ done:
+@@ -8773,7 +8991,9 @@ done:
  		 * state.
  		 */
  
@@ -2964,74 +2770,6 @@ index 79bf0cb..96150a8 100644
  		*bytes_processed = size;
  
  		const uint32_t *asha1, *esha1;
-diff --git a/bsd/miscfs/bindfs/bind_vfsops.c b/bsd/miscfs/bindfs/bind_vfsops.c
-index 4d50604..199a91b 100644
---- a/bsd/miscfs/bindfs/bind_vfsops.c
-+++ b/bsd/miscfs/bindfs/bind_vfsops.c
-@@ -78,6 +78,8 @@
- 
- #include "bindfs.h"
- 
-+volatile int native_bindfs_boot_mount = 0;
-+
- #define BINDFS_ENTITLEMENT "com.apple.private.bindfs-allow"
- 
- static int
-@@ -136,8 +138,9 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
- 		return ENOTSUP;
- 	}
- 
--	/* check entitlement */
--	if (!IOCurrentTaskHasEntitlement(BINDFS_ENTITLEMENT)) {
-+	/* check entitlement; the boot-time addon mount (kern_exec.c native_gpu_addon_prepare) runs before any
-+	 * entitled process exists and sets this flag around its own mount() call only */
-+	if (!native_bindfs_boot_mount && !IOCurrentTaskHasEntitlement(BINDFS_ENTITLEMENT)) {
- 		return EPERM;
- 	}
- 
-@@ -227,6 +230,9 @@ bindfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
- 	sp->f_flags = flags;
- 
- 	xmp->bindm_flags = BINDM_CASEINSENSITIVE; /* default to case insensitive */
-+	if (native_bindfs_boot_mount) {
-+		xmp->bindm_flags |= BINDM_FORCE_ROOT;
-+	}
- 
- 	error = bindfs_vfs_getlowerattr(vnode_mount(lowerrootvp), &vfa, ctx);
- 	if (error == 0) {
-diff --git a/bsd/miscfs/bindfs/bind_vnops.c b/bsd/miscfs/bindfs/bind_vnops.c
-index 8609009..0c659c7 100644
---- a/bsd/miscfs/bindfs/bind_vnops.c
-+++ b/bsd/miscfs/bindfs/bind_vnops.c
-@@ -105,6 +105,14 @@ bindfs_getattr(struct vnop_getattr_args * args)
- 		vnode_put(lowervp);
- 
- 		if (error == 0) {
-+			if (MOUNTTOBINDMOUNT(vnode_mount(args->a_vp))->bindm_flags & BINDM_FORCE_ROOT) {
-+				if (VATTR_IS_ACTIVE(args->a_vap, va_uid)) {
-+					VATTR_RETURN(args->a_vap, va_uid, 0);
-+				}
-+				if (VATTR_IS_ACTIVE(args->a_vap, va_gid)) {
-+					VATTR_RETURN(args->a_vap, va_gid, 0);
-+				}
-+			}
- 			if (VATTR_IS_ACTIVE(args->a_vap, va_fsid)) {
- 				/* fix up fsid so it doesn't say the underlying fs*/
- 				VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(vnode_mount(args->a_vp))->f_fsid.val[0]);
-diff --git a/bsd/miscfs/bindfs/bindfs.h b/bsd/miscfs/bindfs/bindfs.h
-index c3bebc8..4555530 100644
---- a/bsd/miscfs/bindfs/bindfs.h
-+++ b/bsd/miscfs/bindfs/bindfs.h
-@@ -81,6 +81,9 @@
- //#define BINDFS_DEBUG 0
- 
- #define BINDM_CACHE 0x0001
-+/* Owner boot overlay (native_bindfs_boot_mount): report every file as owned by root:wheel. The backing directory is owner data made
-+ * without root; launchd and the loader expect system-directory content to be root owned. Mode bits are left as they are. */
-+#define BINDM_FORCE_ROOT 0x80000000ULL
- #define BINDM_CASEINSENSITIVE 0x0000000000000002
- 
- typedef int (*vop_t)(void *);
 diff --git a/bsd/miscfs/mockfs/mockfs_fsnode.c b/bsd/miscfs/mockfs/mockfs_fsnode.c
 index e000126..70b6bcb 100644
 --- a/bsd/miscfs/mockfs/mockfs_fsnode.c
@@ -3443,104 +3181,8 @@ index 56f0444..923d38b 100644
  };
  
  /*
-diff --git a/bsd/vfs/vfs_attrlist.c b/bsd/vfs/vfs_attrlist.c
-index f83e29b..7233e77 100644
---- a/bsd/vfs/vfs_attrlist.c
-+++ b/bsd/vfs/vfs_attrlist.c
-@@ -237,6 +237,8 @@ attrlist_pack_variable(struct _attrlist_buf *ab, const void *source, ssize_t cou
- 	attrlist_pack_variable2(ab, source, count, NULL, 0);
- }
- 
-+extern mount_t virt_union_top(mount_t mp);
-+
- /*
-  * Attempt to pack a string. This is a special case of a variable width attribute.
-  *
-@@ -1769,6 +1771,9 @@ attr_pack_common(vfs_context_t ctx, mount_t mp, vnode_t vp, struct attrlist *alp
- 			ATTR_PACK4((*abp),
- 			    mp->mnt_vfsstat.f_fsid.val[0]);
- 			abp->actual.commonattr |= ATTR_CMN_DEVID;
-+		} else if (vp && virt_union_top(vp->v_mount) != vp->v_mount) {
-+			ATTR_PACK4((*abp), virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid.val[0]);
-+			abp->actual.commonattr |= ATTR_CMN_DEVID;
- 		} else if (VATTR_IS_ACTIVE(vap, va_fsid) && VATTR_IS_SUPPORTED(vap, va_fsid)) {
- 			ATTR_PACK4((*abp), vap->va_fsid);
- 			abp->actual.commonattr |= ATTR_CMN_DEVID;
-@@ -1788,6 +1793,9 @@ attr_pack_common(vfs_context_t ctx, mount_t mp, vnode_t vp, struct attrlist *alp
- 			ATTR_PACK8((*abp),
- 			    mp->mnt_vfsstat.f_fsid);
- 			abp->actual.commonattr |= ATTR_CMN_FSID;
-+		} else if (vp && virt_union_top(vp->v_mount) != vp->v_mount) {
-+			ATTR_PACK8((*abp), virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid);
-+			abp->actual.commonattr |= ATTR_CMN_FSID;
- 		} else if (VATTR_IS_SUPPORTED(vap, va_fsid64)) {
- 			ATTR_PACK8((*abp), vap->va_fsid64);
- 			abp->actual.commonattr |= ATTR_CMN_FSID;
-@@ -4372,6 +4380,9 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
- 
- 	FV_LOCK(fvdata);
- 
-+#if CONFIG_UNION_MOUNTS
-+unionread:
-+#endif
- 	/*
- 	 * getattrlistbulk(2) maintains its offset in fv_offset. However
- 	 * if the offset in the file glob is set (or reset) to 0, the directory
-@@ -4464,6 +4475,52 @@ getattrlistbulk(proc_t p, struct getattrlistbulk_args *uap, int32_t *retval)
- 		ut->uu_flag &= ~UT_KERN_RAGE_VNODES;
- 	}
- 
-+#if CONFIG_UNION_MOUNTS
-+	/* Match getdirentriesattr: consume the upper directory before moving
-+	 * this open descriptor to the corresponding lower union directory.
-+	 * Snapshot enumeration must stay on the requested snapshot directory.
-+	 * Recheck lower-directory access before publishing the new vnode.
-+	 */
-+	if (!error && !count && eofflag &&
-+	    !(uap->options & FSOPT_LIST_SNAPSHOT) &&
-+	    (dvp->v_mount->mnt_flag & MNT_UNION)) {
-+		vnode_t uvp;
-+		int union_error = lookup_traverse_union(dvp, &uvp, ctx);
-+		if (!union_error) {
-+			if (uvp->v_type != VDIR) {
-+				union_error = ENOTDIR;
-+			}
-+#if CONFIG_MACF
-+			if (!union_error) {
-+				union_error = mac_vnode_check_readdir(ctx, uvp);
-+			}
-+#endif
-+			if (!union_error) {
-+				union_error = vnode_authorize(uvp, NULL, action, ctx);
-+			}
-+			if (!union_error) {
-+				union_error = vnode_ref_ext(uvp, fp->fp_glob->fg_flag & O_EVTONLY, 0);
-+			}
-+			if (!union_error) {
-+				fp_set_data(fp, uvp);
-+				fp->fp_glob->fg_offset = 0;
-+				vnode_rele_internal(dvp, fp->fp_glob->fg_flag & O_EVTONLY, 0, 0);
-+				vnode_put(dvp);
-+				dvp = uvp;
-+				/* The existing zero-offset path discards upper EOF and
-+				 * buffered dirents before constructing the lower UIO. */
-+				goto unionread;
-+			}
-+			vnode_put(uvp);
-+		}
-+		/* No corresponding lower directory is ordinary end-of-directory;
-+		 * other failures must not silently hide lower entries. */
-+		if (union_error != ENOENT) {
-+			error = union_error;
-+		}
-+	}
-+#endif
-+
- 	if (count) {
- 		fvdata->fv_offset = uio_offset(auio);
- 		fp->fp_glob->fg_offset = fvdata->fv_offset;
 diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
-index 5b038ca..b57f8cf 100644
+index 5b038ca..229d6a1 100644
 --- a/bsd/vfs/vfs_subr.c
 +++ b/bsd/vfs/vfs_subr.c
 @@ -7668,6 +7668,13 @@ mount_list_add(mount_t mp)
@@ -3557,87 +3199,11 @@ index 5b038ca..b57f8cf 100644
  	return res;
  }
  
-@@ -13504,3 +13511,27 @@ vnode_isappendonly(vnode_t vp)
- {
- 	return os_atomic_load(&vp->v_ext_flag, relaxed) & VE_APPENDONLY;
- }
-+
-+/*
-+ * Bring-up (boot-arg union-hide-lower=1): the owner chain union-mounts the SystemOS volume over the OS volume at "/", so files under "/"
-+ * come from two APFS volumes with two device ids. CoreServices expects one device per mount point and aborts on a device id that no
-+ * mount lists. The mount whose root vnode another mount covers reports the covering mount's device id and statfs.
-+ */
-+mount_t
-+virt_union_top(mount_t mp)
-+{
-+	uint32_t enabled = 0;
-+	vnode_t rvp = NULLVP;
-+	mount_t top = mp;
-+
-+	if (mp == NULL || !PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) || !enabled) {
-+		return mp;
-+	}
-+	if (VFS_ROOT(mp, &rvp, vfs_context_current()) == 0) {
-+		if (rvp->v_mountedhere != NULL) {
-+			top = rvp->v_mountedhere;
-+		}
-+		vnode_put(rvp);
-+	}
-+	return top;
-+}
 diff --git a/bsd/vfs/vfs_syscalls.c b/bsd/vfs/vfs_syscalls.c
-index 942dc24..a9fa81d 100644
+index 942dc24..6143ada 100644
 --- a/bsd/vfs/vfs_syscalls.c
 +++ b/bsd/vfs/vfs_syscalls.c
-@@ -3719,6 +3719,29 @@ quotactl(__unused proc_t p, __unused struct quotactl_args *uap, __unused int32_t
- }
- #endif /* QUOTA */
- 
-+extern mount_t virt_union_top(mount_t mp);
-+
-+/*
-+ * CoreServices' FSNodeServer_PreWarmVolumeCache registers statfs64("/System/Volumes/Preboot/") as a second volume and aborts when its
-+ * device id equals the boot volume's. Here Preboot is an empty directory of the root volume, not a mount: statfs64 reports it missing
-+ * (boot-arg union-hide-lower=1), which that code skips.
-+ */
-+static bool
-+virt_preboot_hidden(vnode_t vp)
-+{
-+	uint32_t enabled = 0;
-+	char path[128];
-+	int length = sizeof(path);
-+
-+	if (!PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) || !enabled) {
-+		return false;
-+	}
-+	if (vn_getpath(vp, path, &length) != 0) {
-+		return false;
-+	}
-+	return strncmp(path, "/System/Volumes/Preboot", 23) == 0 && (path[23] == '\0' || path[23] == '/');
-+}
-+
- static int
- statfs_internal(proc_t p, struct mount *mp, user_addr_t bufp)
- {
-@@ -3765,7 +3788,7 @@ statfs(proc_t p, struct statfs_args *uap, __unused int32_t *retval)
- 		return error;
- 	}
- 	vp = nd.ni_vp;
--	mp = vp->v_mount;
-+	mp = virt_union_top(vp->v_mount);
- 	nameidone(&nd);
- 
- 	error = statfs_internal(p, mp, uap->buf);
-@@ -3794,7 +3817,7 @@ fstatfs(proc_t p, struct fstatfs_args *uap, __unused int32_t *retval)
- 
- 	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
- 
--	mp = vp->v_mount;
-+	mp = virt_union_top(vp->v_mount);
- 	if (!mp) {
- 		error = EBADF;
- 		goto out_vnode;
-@@ -3836,6 +3859,13 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
+@@ -3836,6 +3836,13 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
  	vfs_getfstypename(mp, sfs->f_fstypename, MFSTYPENAMELEN);
  	strlcpy(&sfs->f_mntonname[0], &vsfs->f_mntonname[0], MAXPATHLEN);
  	strlcpy(&sfs->f_mntfromname[0], &vsfs->f_mntfromname[0], MAXPATHLEN);
@@ -3651,81 +3217,7 @@ index 942dc24..a9fa81d 100644
  }
  
  /*
-@@ -3866,8 +3896,13 @@ statfs64(__unused struct proc *p, struct statfs64_args *uap, __unused int32_t *r
- 		goto out;
- 	}
- 	vp = ndp->ni_vp;
--	mp = vp->v_mount;
-+	mp = virt_union_top(vp->v_mount);
- 	nameidone(ndp);
-+	if (virt_preboot_hidden(vp)) {
-+		vnode_put(vp);
-+		error = ENOENT;
-+		goto out;
-+	}
- 
- #if CONFIG_MACF
- 	error = mac_mount_check_stat(ctxp, mp);
-@@ -3924,7 +3959,7 @@ fstatfs64(__unused struct proc *p, struct fstatfs64_args *uap, __unused int32_t
- 
- 	AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
- 
--	mp = vp->v_mount;
-+	mp = virt_union_top(vp->v_mount);
- 	if (!mp) {
- 		error = EBADF;
- 		goto out;
-@@ -3966,6 +4001,29 @@ struct getfsstat_struct {
- };
- 
- 
-+/*
-+ * Bring-up (boot-arg union-hide-lower=1): the owner chain union-mounts the SystemOS volume over the OS volume at "/", so getfsstat
-+ * lists two mounts on "/". CoreServices' FileIDTree identifies a volume by the device id of its mount point, which is the upper
-+ * mount's for both, and aborts ("volume for device id already exists"). The mount whose root vnode another mount covers is left out
-+ * of getfsstat, the way a single volume at "/" looks on a real system.
-+ */
-+static bool
-+virt_union_lower_hidden(mount_t mp, vfs_context_t ctx)
-+{
-+	uint32_t enabled = 0;
-+	vnode_t rvp = NULLVP;
-+	bool hidden = false;
-+
-+	if (!PE_parse_boot_argn("union-hide-lower", &enabled, sizeof(enabled)) || !enabled) {
-+		return false;
-+	}
-+	if (VFS_ROOT(mp, &rvp, ctx) == 0) {
-+		hidden = rvp->v_mountedhere != NULL;
-+		vnode_put(rvp);
-+	}
-+	return hidden;
-+}
-+
- static int
- getfsstat_callback(mount_t mp, void * arg)
- {
-@@ -3974,6 +4032,9 @@ getfsstat_callback(mount_t mp, void * arg)
- 	int error, my_size;
- 	vfs_context_t ctx = vfs_context_current();
- 
-+	if (virt_union_lower_hidden(mp, ctx)) {
-+		return VFS_RETURNED;
-+	}
- 	if (fstp->sfsp && fstp->count < fstp->maxcount) {
- #if CONFIG_MACF
- 		error = mac_mount_check_stat(ctx, mp);
-@@ -4157,6 +4218,9 @@ getfsstat64_callback(mount_t mp, void * arg)
- 	struct statfs64 sfs;
- 	int error;
- 
-+	if (virt_union_lower_hidden(mp, vfs_context_current())) {
-+		return VFS_RETURNED;
-+	}
- 	if (fstp->sfsp && fstp->count < fstp->maxcount) {
- #if CONFIG_MACF
- 		error = mac_mount_check_stat(vfs_context_current(), mp);
-@@ -6215,6 +6279,34 @@ linkat(__unused proc_t p, struct linkat_args *uap, __unused int32_t *retval)
+@@ -6215,6 +6222,34 @@ linkat(__unused proc_t p, struct linkat_args *uap, __unused int32_t *retval)
  	           uap->fd2, uap->link, uap->flag, UIO_USERSPACE);
  }
  
@@ -3760,7 +3252,7 @@ index 942dc24..a9fa81d 100644
  /*
   * Make a symbolic link.
   *
-@@ -6250,6 +6342,10 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
+@@ -6250,6 +6285,10 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
  
  	error = nameiat(&nd, fd);
  	if (error) {
@@ -3771,7 +3263,7 @@ index 942dc24..a9fa81d 100644
  		goto out;
  	}
  	dvp = nd.ni_dvp;
-@@ -6265,6 +6361,7 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
+@@ -6265,6 +6304,7 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
  	    dvp, &nd.ni_cnd, &va);
  #endif
  	if (error != 0) {
@@ -3779,7 +3271,7 @@ index 942dc24..a9fa81d 100644
  		goto skipit;
  	}
  
-@@ -6276,10 +6373,12 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
+@@ -6276,10 +6316,12 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
  	/* authorize */
  	if (error == 0) {
  		error = vnode_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx);
@@ -3792,7 +3284,7 @@ index 942dc24..a9fa81d 100644
  	}
  
  #if CONFIG_FILE_LEASES
-@@ -6288,16 +6387,19 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
+@@ -6288,16 +6330,19 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
  
  	if (error == 0) {
  		error = VNOP_SYMLINK(dvp, &vp, &nd.ni_cnd, &va, path, ctx);
@@ -3812,143 +3304,11 @@ index 942dc24..a9fa81d 100644
  	}
  #endif
  
-diff --git a/bsd/vfs/vfs_vnops.c b/bsd/vfs/vfs_vnops.c
-index 8ab165e..95cc4c0 100644
---- a/bsd/vfs/vfs_vnops.c
-+++ b/bsd/vfs/vfs_vnops.c
-@@ -1512,6 +1512,8 @@ error_out:
- 	return error;
- }
- 
-+extern mount_t virt_union_top(mount_t mp);
-+
- /*
-  * File table vnode stat routine.
-  *
-@@ -1586,10 +1588,10 @@ vn_stat_noauth(struct vnode *vp, void *sbptr, kauth_filesec_t *xsec, int isstat6
- 	 * Copy from vattr table
- 	 */
- 	if (isstat64 != 0) {
--		sb64->st_dev = va.va_fsid;
-+		sb64->st_dev = virt_union_top(vp->v_mount) == vp->v_mount ? va.va_fsid : virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid.val[0];
- 		sb64->st_ino = (ino64_t)va.va_fileid;
- 	} else {
--		sb->st_dev = va.va_fsid;
-+		sb->st_dev = virt_union_top(vp->v_mount) == vp->v_mount ? va.va_fsid : virt_union_top(vp->v_mount)->mnt_vfsstat.f_fsid.val[0];
- 		sb->st_ino = (ino_t)va.va_fileid;
- 	}
- 	mode = va.va_mode;
 diff --git a/bsd/vm/vm_unix.c b/bsd/vm/vm_unix.c
-index 64d187a..222b708 100644
+index 64d187a..d8fd4af 100644
 --- a/bsd/vm/vm_unix.c
 +++ b/bsd/vm/vm_unix.c
-@@ -1384,6 +1384,65 @@ static void shared_region_map_and_slide_cleanup(
- 	struct _sr_file_mappings *sr_file_mappings,
- 	struct vm_shared_region  *shared_region);
- 
-+#if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER && !CONFIG_CSR
-+#if !DEVELOPMENT && !DEBUG
-+#error The independent owner cache carrier is a development instrument
-+#endif
-+extern int native_verified_block_root_authorized(dev_t);
-+extern int native_verified_block_volume_device(const char *, dev_t *, char *, size_t);
-+unsigned long native_owner_cache_carrier_accepts = 0;
-+unsigned long native_owner_cache_carrier_rejects = 0;
-+volatile dev_t native_owner_cache_carrier_root_device = NODEV;
-+volatile dev_t native_owner_cache_carrier_file_device = NODEV;
-+
-+static boolean_t
-+native_owner_shared_cache_carrier(vnode_t process_root, vnode_t file)
-+{
-+	const char *root_uuid = "C73696D4-CAC4-40A0-90CB-7D0463E4E3E6";
-+#if defined(XNU_OWNER_CACHE_CARRIER_WRONG_UUID) && XNU_OWNER_CACHE_CARRIER_WRONG_UUID
-+	const char *cache_uuid = "9846FE78-2910-4297-AF97-D59BB6F8FC16";
-+#else
-+	const char *cache_uuid = "8846FE78-2910-4297-AF97-D59BB6F8FC16";
-+#endif
-+	const char *directory = "/private/preboot/System/Library/Caches/com.apple.dyld";
-+	vnode_t expected_parent = NULLVP, device_vnode;
-+	dev_t root_device = NODEV, cache_device = NODEV, expected = NODEV;
-+	char device_path[64];
-+	boolean_t authorized = FALSE;
-+	if (process_root != rootvnode || !file || vnode_vtype(file) != VREG) goto out;
-+	mount_t root_mount = vnode_mount(process_root), cache_mount = vnode_mount(file);
-+	if (!root_mount || !cache_mount || root_mount == cache_mount ||
-+	    !(vfs_flags(root_mount) & MNT_RDONLY) || !(vfs_flags(cache_mount) & MNT_RDONLY) ||
-+	    strcmp(vfs_statfs(root_mount)->f_fstypename, "apfs") ||
-+	    strcmp(vfs_statfs(cache_mount)->f_fstypename, "apfs")) goto out;
-+	device_vnode = vfs_devvp(root_mount);
-+	if (device_vnode) {
-+		root_device = vnode_specrdev(device_vnode);
-+		vnode_put(device_vnode);
-+	}
-+	device_vnode = vfs_devvp(cache_mount);
-+	if (device_vnode) {
-+		cache_device = vnode_specrdev(device_vnode);
-+		vnode_put(device_vnode);
-+	}
-+	if (root_device == NODEV || cache_device == NODEV ||
-+	    !native_verified_block_volume_device(root_uuid, &expected, device_path, sizeof(device_path)) ||
-+	    expected != root_device ||
-+	    !native_verified_block_volume_device(cache_uuid, &expected, device_path, sizeof(device_path)) ||
-+	    expected != cache_device) goto out;
-+	if (vnode_lookup(directory, 0, &expected_parent, vfs_context_current())) goto out;
-+	authorized = vnode_vtype(expected_parent) == VDIR && vnode_mount(expected_parent) == cache_mount &&
-+	    vnode_parent(file) == expected_parent && native_verified_block_root_authorized(root_device);
-+out:
-+	if (expected_parent) vnode_put(expected_parent);
-+	native_owner_cache_carrier_root_device = root_device;
-+	native_owner_cache_carrier_file_device = cache_device;
-+	if (authorized) os_atomic_inc(&native_owner_cache_carrier_accepts, relaxed);
-+	else os_atomic_inc(&native_owner_cache_carrier_rejects, relaxed);
-+	return authorized;
-+}
-+#endif
-+
- /*
-  * Setup part of _shared_region_map_and_slide().
-  * It had to be broken out of _shared_region_map_and_slide() to
-@@ -1716,7 +1775,13 @@ after_root_check:
- 		 * is either on the root volume or in the preboot cryptex volume.
- 		 */
- 		assert(rdir_vp != NULL);
-+#if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER
-+		boolean_t owner_carrier = FALSE;
-+#endif
- 		if (srfmp->vp->v_mount != rdir_vp->v_mount) {
-+#if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER
-+			owner_carrier = native_owner_shared_cache_carrier(rdir_vp, srfmp->vp);
-+#endif
- 			vnode_t preboot_vp = NULL;
- #if XNU_TARGET_OS_OSX
- #define PREBOOT_CRYPTEX_PATH "/System/Volumes/Preboot/Cryptexes"
-@@ -1724,7 +1789,11 @@ after_root_check:
- #define PREBOOT_CRYPTEX_PATH "/private/preboot/Cryptexes"
- #endif
- 			error = vnode_lookup(PREBOOT_CRYPTEX_PATH, 0, &preboot_vp, vfs_context_current());
--			if (error || srfmp->vp->v_mount != preboot_vp->v_mount) {
-+			if ((error || srfmp->vp->v_mount != preboot_vp->v_mount)
-+#if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER
-+			    && !owner_carrier
-+#endif
-+			    ) {
- 				SHARED_REGION_TRACE_ERROR(
- 					("shared_region: %p [%d(%s)] map(%p:'%s'): "
- 					"not on process' root volume nor preboot volume\n",
-@@ -1743,7 +1812,11 @@ after_root_check:
- 		}
- #endif /* CONFIG_CSR */
- 
--		if (scdir_enforce) {
-+		if (scdir_enforce
-+#if defined(XNU_OWNER_CACHE_CARRIER) && XNU_OWNER_CACHE_CARRIER && !CONFIG_CSR
-+		    && !owner_carrier
-+#endif
-+		    ) {
- 			char **expected_scdir_path = is_driverkit ? driverkit_scdir_path : scdir_path;
- 			struct vnode *scdir_vp = NULL;
- 			for (expected_scdir_path = is_driverkit ? driverkit_scdir_path : scdir_path;
-@@ -3909,6 +3982,16 @@ vm_map_malloc_ranges SYSCTL_HANDLER_ARGS
+@@ -3909,6 +3909,16 @@ vm_map_malloc_ranges SYSCTL_HANDLER_ARGS
  	int len;
  	mach_vm_offset_t right_hole_max;
  

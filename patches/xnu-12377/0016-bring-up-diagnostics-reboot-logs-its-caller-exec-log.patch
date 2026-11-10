@@ -1,7 +1,7 @@
-From 88cef06df15ec3bdbf3c9e9b193e598423c5b7ca Mon Sep 17 00:00:00 2001
+From 92ff3d534d5e7b856da273f7175cdbd96b3fbe8b Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Sat, 24 Oct 2026 17:19:00 -0400
-Subject: [PATCH 16/40] bring-up diagnostics: reboot() logs its caller;
+Subject: [PATCH 16/49] bring-up diagnostics: reboot() logs its caller;
  exec-log=2 also logs the start of every image activation
 
 (cherry picked from commit 13c822883d80aee1ce1fe1f932cdf318764937dc)
@@ -11,7 +11,7 @@ Subject: [PATCH 16/40] bring-up diagnostics: reboot() logs its caller;
  2 files changed, 10 insertions(+)
 
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 3edad4b..8345155 100644
+index 5ac0c96..29bf2ac 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -2998,6 +2998,14 @@ exec_activate_image(struct image_params *imgp)

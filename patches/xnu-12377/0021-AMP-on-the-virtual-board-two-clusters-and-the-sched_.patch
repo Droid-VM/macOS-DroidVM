@@ -1,7 +1,7 @@
-From 44d8f282ed81c2536a2a4e09848c9f7a8facc1d2 Mon Sep 17 00:00:00 2001
+From 92973f2b698f25c932fc9d84eac309b97a02c481 Mon Sep 17 00:00:00 2001
 From: lateautumn233 <lateautumn233@foxmail.com>
 Date: Tue, 27 Oct 2026 07:57:13 -0400
-Subject: [PATCH 21/40] AMP on the virtual board: two clusters and the
+Subject: [PATCH 21/49] AMP on the virtual board: two clusters and the
  sched_amp scheduler; each CPU's cluster type comes from the device tree's
  cluster-type ('E' or 'P', from the host's vCPU capacities), not the CPU
  driver's boot cluster type; one type of core only skips the two-pset checks

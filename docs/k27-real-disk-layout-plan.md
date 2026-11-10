@@ -178,7 +178,13 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 
 ### 删除内核里的 union 布局代码（11-10）
 
-单卷 + 原生挂载跑通后，k27 内核删掉了只给 union 布局用的代码。这些改动还没提交，也还没导出成补丁。删掉的内容：
+单卷 + 原生挂载跑通后，k27 内核删掉了只给 union 布局用的代码。删除不是另加一个回退补丁，而是重建了 k27 分支历史，再整体重新导出补丁系列（共 49 个）：
+- 旧 0023（union-hide-lower 的 MNT_ROOTFS）、0024（union create 查找）整个去掉。
+- 0015 只剩 IOWorkLoop，0038 只剩 CONFIG_FIRMLINKS，0039 只剩 k27-mkdir-log；0002、0008、0025、0044 里的 union/Data 挂载部分也去掉了。
+- 最后一个补丁 0049 只做根卷校验和 boot manifest 的单卷化，并删掉 SystemOS 挂载。
+- 旧历史留在分支 `k27-before-reexport-20261110`。
+
+最终源码删掉的内容：
 - `union-hide-lower` 全套：`virt_union_top`/`virt_union_visflags`（stat、statfs、getattrlist 报上层设备号和 MNT_ROOTFS）、getfsstat 隐藏下层、`virt_preboot_hidden`。vfs_attrlist.c、vfs_vnops.c 回到原版。
 - union 查找/读目录的修补（0015 里 vfs_lookup 那部分、0024，以及 getattrlistbulk 的 union 读）。vfs_lookup.c 回到原版。0015 里 IOWorkLoop 的修复保留。
 - 内核自建 firmlink（0038：`native_owner_firmlinks_prepare`、lookup 跟随 firmlink、`vfs_flags` 隐藏 MNT_UNION）。kpi_vfs.c 回到原版。`config_firmlinks` 保留，APFS 原生 firmlink 要用它。

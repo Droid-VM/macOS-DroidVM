@@ -1,0 +1,26 @@
+From f3054fefab310ff12a01a7bee3fa499d5a85f8a9 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Fri, 30 Oct 2026 11:50:11 -0400
+Subject: [PATCH 36/49] k27: CONFIG_FIRMLINKS on
+
+APFS sets the firmlinks of the System volume (com.apple.fs.firmlink) through vnode_setasfirmlink and the name cache follows them;
+without CONFIG_FIRMLINKS the KPI is a stub and no firmlink of the volume group is stitched.
+
+(cherry picked from commit b84cfb2a621c1af02c81c97d7f6509f10ddfb7c1)
+---
+ config/MASTER.arm64.bcm2837 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/config/MASTER.arm64.bcm2837 b/config/MASTER.arm64.bcm2837
+index a10a62b..d19205f 100644
+--- a/config/MASTER.arm64.bcm2837
++++ b/config/MASTER.arm64.bcm2837
+@@ -33,7 +33,7 @@
+ #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel config_imgsrc_access ]
+ #  BSD_DEV =        [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEV ]
+ #  BSD_DEBUG =      [ BSD_BASE config_netboot config_imgsrc_access pgo config_vnguard rosetta BSD_EXTRAS_DEBUG ]
+-#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver]
++#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_triggers config_fse routefs namedstreams config_dataless_files bindfs config_ext_resolver config_firmlinks ]
+ #  FILESYS_RELEASE= [ FILESYS_BASE ]
+ #  FILESYS_DEV =    [ FILESYS_BASE fdesc config_union_mounts ]
+ #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc config_union_mounts ]
