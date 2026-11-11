@@ -238,3 +238,25 @@ MACOS_PCIE=1 MACOS_DISPLAY=1 MACOS_GPU=1 MACOS_VIDEO=1 MACOS_AUDIO=1 K27_NO_BOOT
 CPU 采样同时确认登录前 audiomxd 位于 BTAudioRoutingRequest::_ensureXPCStarted，
 循环查询 SCDynamicStoreCopyConsoleUser，连带 configd 高占用（既有问题见 k27-audio.md）。
 登录后两者高占用消失；仍持续占用一核的 rpcsvchost 另行定位，不能视为本轮已解决。
+
+## 2026-11-11 高 CPU 定向定位
+
+输入恢复、完成登录后，audiomxd/configd 高占用消失。另有
+`rpcsvchost -launchd netlogon.bundle` 持续占约一核，采样落在
+DCERPC `timer_loop → dcethread_cond_timedwait → _pthread_cond_wait → __gettimeofday`。
+该进程启动时间为 1970 年，校时后重启同一服务，CPU 从约 99% 降为 0%，
+累计 CPU 时间随后维持 0.08 秒。未禁用服务，也未修改 RPC 二进制。
+
+PL030 RTC 补齐方案：
+- ADT 从 FDT `arm,primecell-periphid=0x41030` 生成 rtc 节点；父地址 0x1000，实际物理地址 0x2000；
+- ArmDTPlatform 在发布设备时解析 RTC 资源并映射，getGMTTimeOfDay 读取 PL030 RTCDR；
+- `k27/build-platform-rtc.sh` 从未改动的上游源生成带补丁副本，独立重建平台 archive，
+  `build-kernel27.sh` 自动调用；不会重编或覆盖已打 SPI 补丁的 ArmCpu archive。
+
+目的：让 clock_initialize_calendar 在启动时即得到当前时间，避免用户态校时前建立
+1970 年的绝对等待截止时间。部署镜像 `out/k27/pcie-p1/boot-pcie-input-rtc.img`。
+
+RTC 定向上机结果：clock_initialize_calendar 不再报 UTC=0；launchd 从
+2026-11-11 06:17:48（guest 本地时区）启动，configd 与 netlogon 也从当前时间启动，
+netlogon CPU=0%。四个输入服务保持正确挂接。早期 6×8 核采样 95.8% idle，
+该数值仅代表采样当时，后续登录前 audiomxd 的独立问题仍需观察。

@@ -182,6 +182,11 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         assert text.count('    vm = describe(parse_fdt(args.fdt.read_bytes()))') == 1
         text = text.replace('    vm = describe(parse_fdt(args.fdt.read_bytes()))',
                             '    fdt_nodes = parse_fdt(args.fdt.read_bytes())\n    vm = describe(fdt_nodes)')
+        # crosvm's PL030 RTC supplies wall time before userspace services create absolute deadlines.
+        text = text.replace(marker, "              *[node('rtc', [('compatible', b'arm,pl030\\0'),"
+                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size))])"
+                                    " for props in fdt_nodes.values() if props.get('arm,primecell-periphid') == struct.pack('>I', 0x41030)"
+                                    " for address, size in reg_pairs(props['reg'])],\n" + marker)
         if os.environ.get('MACOS_PCIE') == '1':
             # MACOS_PCIE=1: Apple's own bridge, AppleVirtualPlatformPCIE (docs/k27-vmapple-pcie-msi-plan.md), takes /arm-io/pcie
             # (its personality on IOPlatformDevice: overlay/kext/AppleVirtualPlatformPCIE.json). It reads #address-cells 3 and

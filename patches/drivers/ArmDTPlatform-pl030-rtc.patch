@@ -1,0 +1,42 @@
+--- a/ArmDTPlatform.cpp
++++ b/ArmDTPlatform.cpp
+@@ -36,7 +36,9 @@
+   bool configure (IOService *provider) override;
+   const char *deleteList (void) override;
+   const char *excludeList (void) override;
++  long getGMTTimeOfDay (void) override;
+ private:
++  IOMemoryMap *fRTC = nullptr;
+   bool hasNVRAMProxy (IOService *provider);
+   bool createDeviceNubs (IOService *provider);
+ };
+@@ -100,6 +102,13 @@
+       nub->release ();
+       continue;
+     }
++    // The platform clock must be ready before clock_initialize_calendar, not after userspace time sync.
++    OSData *compatible = OSDynamicCast (OSData, nub->getProperty ("compatible"));
++    if (compatible != nullptr && compatible->getLength () == sizeof ("arm,pl030") &&
++        memcmp (compatible->getBytesNoCopy (), "arm,pl030", sizeof ("arm,pl030")) == 0) {
++      nub->getResources ();
++      fRTC = nub->mapDeviceMemoryWithIndex (0, kIOMapAnywhere | kIOMapInhibitCache);
++    }
+     nub->registerService ();
+     nub->release ();
+     count++;
+@@ -109,6 +118,15 @@
+   return true;
+ }
+ 
++long ArmDTPlatform::getGMTTimeOfDay (void)
++{
++  if (fRTC == nullptr) { return IODTPlatformExpert::getGMTTimeOfDay (); }
++  uint32_t seconds;
++  const uintptr_t address = fRTC->getVirtualAddress ();
++  __asm__ volatile ("ldr %w0, [%1]" : "=r" (seconds) : "r" (address) : "memory");
++  return seconds;
++}
++
+ static void platformStageReset (void)
+ {
+   // PSCI SYSTEM_RESET via the same SMC conduit as the entry reset probe.
