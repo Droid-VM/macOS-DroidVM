@@ -1,0 +1,29 @@
+--- a/ArmDTPlatform.cpp
++++ b/ArmDTPlatform.cpp
+@@ -34,6 +34,7 @@
+   OSDeclareDefaultStructors (ArmDTPlatform)
+ public:
+   bool configure (IOService *provider) override;
++  void PMRegisterDevice (IOService *nub, IOService *device) override;
+   const char *deleteList (void) override;
+   const char *excludeList (void) override;
+   long getGMTTimeOfDay (void) override;
+@@ -58,6 +59,18 @@
+   return "()";
+ }
+ 
++void ArmDTPlatform::PMRegisterDevice (IOService *nub, IOService *device)
++{
++  // Preserve the bus power hierarchy so a USB port keeps its controller powered.
++  for (IOService *parent = nub; parent != nullptr; parent = parent->getProvider ()) {
++    if (parent != device && parent->inPlane (gIOPowerPlane)) {
++      parent->addPowerChild (device);
++      return;
++    }
++  }
++  IODTPlatformExpert::PMRegisterDevice (nub, device);
++}
++
+ bool ArmDTPlatform::hasNVRAMProxy (IOService *provider)
+ {
+   IORegistryEntry *chosen = provider->childFromPath ("chosen", gIODTPlane);
