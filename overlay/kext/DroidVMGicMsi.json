@@ -1,0 +1,28 @@
+{
+  "name": "DroidVMGicMsi",
+  "bundle": "com.unixnu.driver.DroidVMGicMsi",
+  "version": "1.0.0",
+  "objects": "out/x12377/native-kexts/DroidVMGicMsi/objects.json",
+  "start": "_native_kext_start",
+  "stop": "_native_kext_stop",
+  "libraries": {
+    "com.apple.kpi.iokit": "18.0.0",
+    "com.apple.kpi.libkern": "18.0.0",
+    "com.apple.kpi.unsupported": "18.0.0"
+  },
+  "personalities": {
+    "DroidVMGicMsi": {
+      "CFBundleIdentifier": "com.unixnu.driver.DroidVMGicMsi",
+      "IOClass": "DroidVMGicMsi",
+      "IOProviderClass": "IOPlatformDevice",
+      "IONameMatch": "droidvm,gic-mbi"
+    }
+  },
+  "patch_personalities": {
+    "com.apple.driver.AppleVirtualPlatform": {
+      "AppleVirtualPlatformPCIE": {
+        "IOProviderClass": "IOPlatformDevice"
+      }
+    }
+  }
+}

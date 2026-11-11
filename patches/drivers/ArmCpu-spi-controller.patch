@@ -1,0 +1,28 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -183,7 +183,7 @@
+ // Group 1 non-secure, priority 0xa0, the given trigger and routed to the boot CPU (GICD_IROUTER, affinity routing is on),
+ // then enabled. The handler runs in the primary interrupt context, before the EOI, and must clear a level source.
+ // An SPI without a handler is counted and disabled instead of being acknowledged forever.
+-#define ARMCPU_SPI_SLOTS 16
++#define ARMCPU_SPI_SLOTS 128   // the MBI SPIs of crosvm's --mbi-spis (MSI/MSI-X, DroidVMGicMsi) take one each
+ struct ArmCpuSpi {uint32_t id; void (*handler) (void *); void *context; volatile uint64_t count;};
+ static ArmCpuSpi gSpi[ARMCPU_SPI_SLOTS];
+ static volatile uint32_t gSpiUsed = 0;
+@@ -866,6 +866,16 @@
+   return kIOReturnSuccess;
+ }
+ 
++// Masks or unmasks an attached SPI (ICENABLER/ISENABLER, which only touch the line's own bit): the interrupt controller
++// DroidVMGicMsi keeps a vector's line attached and turns it on and off with IOInterruptController's enableVector/disableVectorHard.
++extern "C" IOReturn armcpu_spi_set_enabled (uint32_t intid, bool enabled)
++{
++  if (gDist == 0 || armcpu_gic_ready == 0) { return kIOReturnNotReady; }
++  if (intid < 32 || intid >= 1020) { return kIOReturnBadArgument; }
++  write32 (gDist, (enabled ? 0x100 : 0x180) + (intid / 32) * 4, 1U << (intid % 32));
++  return kIOReturnSuccess;
++}
++
+ extern "C" uint64_t armcpu_spi_count (uint32_t intid)
+ {
+   const uint32_t used = __atomic_load_n (&gSpiUsed, __ATOMIC_ACQUIRE);

@@ -40,6 +40,9 @@ ROOT_UUID = os.environ.get('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF
 if not ROOT_UUID:
     raise SystemExit('MACOS_ROOT_UUID must name the System volume (disk.json); the legacy union layout was removed')
 DATA_STORE_MMIO = 0x0a000000
+# /arm-io/pcie's device-interrupt-parent under MACOS_PCIE=1: DroidVMGicMsi takes it as its AAPL,phandle once it is registered as the
+# bridge's interrupt controller ('MBIF'; the ADT's nodes have no AAPL,phandle of their own). overlay/kext/DroidVMGicMsi.cpp has it too.
+GIC_MBI_PHANDLE = 0x4d424946
 OS_UUID = ROOT_UUID
 BOARD = ROOT / 'sources/UniXNU-droidvm/board.toml'
 ADT_TOOL = ROOT / 'sources/UniXNU-droidvm/scripts/make-droidvm-adt.py'
@@ -179,9 +182,31 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         assert text.count('    vm = describe(parse_fdt(args.fdt.read_bytes()))') == 1
         text = text.replace('    vm = describe(parse_fdt(args.fdt.read_bytes()))',
                             '    fdt_nodes = parse_fdt(args.fdt.read_bytes())\n    vm = describe(fdt_nodes)')
-        text = text.replace(marker, "              *[node('pcie', [('compatible', b'pci-host-ecam-generic\\0'), ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)),"
-                                    " ('dma-coherent', b'')]) for address, size in [reg_pairs(props['reg'])[0] for props in fdt_nodes.values()"
-                                    " if b'pci-host-ecam-generic' in props.get('compatible', b'')]],\n" + marker)
+        if os.environ.get('MACOS_PCIE') == '1':
+            # MACOS_PCIE=1: Apple's own bridge, AppleVirtualPlatformPCIE (docs/k27-vmapple-pcie-msi-plan.md), takes /arm-io/pcie
+            # (its personality on IOPlatformDevice: overlay/kext/AppleVirtualPlatformPCIE.json). It reads #address-cells 3 and
+            # #size-cells 2, and each 28-byte ranges entry as a flags word and the little-endian PCI address, CPU address and size
+            # (it adds the PCI address, which crosvm makes the CPU's). The parent address is relative to arm-io, whose ranges
+            # add ARMIO_BASE during IODTResolveAddressing; its interrupt parent is the service whose AAPL,phandle is
+            # device-interrupt-parent, DroidVMGicMsi on /arm-io/gic-mbi (crosvm's MBI frame, from the FDT's mbi-alias), and
+            # msi-frame-index that service's memory with the frame. Without the FDT's MBI frame (no --mbi-spis) it has no MSI.
+            text = text.replace(marker, "              *[node('pcie', [('compatible', b'pcie,vmapple1\\0'), ('device_type', b'pci\\0'),"
+                                        " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)),"
+                                        " ('#address-cells', struct.pack('<I', 3)), ('#size-cells', struct.pack('<I', 2)),"
+                                        " ('ranges', b''.join(struct.pack('<IQQQ', c[i], c[i + 1] << 32 | c[i + 2], (c[i + 3] << 32 | c[i + 4]) - ARMIO_BASE,"
+                                        " c[i + 5] << 32 | c[i + 6]) for c in [cells(props['ranges'])] for i in range(0, len(c), 7))),"
+                                        f" ('device-interrupt-parent', struct.pack('<I', {GIC_MBI_PHANDLE:#x})),"
+                                        " *([('msi-frame-index', struct.pack('<I', 0))] if any('mbi-alias' in p for p in fdt_nodes.values()) else []),"
+                                        " ('dma-coherent', b'')]) for props in fdt_nodes.values()"
+                                        " if b'pci-host-ecam-generic' in props.get('compatible', b'') for address, size in [reg_pairs(props['reg'])[0]]],\n"
+                                        "              *[node('gic-mbi', [('compatible', b'droidvm,gic-mbi\\0'),"
+                                        " ('reg', struct.pack('<QQ', struct.unpack('>Q', props['mbi-alias'])[0] - ARMIO_BASE, 0x1000)),"
+                                        " ('mbi-ranges', struct.pack('<II', *cells(props['mbi-ranges'])))])"
+                                        " for props in fdt_nodes.values() if 'mbi-alias' in props],\n" + marker)
+        else:
+            text = text.replace(marker, "              *[node('pcie', [('compatible', b'pci-host-ecam-generic\\0'), ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)),"
+                                        " ('dma-coherent', b'')]) for address, size in [reg_pairs(props['reg'])[0] for props in fdt_nodes.values()"
+                                        " if b'pci-host-ecam-generic' in props.get('compatible', b'')]],\n" + marker)
         # The Data volume persists in the data store (NativeRamBlock with DroidVMDataStore), so /chosen does not say ephemeral-storage:
         # with hw.ephemeral_storage set, usermanagerd skips its persona manager (os_variant_uses_ephemeral_storage) and then fails the
         # assertion _gPersonaManager != nil on loginwindow's persona login, and loginwindow never launches Dock, Finder and SystemUIServer.

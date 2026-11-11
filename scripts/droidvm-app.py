@@ -318,6 +318,34 @@ def net(args):
     dump_fdt()
 
 
+# MACOS_PCIE=1: Apple's PCIe bridge on crosvm's PCI host with MSI (docs/k27-vmapple-pcie-msi-plan.md): crosvm's --mbi-spis gives the
+# virtio-pci devices MSI-X through GIC MBI SPIs, whose frame the ADT's /arm-io/gic-mbi carries (scripts/run-macos-vm.py make_adt).
+PCIE = os.environ.get('MACOS_PCIE') == '1'
+MBI_SPIS = os.environ.get('MACOS_MBI_SPIS') or '64'
+
+
+def pcie(args):
+    """The registered VM with (MACOS_PCIE=1) or without --mbi-spis, every other setting kept; the FDT gains or loses the MBI
+    frame, so it is dumped again."""
+    ipc = ios.Ipc()
+    row = ios.find_vm(ipc)
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
+    options = vm['extra_options']
+    while '--mbi-spis' in options:
+        i = options.index('--mbi-spis')
+        del options[i:i + 2]
+    if PCIE:
+        options += ['--mbi-spis', MBI_SPIS]
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
+    print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''), json.dumps(options))
+    if not reply.get('success'):
+        raise SystemExit(1)
+    dump_fdt()
+
+
 def disks(args):
     """The registered VM with the disks of disk_options(), every other setting kept. The disks' windows come first, so every other
     one moves: the FDT is dumped again."""
@@ -471,7 +499,7 @@ def main():
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
     sub.add_parser('install').add_argument('dir')
     sub.add_parser('clone').add_argument('boot_img')
-    for name in ('push', 'register', 'disks', 'net', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'disks', 'net', 'pcie', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -486,6 +514,8 @@ def main():
         disks(args)
     elif args.cmd == 'net':
         net(args)
+    elif args.cmd == 'pcie':
+        pcie(args)
     elif args.cmd == 'snd':
         snd(args)
     elif args.cmd == 'media':

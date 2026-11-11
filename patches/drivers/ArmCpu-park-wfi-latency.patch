@@ -1,0 +1,100 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -32,6 +32,9 @@
+ volatile uint32_t armcpu_core_timer[8], armcpu_core_sgi[8];   // per logical core: architectural timer interrupts and SGI 0 taken
+ static bool gSpiIpi = false;                // boot-arg armcpu-spi-ipi=1: IPIs are software-pended SPIs 1008+core routed to that core (ICC_SGI1R_EL1 generates nothing on this board)
+ static bool gSelfIpi = true;                // every core sends itself SGI 0 from initCPU: XNU clears SIGPdisabled only when the core takes its first IPI, and until then cpu_idle() returns at once and the core spins at 100% (armcpu-self-ipi=0 disables)
++// Reported as powergate_latency: how long a delay may spin before blocking is worth it. A vCPU's WFI returns as soon as an
++// interrupt is pending, so the cost of waking is small; 20 us covers the IODelay(n) calls of the storage path.
++static constexpr uint32_t kArmCpuIdleLatencyNs = 20000;
+ volatile uint32_t armcpu_irq_phase = 0,armcpu_irq_id = 1023;
+ volatile uint32_t armcpu_quiesce_calls = 0,armcpu_halt_calls = 0;
+ // Secondary-CPU bring-up evidence (sheng-smp=1). Step values: 1 nub started, 2 registered, 3 start thread running,
+@@ -129,19 +132,37 @@
+   return value;
+ }
+ 
++// Polls until the bits clear. The limit counts polls as well as time: the counter runs on while the host has this vCPU's thread
++// descheduled, so a time limit alone (it was 100 ms) can fail a wake that had no chance to complete.
+ static bool waitClear (uintptr_t base, unsigned offset, uint32_t mask)
+ {
+   uint64_t frequency;
+   __asm__ volatile ("mrs %0, cntfrq_el0" : "=r" (frequency));
+   uint64_t started = counter ();
+-  while ((read32 (base, offset) & mask) != 0) {
+-    if (counter () - started > frequency / 10) {
++  for (unsigned polls = 0; (read32 (base, offset) & mask) != 0; ++polls) {
++    if (polls > 100000 && counter () - started > frequency) {
+       return false;
+     }
+   }
+   return true;
+ }
+ 
++// Parks a core that cannot join for good, in WFI with its virtual timer and Group 1 interrupts off, so that it waits blocked:
++// Gunyah traps WFI and blocks the vCPU but runs WFE in the guest, and a vCPU left in WFE kept its physical core until the host's
++// watchdog rebooted the phone.
++static void __attribute__ ((noreturn)) parkCore (void)
++{
++  __asm__ volatile ("msr daifset, #0xf\n msr cntv_ctl_el0, xzr\n isb" ::: "memory");
++  uint64_t pfr0;
++  __asm__ volatile ("mrs %0, id_aa64pfr0_el1" : "=r" (pfr0));
++  if (((pfr0 >> 24) & 0xf) != 0) {
++    uint64_t sre;
++    __asm__ volatile ("mrs %0, S3_0_C12_C12_5" : "=r" (sre));           // ICC_SRE_EL1
++    if ((sre & 1) != 0) { __asm__ volatile ("msr S3_0_C12_C12_7, xzr\n isb" ::: "memory"); }   // ICC_IGRPEN1_EL1
++  }
++  for (;;) { __asm__ volatile ("dsb sy\n wfi" ::: "memory"); }
++}
++
+ // GIC state shared by all CPU nubs. The boot CPU maps the distributor and redistributor frames; a secondary core
+ // only needs the virtual addresses and its own redistributor frame.
+ static OSSharedPtr<IOMemoryMap> gDistMap, gRedistMap;
+@@ -400,6 +421,10 @@
+   info.log_id = logicalId;
+   info.cluster_id = static_cast<uint32_t> (ml_get_cluster_number (physical));
+   info.cluster_type = ml_get_boot_cluster_type ();
++  // ml_delay_should_spin() answers from cpu_idle_latency and, when it is 0 (never reported), always blocks: every IODelay - even
++  // the 16 us ones NativeVirtioBlock's queue wait arms - became an assert_wait_deadline and a timer (launchd alone armed 108000
++  // already-past waits in a 19 s boot window). Report a latency so short delays spin; longer ones still block.
++  info.powergate_latency = kArmCpuIdleLatencyNs;
+   // XNU 12377 calls processor_boot() inside ml_processor_register(). Its
+   // scheduler can unmask IRQ before this call returns, so the per-CPU target
+   // must exist before registration (sleh_irq calls it without a null check).
+@@ -466,6 +491,7 @@
+   info.log_id = logicalId;
+   info.cluster_id = static_cast<uint32_t> (ml_get_cluster_number (static_cast<uint32_t> (affinity)));
+   info.cluster_type = ml_get_boot_cluster_type ();
++  info.powergate_latency = kArmCpuIdleLatencyNs;   // see the boot CPU's note
+   perfmon_interrupt_handler_func pmi = nullptr;
+   kern_return_t status = ml_processor_register (&info, &machProcessor, &ipi_handler, &pmi);
+   if (status != KERN_SUCCESS) { armcpu_smp_fail[logicalId] = 4; return false; }
+@@ -535,8 +561,8 @@
+     __asm__ volatile ("mrs %0, mpidr_el1" : "=r" (mpidr));
+     armcpu_smp_seen_mpidr[logicalId] = static_cast<uint32_t> (mpidr);
+     // A failure is recorded and the core parked (rather than a panic that hides the other cores' state).
+-    if ((mpidr & 0xffff) != (affinity & 0xffff)) { armcpu_smp_fail[logicalId] = 1; for (;;) { __asm__ volatile ("wfe"); } }
+-    if (!gRemoteGic && !wakeRedistributor (true)) { armcpu_smp_fail[logicalId] = 2; for (;;) { __asm__ volatile ("wfe"); } }
++    if ((mpidr & 0xffff) != (affinity & 0xffff)) { armcpu_smp_fail[logicalId] = 1; parkCore (); }
++    if (!gRemoteGic && !wakeRedistributor (true)) { armcpu_smp_fail[logicalId] = 2; parkCore (); }
+     armcpu_smp_step[logicalId] = 6;
+     enableGic ();
+     if (gSpiIpi) { spiIpiConfigure (gDist, logicalId, affinity); }
+@@ -564,6 +590,17 @@
+   enableCPUTimeBase (true);
+   setCPUState (kIOCPUStateRunning);
+   if (gSelfIpi) { signalCPU (this); }
++  // Bring-up: the cores that did not join park in WFI (parkCore) instead of spinning in WFE; the failure code says which step
++  // refused them (1 MPIDR mismatch, 2 redistributor wake, 3 remote wake, 4 processor registration).
++  if (armcpu_smp_fail[0] == 0 && armcpu_smp_fail[1] == 0 && armcpu_smp_fail[2] == 0 && armcpu_smp_fail[3] == 0 &&
++      armcpu_smp_fail[4] == 0 && armcpu_smp_fail[5] == 0 && armcpu_smp_fail[6] == 0 && armcpu_smp_fail[7] == 0) {
++    printf ("ArmCpu: %u secondary cores running, none parked\n", static_cast<unsigned> (armcpu_smp_running));
++  } else {
++    printf ("ArmCpu: parked step/fail core0 %u/%u 1 %u/%u 2 %u/%u 3 %u/%u 4 %u/%u 5 %u/%u 6 %u/%u 7 %u/%u\n",
++        armcpu_smp_step[0], armcpu_smp_fail[0], armcpu_smp_step[1], armcpu_smp_fail[1], armcpu_smp_step[2], armcpu_smp_fail[2],
++        armcpu_smp_step[3], armcpu_smp_fail[3], armcpu_smp_step[4], armcpu_smp_fail[4], armcpu_smp_step[5], armcpu_smp_fail[5],
++        armcpu_smp_step[6], armcpu_smp_fail[6], armcpu_smp_step[7], armcpu_smp_fail[7]);
++  }
+ }
+ 
+ void ArmCpu::dispatch (void *target, void *, void *, int)
