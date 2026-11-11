@@ -158,7 +158,7 @@ reims-vgpu 用 QEMU 的 `vmapple` 机器启动 Virtualization.framework 的 macO
 ### P4 收益项（各自单独立项）
 - xHCI 直通：2026-11-12 已实现三组 interrupter/MSI-X 并接入 AppleUSBXHCIPCI；外接设备和端口枚举仍待验证（见文末记录）。
 - 把 Data 盘、网卡逐个从自写 virtio-mmio 驱动迁到 virtio-pci + AppleVirtIO，前提是 P3 测出中断路径比轮询好。
-- MSI 向量按 CPU 分散路由（现在全部送启动核）。
+- MSI 向量按 CPU 分散路由：2026-11-12 已完成并部署，按已挂接 SPI 的注册顺序分配运行 CPU；xHCI 共用 SPI 的拆分仍独立保留。
 
 ## 风险
 
@@ -490,3 +490,45 @@ App 启动器由 `peripherals` 中的 `xhci_usb` 条目决定是否加 `--no-usb
 见 [three-interrupter-restart.log](../research/xhci-msix-2026-11-12/three-interrupter-restart.log)、
 [three-interrupter-restart-spi.log](../research/xhci-msix-2026-11-12/three-interrupter-restart-spi.log)、
 [three-interrupter-instances.log](../research/xhci-msix-2026-11-12/three-interrupter-instances.log)。
+
+## 2026-11-12：MSI 按运行 CPU 分散
+
+ArmCpu 原先把每条 SPI 的 GICD_IROUTER 写成启动核 affinity。
+新增 `armcpu_spi_distribute`，从已完成中断处理器安装的 CPU 中按注册顺序轮流选核。
+DroidVMGicMsi 在首次挂接后、向量仍被屏蔽时设置路由；同一 SPI 重复初始化保留原来的
+分配序号。共享同一 SPI 的 xHCI 向量仍共用一个目标 CPU，此处没有改变 Apple 桥的
+MSI 向量分配方式。传统 MMIO 中断、定时器及 IPI 不经这条分配路径。
+
+增加 `armcpu_spi_cpu_counts[slot][cpu]`，在实际 IRQ 分发处记录每 CPU 投递次数，
+用来区分“设置了路由”和“目标 CPU 确实处理了中断”。Gunyah 对非零 IROUTER 写入
+读回 0，但实测 IRQ 已投递到目标 CPU，因此不以寄存器读回值判定路由是否成功。
+
+`k27/build-platform-cpu.sh` 从原始 ArmCpu 源码依序应用已有 assembly、boot interrupt、
+idle WFI、park WFI、SPI 补丁及新增的 `ArmCpu-msi-affinity.patch`，独立重建 archive。
+`build-kernel27.sh` 自动调用它，后续构建不会丢失该路由实现或既有 SMP/SPI 改动。
+
+实现提交：`416cfff`。最终镜像实际负载验证：
+
+| 中断 | 本次 SPI | 处理 CPU | I/O 窗口投递增量 |
+| --- | --- | --- | --- |
+| System/Data 盘 | 97 | 1 | 2087 |
+| 网卡队列一 | 88 | 3 | 1773 |
+| 网卡队列二 | 89 | 4 | 1743 |
+
+SPI 编号及对应 CPU 随设备注册顺序变化，分配不依赖固定设备编号。
+网络 64 MiB 上传和 64 MiB 下载通过既有 netprobe 的逐字节校验，en0 Ierrs/Oerrs 为 0。
+在 Data 卷写入 64 MiB 随机文件，sync 后复制并 cmp，一致；未触碰裸磁盘。
+`kernel_debugger_entry_count=0`，AppleUSBXHCIPCI 保持 active；正常关机完成 APFS 全部
+卸载和 `CPU halted`。没有新增测试用例，没有烟测或文件摘要计算。
+这里证明中断已分散且 I/O 正确，不把 Wi-Fi 吞吐波动当作性能收益结论。
+
+采集脚本及结果保存在 [msi-affinity-2026-11-12](../research/msi-affinity-2026-11-12/)：
+[final-before-io.json](../research/msi-affinity-2026-11-12/final-before-io.json)、
+[final-after-io.json](../research/msi-affinity-2026-11-12/final-after-io.json)、
+[final-io.log](../research/msi-affinity-2026-11-12/final-io.log)、
+[final-shutdown.log](../research/msi-affinity-2026-11-12/final-shutdown.log)。
+
+最终镜像再次启动后，8 个 CPU 均 ready，AppleUSBXHCIPCI 正常绑定，
+debugger entry count 仍为 0；实际投递继续分布在多个 CPU。
+见 [restart.log](../research/msi-affinity-2026-11-12/restart.log)、
+[restart-cpus.json](../research/msi-affinity-2026-11-12/restart-cpus.json)。VM 保持运行。
