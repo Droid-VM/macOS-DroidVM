@@ -110,6 +110,34 @@ public:
   unsigned pciSlot() const { return slot; }
   uint64_t commonPhysical() const { return windowPhysical[capCommon]; }
 
+  // An enumerated IOPCIDevice owns its BAR mappings; use the bridge's assigned resources.
+  template <typename PciDevice> bool open(PciDevice *pci) {
+    if (isOpen()) return false;
+    slot = pci->getDeviceNumber();
+    pci->setMemoryEnable(true);
+    pci->setBusMasterEnable(true);
+    unsigned guard = 0;
+    for (unsigned cap = pci->configRead32(0x34) & 0xfc; cap && guard < 48; ++guard) {
+      uint32_t head = pci->configRead32(cap);
+      unsigned type = (head >> 24) & 0xff, bar = pci->configRead32(cap + 4) & 0xff;
+      if ((head & 0xff) == 0x09 && type >= capCommon && type <= capDevice && bar <= 5 && !maps[type]) {
+        uint32_t offset = pci->configRead32(cap + 8), length = pci->configRead32(cap + 12);
+        maps[type] = pci->mapDeviceMemoryWithRegister(0x10 + 4 * bar, kIOMapAnywhere | kIOMapInhibitCache);
+        if (!maps[type] || !length || static_cast<uint64_t>(offset) + length > maps[type]->getLength()) {
+          close();
+          return false;
+        }
+        window[type] = maps[type]->getVirtualAddress() + offset;
+        windowLength[type] = length;
+        windowPhysical[type] = maps[type]->getPhysicalAddress() + offset;
+        if (type == capNotify) notifyMultiplier = pci->configRead32(cap + 16);
+      }
+      cap = (head >> 8) & 0xfc;
+    }
+    if (!window[capCommon] || !window[capNotify]) { close(); return false; }
+    return true;
+  }
+
   // Open the index-th function of the given virtio device type on bus 0 of the mapped ECAM window.
   bool open(uintptr_t ecam, uint64_t ecamLength, unsigned device, unsigned index = 0) {
     if (isOpen() || ecamLength < 0x100000) return false;

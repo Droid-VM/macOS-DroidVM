@@ -6,6 +6,7 @@
   "start": "_native_kext_start",
   "stop": "_native_kext_stop",
   "libraries": {
+    "com.apple.iokit.IOPCIFamily": "2.9",
     "com.apple.iokit.IOHIDFamily": "2.0.0",
     "com.apple.kpi.bsd": "18.0.0",
     "com.apple.kpi.iokit": "18.0.0",
@@ -14,6 +15,13 @@
     "com.apple.kpi.unsupported": "18.0.0"
   },
   "personalities": {
+    "DroidVMInputPCI": {
+      "CFBundleIdentifier": "com.unixnu.driver.DroidVMInput",
+      "IOClass": "DroidVMInput",
+      "IOProviderClass": "IOPCIDevice",
+      "IOPCIMatch": "0x10521af4",
+      "IOProbeScore": 20000
+    },
     "DroidVMInput": {
       "CFBundleIdentifier": "com.unixnu.driver.DroidVMInput",
       "IOClass": "DroidVMInput",

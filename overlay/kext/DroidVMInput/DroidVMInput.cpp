@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // DroidVMInput: the DroidVM app's input devices (crosvm --input: multi-touch screen, tablet, mouse, keyboard) as HID devices.
-// They are virtio-input functions on bus 0 of crosvm's ECAM bridge, /arm-io/pcie in the ADT (scripts/run-macos-vm.py). The
+// They are virtio-input functions on bus 0 of crosvm's PCIe bridge. With native PCIe, each IOPCIDevice has its own driver;
+// without it, the driver discovers the functions through /arm-io/pcie's ECAM window (scripts/run-macos-vm.py). The
 // transport and the queue set-up are those of the iOS driver (overlay/droidvm/drivers/NativeVirtioInputPci); here each device
 // becomes an IOHIDDevice with the report descriptor of QEMU's USB devices, which IOHIDFamily's event drivers turn into keyboard
 // and pointer events:
@@ -16,6 +17,16 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/hid/IOHIDDevice.h>
+#include <os/availability.h>
+// The SDK's PCI headers use availability annotations newer than the port's kernel headers.
+#pragma push_macro("API_DEPRECATED_WITH_REPLACEMENT")
+#undef API_DEPRECATED_WITH_REPLACEMENT
+#define API_DEPRECATED_WITH_REPLACEMENT(...)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winconsistent-missing-override"
+#include <IOKit/pci/IOPCIDevice.h>
+#pragma clang diagnostic pop
+#pragma pop_macro("API_DEPRECATED_WITH_REPLACEMENT")
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <kern/clock.h>
 #include <kern/thread.h>
@@ -436,15 +447,17 @@ bool DroidVMInput::start(IOService *provider)
   uint32_t touchDigitizer = 1;
   PE_parse_boot_argn("droidvm-touch-digitizer", &touchDigitizer, sizeof(touchDigitizer));
   gTouchTablet = !touchDigitizer;
-  fEcam = provider->mapDeviceMemoryWithIndex(0, kIOMapAnywhere | kIOMapInhibitCache);
-  if (!fEcam) {
+  IOPCIDevice *pci = OSDynamicCast(IOPCIDevice, provider);
+  if (!pci) fEcam = provider->mapDeviceMemoryWithIndex(0, kIOMapAnywhere | kIOMapInhibitCache);
+  if (!pci && !fEcam) {
     IOLog("DroidVMInput: cannot map the ECAM window\n");
     return false;
   }
   unsigned functions = 0;
-  for (unsigned index = 0; index < maxDevices && fCount < maxDevices; ++index) {
+  for (unsigned index = 0; index < (pci ? 1 : maxDevices) && fCount < maxDevices; ++index) {
     DroidVMInputDevice &d = fDevices[fCount];
-    if (!d.transport.open(static_cast<uintptr_t>(fEcam->getVirtualAddress()), fEcam->getLength(), virtio_pci::deviceInput, index))
+    if (!(pci ? d.transport.open(pci) :
+          d.transport.open(static_cast<uintptr_t>(fEcam->getVirtualAddress()), fEcam->getLength(), virtio_pci::deviceInput, index)))
       break;
     ++functions;
     if (!configure(d)) {
@@ -458,7 +471,7 @@ bool DroidVMInput::start(IOService *provider)
     DroidVMHIDDevice *hid = OSTypeAlloc(DroidVMHIDDevice);
     if (hid) {
       hid->fDevice = &d;
-      hid->fIndex = fCount;
+      hid->fIndex = pci ? pci->getDeviceNumber() : fCount;
     }
     const bool ready = hid && hid->init(nullptr);
     uint32_t touchSidecar = 0;

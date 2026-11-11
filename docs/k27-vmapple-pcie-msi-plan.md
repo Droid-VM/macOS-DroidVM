@@ -212,3 +212,29 @@ descriptor；运行时将签名位当地址使用。XNU 补丁 0048（内核提�
 
 这已验证 PCIe → AppleVirtIO → 队列 → MSI → GIC SPI → 完成回调的磁盘读取路径。
 本轮未计算文件散列、未跑烟测；尚未验证写入、吞吐、长期空闲唤醒和触屏端到端行为。
+
+## 2026-11-11 原生 PCIe 下恢复 App 输入
+
+AppleVirtIOInput 将 App 的多点触屏发布为 Trackpad/指针，丢失了原 DroidVMInput 的
+内建触屏协议；键盘只有 IOHIDInterface，没有事件服务。原 DroidVMInput 又只匹配
+旧 ECAM nub，桥启用后不再启动。这是“设备已发布、实际输入无反应”的原因。
+
+保留原生 PCIe 桥及块设备，将 DroidVMInput 增加为 IOPCIDevice 客户端：
+- 仅匹配 `0x10521af4`，分数 20000，高于 AppleVirtIOPCITransport 的 10000；
+- 用 IOPCIDevice 的配置空间接口与 BAR 映射，每个函数各驱动一个输入设备；
+- 保留既有轮询和 Apple multitouch 协议，旧 ECAM 模式仍可用；LocationID 使用 PCI slot，避免各实例重号。
+
+定向验证：四个 DroidVMInput 均 active，键盘/鼠标/tablet 挂 IOHIDEventDriver，
+触屏挂内建 AppleMultitouchDevice，保留 displayUUID/HSTouchHIDService；通过 App 键盘
+完成 droid 控制台登录，键盘服务 EnqueueEventCount=12，事件类型 3。
+部署镜像 `out/k27/pcie-p1/boot-pcie-droidvm-input.img`。
+
+构建输入 kext（各 include 路径需绝对路径，因为编译器在内核对象目录运行）：
+```sh
+python3 scripts/build-native-kext.py DroidVMInput overlay/kext/DroidVMInput/DroidVMInput.cpp overlay/kext/NativeKextGlue.cpp --obj k27-obj -I "$PWD/out/x12377/inc-hid" -I "$PWD/overlay/droidvm/drivers/NativeVirtioInputPci" -I "$PWD/toolchains/sdks/MacOSX26.1.sdk/System/Library/Frameworks/Kernel.framework/Headers"
+MACOS_PCIE=1 MACOS_DISPLAY=1 MACOS_GPU=1 MACOS_VIDEO=1 MACOS_AUDIO=1 K27_NO_BOOT=1 bash k27/try.sh 0
+```
+
+CPU 采样同时确认登录前 audiomxd 位于 BTAudioRoutingRequest::_ensureXPCStarted，
+循环查询 SCDynamicStoreCopyConsoleUser，连带 configd 高占用（既有问题见 k27-audio.md）。
+登录后两者高占用消失；仍持续占用一核的 rpcsvchost 另行定位，不能视为本轮已解决。
