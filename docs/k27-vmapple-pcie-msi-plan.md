@@ -193,3 +193,22 @@ common config 的状态访问因此落在 BAR+0x1014，MSI-X 表写入落在 PBA
 AppleVirtIOBlockStorageDevice、IOBlockStorageDriver、IOMediaBSDClient 也成功发布，队列 MSI-X 向量配置及 DRIVER_OK 完成。
 这修复了原来的 input/block start 失败；端到端 I/O、中断计数与触屏行为继续分别验证。
 采集见 [修正后启动日志](../out/k27/pcie-p1/parent-fix-dmesg.log)。
+
+## 2026-11-11 接管：Block ABI panic 修复与原生 I/O 验证
+
+原生 HID 开始加载后，`com.apple.AppleUserHIDDrivers` 经
+`AppleUserHIDEventService::completeCopyEvent → OSAction::SetAbortedHandler → _Block_copy`
+触发 data abort。Apple kext 传入带 PAC 的 Block descriptor，而移植编译器生成无签名
+descriptor；运行时将签名位当地址使用。XNU 补丁 0048（内核提交 `1168d2b`）
+兼容两种格式：读取时认证带签名指针，复制 Block 时按新字段地址重新签名。
+
+内核和 KC 构建通过，部署 `out/k27/pcie-p1/boot-pcie-block-descriptor.img` 后：
+- SSH 可用，运行超过 6 分钟，`kernel_debugger_entry_count=0`；
+- `hidutil list` 列出 4 个 AppleVirtIOInput 设备；鼠标和两个 Trackpad 的
+  AppleUserHIDEventService 已 active，越过原 panic 点；键盘事件服务与实际输入仍待确认；
+- 原生 AppleVirtIOBlockStorageDevice 发布 `/dev/disk0`（402.7 MB）；
+- 对 `/dev/rdisk0` 做 8 次 512 字节只读读取，4096 字节与启动镜像头逐字节相同；
+- 同期 SPI 64 从 18 增至 26（+8），其他已挂接 SPI 计数不变。
+
+这已验证 PCIe → AppleVirtIO → 队列 → MSI → GIC SPI → 完成回调的磁盘读取路径。
+本轮未计算文件散列、未跑烟测；尚未验证写入、吞吐、长期空闲唤醒和触屏端到端行为。

@@ -1,0 +1,50 @@
+From 1168d2bb801fa4d8c80f16da0879c7c493d872d3 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Wed, 11 Nov 2026 21:48:17 +0800
+Subject: [PATCH] fix(libkern): support signed macOS Block descriptors
+
+---
+ libkern/libclosure/runtime.cpp  | 10 ++++++++++
+ libkern/libkern/Block_private.h |  8 ++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/libkern/libclosure/runtime.cpp b/libkern/libclosure/runtime.cpp
+index 9fe6e7e..16b8ead 100644
+--- a/libkern/libclosure/runtime.cpp
++++ b/libkern/libclosure/runtime.cpp
+@@ -315,6 +315,16 @@ _Block_copy(const void *arg)
+ 		result->descriptor =
+ 		    ptrauth_auth_and_resign(aBlock->descriptor, ptrauth_key_asda, oldDesc,
+ 		    ptrauth_key_asda, newDesc);
++#elif defined(XNU_TARGET_OS_OSX)
++		// A signed descriptor from a macOS kext must follow the block to its new address.
++		if (ptrauth_strip(aBlock->descriptor, ptrauth_key_asda) != aBlock->descriptor) {
++			uintptr_t oldDesc = ptrauth_blend_discriminator(
++				&aBlock->descriptor, _Block_descriptor_ptrauth_discriminator);
++			uintptr_t newDesc = ptrauth_blend_discriminator(
++				&result->descriptor, _Block_descriptor_ptrauth_discriminator);
++			result->descriptor = ptrauth_auth_and_resign(aBlock->descriptor,
++			    ptrauth_key_asda, oldDesc, ptrauth_key_asda, newDesc);
++		}
+ #endif
+ #endif
+ 
+diff --git a/libkern/libkern/Block_private.h b/libkern/libkern/Block_private.h
+index d1f1a36..fb8d4c2 100644
+--- a/libkern/libkern/Block_private.h
++++ b/libkern/libkern/Block_private.h
+@@ -440,6 +440,14 @@ _Block_get_descriptor(struct Block_layout *aBlock)
+ 	uintptr_t disc = ptrauth_blend_discriminator(
+ 		&aBlock->descriptor, _Block_descriptor_ptrauth_discriminator);
+ 	return ptrauth_auth_data(aBlock->descriptor, ptrauth_key_asda, disc);
++#elif defined(XNU_TARGET_OS_OSX) && __has_feature(ptrauth_calls)
++	// macOS kexts use signed descriptors while the port's compiler emits unsigned ones.
++	if (ptrauth_strip(aBlock->descriptor, ptrauth_key_asda) != aBlock->descriptor) {
++		uintptr_t disc = ptrauth_blend_discriminator(
++			&aBlock->descriptor, _Block_descriptor_ptrauth_discriminator);
++		return ptrauth_auth_data(aBlock->descriptor, ptrauth_key_asda, disc);
++	}
++	return aBlock->descriptor;
+ #else
+ 	return aBlock->descriptor;
+ #endif
