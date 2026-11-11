@@ -107,6 +107,9 @@ NET = os.environ.get('MACOS_NET', '1') == '1'
 # MACOS_NET_PCI=1 (with MACOS_PCIE=1): AppleVirtIONetwork on PCI/MSI,
 # using the same bridge and MAC; omit the MMIO transport and its ADT node.
 NET_PCI = os.environ.get('MACOS_NET_PCI') == '1'
+DATA_PCI = os.environ.get('MACOS_DATA_PCI') == '1'
+# Converted GPT/APFS disk; the original SHNGDATA store remains available for rollback.
+DATA_PCI_IMAGE = FOLDER + '/data-pcie.img'
 NET_MAC = '02:44:56:4d:00:01'
 NET_BRIDGE = 'br-wifi'
 # MACOS_MEDIA=1: VideoToolbox's paravirtualized codecs (DroidVMVideo) on the phone's MediaCodec: crosvm's virtio-media decoder and
@@ -178,6 +181,8 @@ def template(persistent):
 
 def disk_options():
     """The single APFS container: System/Data volume group and auxiliary volumes."""
+    if DATA_PCI:
+        return ['--block', DATA_PCI_IMAGE + ',lock=false']
     return ['--virtio-mmio-block', run.STORE + ',lock=false']
 
 
@@ -358,9 +363,9 @@ def disks(args):
         raise SystemExit(f'stop the running VM first ({row.get("state")})')
     vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
     options = vm['extra_options']
-    first = options.index('--virtio-mmio-block')
-    rest = [o for i, o in enumerate(options[first:]) if o != '--virtio-mmio-block' and (i == 0 or options[first + i - 1] != '--virtio-mmio-block')]
-    vm['extra_options'] = options[:first] + disk_options() + rest
+    first = next(i for i, o in enumerate(options[:-1])
+                 if o in ('--block', '--virtio-mmio-block') and options[i + 1].split(',')[0] in (run.STORE, DATA_PCI_IMAGE))
+    vm['extra_options'] = options[:first] + disk_options() + options[first + 2:]
     status = ipc.call('vm_config_status')
     reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
     print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))

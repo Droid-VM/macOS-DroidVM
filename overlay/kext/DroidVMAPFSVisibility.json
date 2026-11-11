@@ -1,0 +1,20 @@
+{
+  "name": "DroidVMAPFSVisibility",
+  "bundle": "com.unixnu.driver.DroidVMAPFSVisibility",
+  "version": "1.0.0",
+  "objects": "out/x12377/native-kexts/DroidVMAPFSVisibility/objects.json",
+  "start": "_native_kext_start",
+  "stop": "_native_kext_stop",
+  "libraries": {
+    "com.apple.kpi.iokit": "18.0.0",
+    "com.apple.kpi.libkern": "18.0.0"
+  },
+  "personalities": {
+    "DroidVMAPFSVisibility": {
+      "CFBundleIdentifier": "com.unixnu.driver.DroidVMAPFSVisibility",
+      "IOClass": "DroidVMAPFSVisibility",
+      "IOProviderClass": "AppleAPFSMedia",
+      "IOMatchCategory": "DroidVMAPFSVisibility"
+    }
+  }
+}

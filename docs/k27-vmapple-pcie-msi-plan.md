@@ -328,3 +328,53 @@ Data 盘、xHCI 和 MSI 多 CPU 路由尚未迁移。
 
 采集与定向验证程序见 [pcie-net-2026-11-11](../research/pcie-net-2026-11-11/)，
 包括 MMIO 基线、PCI 两次传输、接口信息和 SPI 前后计数。
+
+## 2026-11-12 P4：System/Data 容器迁到原生 PCIe 块设备
+
+现有启动盘的 scratch-data.img 是 32 字节 DBRDISK1：48 GiB 逻辑容量、0 个数据区段。
+System/Data 的有效内容全部位于 SHNGDATA store，不能把带标签/位图的 store 直接作为 APFS 磁盘。
+在 guest 正常卸载 APFS、报告 CPU halted、VM 停止后，转换为独立的 `data-pcie.img`：
+- 保留原 `data-store.img`，不原地修改、不重新生成 seed；新盘复制所有位图标记的页面，空页保持稀疏。
+- 添加真实 GPT，APFS 容器位于 1 MiB 起的 Apple_APFS_ISC 分区中，保留所有 APFS 容器/卷 UUID。
+- 实际复制 30,166,941,696 字节，输出 fsync 后再读源文件与新盘，逐字节核对全部有效页面，通过。
+- 手机侧执行静态 aarch64 转换工具，避免把约 28 GiB 的副本先拉到 Linux；GPT 的 CRC32 是格式必需字段，未计算文件 SHA。
+
+`MACOS_DATA_PCI=1` 控制 App 磁盘配置、ADT 和 KC：
+- `disk_options()` 使用 `--block data-pcie.img,lock=false`；`disks` 支持在新旧路径间切换，并重新采集 FDT。
+- ADT 不再发布 `/arm-io/data-store`，不将持久磁盘标为 ephemeral；GPU/音频/media 的 MMIO 地址跟随 FDT。
+  第一 MMIO 窗口不再保留给 Data store，修正 last_virtio_mmio 对它的旧限制。
+- KC 不再加载 NativeVirtioBlock/NativeRamBlock，System/Data 均直接走 AppleVirtIOBlockStorageDevice、IOGUIDPartitionScheme、APFS。
+- 诊断工具 rig-dmesg 原先只按 `virtio-mmio-block` 找进程，现也能识别纯 PCI 存储的 macOS VM。
+
+ISC 容器仍需要原有的可见性修正：APFS 在 probe/reconcile 时设置 OSInternal，导致 diskutil/DiskManagement 隐藏整个主容器。
+旧实现依附于 NativeRamBlock 的发布线程；改为 DroidVMAPFSVisibility，在独立匹配类别中附着 PCIe 盘下的
+AppleAPFSMedia，移除该属性，并每 2 秒处理 APFS 重新设置属性的情况。它不接管 I/O，也不修改卷属性或磁盘内容。
+最终上机 `diskutil list` 已正常显示 System/Data/Preboot/VM/Hardware/xART，TimeSync、PCI 网卡和 SSH 正常。
+
+定向验证：
+- 从新 GPT 盘启动，System UUID 仍为 354D4F10-9A79-4243-BA00-60FAB89D7561；System 只读，Data 和辅助卷正常挂载。
+- 在 `/Users/droid` 创建 64 MiB 偏移模式文件，F_NOCACHE 写入，fsync 和 F_FULLFSYNC 均成功，逐字节回读通过。
+- 首次正常关机：APFS 卸载完成，CPU halted；重启后 64 MiB 文件全部校验通过。
+- 此后可见性修正重启，文件再次逐字节校验通过；磁盘读写 Errors/ Retries 为 0。
+- PCI 系统盘使用 SPI 97；数据写入后计数 112681，运行期间 kernel_debugger_entry_count=0。
+  磁盘编号会随枚举顺序变化，不能固定按 disk0 判断根盘。
+
+额外关机复核暴露了尚未解决的既有 stackshot 问题：关机启动 spindump，
+`stackshot_trap → kern_stack_snapshot_internal → DebuggerXCallEnter` 等待 CPU 响应超时而 panic。
+已用运行时 panic-spin 保留现场，panic 中进程为 spindump，符号化栈不含存储路径。
+该现象在引入可见性 kext 之前和之后均出现；首次干净关机后的文件持久化已验证，
+不能把这些结果表述为“每次关机都正常”或宣称关机 panic 已修复。
+异常停止后再次启动，原 64 MiB 文件仍逐字节校验通过（post-panic-verify.log），
+最终运行时 debugger entry count 为 0；验证文件随后删除，VM 保持运行。
+
+构建：
+```sh
+python3 scripts/build-native-kext.py DroidVMAPFSVisibility overlay/kext/DroidVMAPFSVisibility.cpp overlay/kext/NativeKextGlue.cpp --obj k27-obj
+MACOS_PCIE=1 MACOS_NET_PCI=1 MACOS_DATA_PCI=1 MACOS_DISPLAY=1 MACOS_GPU=1 MACOS_VIDEO=1 MACOS_AUDIO=1 K27_NO_BOOT=1 bash k27/try.sh 0
+```
+转换源码、GPT 包装生成器和持久化验证程序见 [采集目录](../research/pcie-data-2026-11-11/)。
+转换器只适用于已经确认没有 seed 数据区段的旧 store，源必须停机；先从当前启动盘提取原 seed，
+用 prepare-gpt.py 检查其头部并生成 prefix/suffix，再用静态编译的 store-to-raw 将旧 store 转为新文件。
+当前启动镜像：`out/k27/pcie-p1/boot-pcie-data.img`，保留旧 `boot-pcie-net.img` 和
+`/tmp/codex-pcie-data-vm-original.json`。回退需要同时恢复旧 VM 配置和启动盘；旧 store 是切换前快照，
+不会包含切换后在新 PCI 盘上的更改，两盘不能同时挂载相同 UUID 的容器。

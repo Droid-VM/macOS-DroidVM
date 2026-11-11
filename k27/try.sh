@@ -16,7 +16,11 @@ DI_KEXTS="com.apple.driver.DiskImages com.apple.driver.DiskImages.FileBackingSto
 [ "${MACOS_PCIE:-}" = 1 ] && set -- "$@" com.apple.driver.AppleVirtualPlatform com.apple.driver.AppleVirtIO
 export MACOS_LP_SIP0=${MACOS_LP_SIP0-0x2}
 export MACOS_BOOT_MANIFEST_HASH=${MACOS_BOOT_MANIFEST_HASH-1}   # /chosen/boot-manifest-hash, which 27's Image4 needs (scripts/run-macos-vm.py)
-NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json overlay/kext/NativeAES.json overlay/kext/NativeRamBlock.json}   # NativeAES: k27/build-native-aes.sh
+if [ "${MACOS_DATA_PCI:-}" = 1 ]; then
+  NATIVE=${NATIVE-overlay/kext/NativeAES.json overlay/kext/DroidVMAPFSVisibility.json}
+else
+  NATIVE=${NATIVE-overlay/kext/NativeVirtioBlock.json overlay/kext/NativeAES.json overlay/kext/NativeRamBlock.json}   # NativeAES: k27/build-native-aes.sh
+fi
 [ "${MACOS_DISPLAY:-}" = 1 ] && NATIVE="$NATIVE overlay/kext/ARMPlatformStandIn.json overlay/kext/DroidVMDisplay.json overlay/kext/DroidVMInput.json"
 # PCI networking uses Apple's driver; do not reserve en0 with the MMIO stand-in
 # or make IOTimeSyncRootService wait for the stand-in's resource.

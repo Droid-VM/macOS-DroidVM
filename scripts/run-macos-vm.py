@@ -119,7 +119,8 @@ def last_virtio_mmio(tool, fdt, skip=0):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     base = sorted(base for base, _ in module.describe(module.parse_fdt(Path(fdt).read_bytes()))['virtio_mmio'])[-1 - skip]
-    if base <= DATA_STORE_MMIO:
+    # Without the MMIO Data store, the first window belongs to GPU/net/audio.
+    if base < DATA_STORE_MMIO or (base == DATA_STORE_MMIO and os.environ.get('MACOS_DATA_PCI') != '1'):
         raise SystemExit(f'{fdt} has no virtio-mmio window after the data store: prepare again with --droidvm-gpu in the VM')
     return base
 
@@ -223,7 +224,8 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         if os.environ.get('MACOS_BOOT_MANIFEST_HASH') == '1':
             text = text.replace(marker, "('boot-manifest-hash', bytes(48)), " + marker)
         text = text.replace(marker, "*([('ephemeral-storage', struct.pack('<I', 1))] if (args.data_ramdisk or args.packed_data_ramdisk)"
-                                    " and args.data_store_mmio is None else []),")
+                                    " and args.data_store_mmio is None else []),"
+                            if os.environ.get('MACOS_DATA_PCI') != '1' else '')
         # MACOS_VMM_PRESENT=0: /defaults without vmm-present, so kern.hv_vmm_present is 0. MobileGestalt answers IsVirtualDevice from it,
         # and Core Animation on a virtual device keeps a half-float 'RGhA' framebuffer (IOMFBDisplay::framebuffer_pixel_format returns
         # before its 'BGRA' choice) and takes the VM's display paths (CursorPlane).
@@ -307,7 +309,9 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                     *(['--cpu-regs', cpu_regs] if cpu_regs else []),
                     '--root-match-volume-uuid', OS_UUID, '--packed-data-ramdisk',
                     '--ipad-identity', '--unique-chip-id', unique_chip_id, '--chip-id', '8011',
-                    '--trust-cache', '--data-ramdisk', '--data-store-mmio', hex(DATA_STORE_MMIO), '--reclaim-memory',
+                    '--trust-cache',
+                    *(['--data-ramdisk', '--data-store-mmio', hex(DATA_STORE_MMIO)] if os.environ.get('MACOS_DATA_PCI') != '1' else []),
+                    '--reclaim-memory',
                     *(['--gpu-mmio', hex(last_virtio_mmio(tool, fdt, media + int(snd) + int(virtio_gpu) + int(net)))] if gpu else []),
                     *(['--net-mmio', hex(last_virtio_mmio(tool, fdt, media + int(snd) + int(virtio_gpu)))] if net else []),
                     *(['--virtio-gpu-mmio', hex(last_virtio_mmio(tool, fdt, media + int(snd)))] if virtio_gpu else []),

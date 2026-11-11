@@ -45,9 +45,9 @@ class Phone:
                               capture_output=True, timeout=120).stdout
 
     def maps(self):
-        pid = self.adb("for p in $(pidof crosvm crosvm-mmio); do tr '\\0' ' ' < /proc/$p/cmdline | grep -q 'virtio-mmio-block' && echo $p; done").split()
+        pid = self.adb("for p in $(pidof crosvm crosvm-mmio); do tr '\\0' ' ' < /proc/$p/cmdline | grep -q -e 'virtio-mmio-block' -e 'macOS 27 (DroidVM)' && echo $p; done").split()
         if not pid:
-            raise SystemExit('no running crosvm with virtio-mmio-block (the VM is not up; start it with --keep)')
+            raise SystemExit('no running macOS crosvm (the VM is not up; start it with --keep)')
         pid = pid[0].decode()
         result = []
         for line in self.adb(f'grep crosvm_guest /proc/{pid}/maps').decode().splitlines():
