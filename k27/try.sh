@@ -15,6 +15,8 @@ DI_KEXTS="com.apple.driver.DiskImages com.apple.driver.DiskImages.FileBackingSto
 # MACOS_PCIE=1: Apple's PCIe bridge and virtio drivers on crosvm's virtio-pci, MSI through DroidVMGicMsi (docs/k27-vmapple-pcie-msi-plan.md)
 [ "${MACOS_PCIE:-}" = 1 ] && set -- "$@" com.apple.driver.AppleVirtualPlatform com.apple.driver.AppleVirtIO
 [ "${MACOS_USB_PCI:-}" = 1 ] && set -- "$@" com.apple.driver.usb.AppleUSBXHCIPCI com.apple.driver.usb.AppleUSBHostCompositeDevice com.apple.driver.usb.IOUSBHostHIDDeviceSafeBoot com.apple.iokit.IOUSBMassStorageDriver com.apple.iokit.IOSCSIBlockCommandsDevice
+# macOS 27 probes and mounts exFAT/FAT volumes through FSKit's live filesystem.
+[ "${MACOS_USB_PCI:-}" = 1 ] && set -- "$@" com.apple.filesystems.lifs
 export MACOS_LP_SIP0=${MACOS_LP_SIP0-0x2}
 export MACOS_BOOT_MANIFEST_HASH=${MACOS_BOOT_MANIFEST_HASH-1}   # /chosen/boot-manifest-hash, which 27's Image4 needs (scripts/run-macos-vm.py)
 if [ "${MACOS_DATA_PCI:-}" = 1 ]; then
