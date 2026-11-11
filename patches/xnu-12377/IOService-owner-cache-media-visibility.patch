@@ -1,0 +1,29 @@
+From b3367e33503f4968451197fe83f39706432ba902 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Thu, 12 Nov 2026 04:57:22 +0800
+Subject: [PATCH] fix(iokit): publish external disks with the fixed owner
+ driver cache
+
+---
+ iokit/Kernel/IOService.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
+index 9d9d208..5a2799e 100644
+--- a/iokit/Kernel/IOService.cpp
++++ b/iokit/Kernel/IOService.cpp
+@@ -258,7 +258,10 @@ bool                            gIOKitWillTerminate;
+ atomic_bool                     gInUserspaceReboot;
+ 
+ #define kIOServiceRootMediaParentInvalid ((IOService *) -1UL)
+-#if NO_KEXTD
++// The offline owner cache boots with its complete driver set in the KC.
++// Do not hide external disks while waiting for an unrelated registry stall
++// to clear: there is no later driver replacement phase to wait for.
++#if NO_KEXTD || (defined(XNU_OWNER_CACHE_STARTUP) && XNU_OWNER_CACHE_STARTUP)
+ static bool                     gIOServiceHideIOMedia = false;
+ static IOService *              gIOServiceRootMediaParent = NULL;
+ #else /* NO_KEXTD */
+-- 
+2.53.0
+
