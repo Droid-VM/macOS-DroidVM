@@ -156,7 +156,7 @@ reims-vgpu 用 QEMU 的 `vmapple` 机器启动 Virtualization.framework 的 macO
 - 验收：触屏和键盘可用；块设备读写正确；无丢中断（观察 SPI 计数和 crosvm 的 irqfd 计数是否一致，长时间空闲后第一次 I/O 的延迟）。
 
 ### P4 收益项（各自单独立项）
-- xHCI 直通：xHCI 只有 INTx，需要给 crosvm 加"INTx = 基址 + n"的分配方式，或者在桥上补 `interrupt-base`。
+- xHCI 直通：2026-11-12 已实现三组 interrupter/MSI-X 并接入 AppleUSBXHCIPCI；外接设备和端口枚举仍待验证（见文末记录）。
 - 把 Data 盘、网卡逐个从自写 virtio-mmio 驱动迁到 virtio-pci + AppleVirtIO，前提是 P3 测出中断路径比轮询好。
 - MSI 向量按 CPU 分散路由（现在全部送启动核）。
 
@@ -440,3 +440,53 @@ MSI-X 后 INTxDisable 对回退投递的控制。此用例验证消息交接，�
 最终生产构建通过：`/home/qiuqiu/crosvm/build_crosvm.sh`（2 分 36 秒）。
 产物：`out/soong/.intermediates/external/crosvm/crosvm_device_only/crosvm_device_only_bin/android_arm64_armv8-a/crosvm`
 （相对于 AOSP 工作区）。本阶段未替换手机上运行中的 crosvm，也未切换 guest USB 配置。
+
+## 2026-11-12：接入原生 USB Host 驱动与三组 interrupter
+
+`MACOS_USB_PCI=1` 保留 AppleUSBXHCIPCI、AppleUSBXHCI 和真实 IOUSBHostFamily。
+ARMPlatformStandIn 此时仅提供 AppleSMCFamily 的类型元数据，避免引入不存在的物理
+SMC/RTBuddy/AppleA7IOP 依赖。USBHostFamily 所需的 codeless
+AppleUSBHostPlatformProperties 带有占位 LoadAddr，KC 构建器改按 fileset 中是否存在
+可执行项识别 codeless bundle；已确认 USBHostFamily 可以加载。
+
+App 启动器由 `peripherals` 中的 `xhci_usb` 条目决定是否加 `--no-usb`，顶层 `usb`
+布尔字段无效。`MACOS_USB_PCI=1 scripts/droidvm-app.py usb` 通过配置事务增加控制器，
+保留其他外设；关闭时移除 xHCI 条目。已确认 PCI 出现 `1b36:000d`，启动命令不再禁用 USB。
+
+启动早期日志随后显示 AppleUSBXHCI 拒绝单 interrupter 控制器：
+`1 interrupters supported, 3 are required`。因此单向量实现尚不足以完成 macOS 接入。
+后续实现将 HCSPARAMS1、runtime register banks、事件环、节流计时器和 MSI-X table
+一起扩展为 3 组。命令/端口事件走主环，传输和停止事件遵循 TRB 的 Interrupter Target；
+目标字段按完整 10 位读取，越界目标沿用 TRB Error 处理。控制器复位会重置三组状态。
+
+已验证并提交的接入修复：`581e47f`（codeless bundle）、`2b253ef`（App 外设配置）、
+`5a73358`（USB 驱动依赖）。单 interrupter 的拒绝记录和正常关机记录见
+[single-interrupter-start-failure.log](../research/xhci-msix-2026-11-12/single-interrupter-start-failure.log)、
+[single-interrupter-shutdown.log](../research/xhci-msix-2026-11-12/single-interrupter-shutdown.log)。
+
+三组实现已在手机验证并提交：external/crosvm `938e2e70d`。
+最终生产构建通过（2 分 11 秒），已替换 App 使用的 crosvm。
+实际启动确认：
+
+- `AppleUSBXHCIPCI@09000000` registered/matched/active，设备的 `IOPCIMSIMode=Yes`。
+- IORegistry 的类实例计数为 `AppleUSBXHCIInterrupterMSI=3`，命令环实例为 1。
+- 设备公布三项消息中断 specifier；当前 Apple 桥将三项映射到同一 SPI 81，
+  因此本阶段不声称已分配三个独立 SPI，也不包含 MSI 多 CPU 分散。
+- SPI 81 实际投递 1 次，后续空闲采样仍为 1；内核 debugger entry count 为 0，
+  控制器 `kControllerStatSpuriousInterruptCount=0`。
+- 正常关机完成 APFS 全部卸载和 `CPU halted`。
+
+此次没有新增测试用例，只调整现有测试 fixture 以适配事件环集合类型；
+没有运行烟测、计算文件摘要或改写 Data seed。证据见
+[three-interrupter-build.log](../research/xhci-msix-2026-11-12/three-interrupter-build.log)、
+[three-interrupter-ioreg.log](../research/xhci-msix-2026-11-12/three-interrupter-ioreg.log)、
+[three-interrupter-spi.log](../research/xhci-msix-2026-11-12/three-interrupter-spi.log)、
+[three-interrupter-shutdown.log](../research/xhci-msix-2026-11-12/three-interrupter-shutdown.log)。
+手机 `/sys/bus/usb/devices` 为空且没有 `/dev/bus/usb`，尚不能验证外接 USB 设备直通、
+非主事件环的实际 USB 传输或 USB 端口枚举。当前 IORegistry 中没有发布 USB Host Port。
+
+再次启动后 AppleUSBXHCIPCI 仍正常绑定，消息中断模式保持启用，虚假中断计数为 0；
+本次启动分配到 SPI 85（编号随设备初始化顺序变化），也记录到实际投递。
+见 [three-interrupter-restart.log](../research/xhci-msix-2026-11-12/three-interrupter-restart.log)、
+[three-interrupter-restart-spi.log](../research/xhci-msix-2026-11-12/three-interrupter-restart-spi.log)、
+[three-interrupter-instances.log](../research/xhci-msix-2026-11-12/three-interrupter-instances.log)。
