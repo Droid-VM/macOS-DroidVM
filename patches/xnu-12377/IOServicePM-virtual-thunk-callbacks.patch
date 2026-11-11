@@ -1,0 +1,44 @@
+From e59b8c589fa5075fef36262290613030b4921674 Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Thu, 12 Nov 2026 03:23:14 +0800
+Subject: [PATCH] fix(iokit): retain power callbacks with virtual thunk member
+ pointers
+
+---
+ iokit/Kernel/IOServicePM.cpp | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/iokit/Kernel/IOServicePM.cpp b/iokit/Kernel/IOServicePM.cpp
+index cd18d0d..dfb7a2d 100644
+--- a/iokit/Kernel/IOServicePM.cpp
++++ b/iokit/Kernel/IOServicePM.cpp
+@@ -1261,7 +1261,6 @@ IOService::handleRegisterPowerDriver( IOPMRequest * request )
+ 	IOPMPowerStateIndex   numberOfStates = (IOPMPowerStateIndex) request->fArg2;
+ 	IOPMPowerStateIndex   i, stateIndex;
+ 	IOPMPowerStateIndex   lowestPowerState;
+-	IOService *           root;
+ 	OSIterator *          iter;
+ 
+ 	PM_ASSERT_IN_GATE();
+@@ -1336,7 +1335,12 @@ IOService::handleRegisterPowerDriver( IOPMRequest * request )
+ 		// it does nothing. One ramification of not always registering
+ 		// is the one fewer retain count held.
+ 
+-		root = getPlatform()->getProvider();
++#if !__has_builtin(__builtin_load_member_function_pointer) && __has_feature(ptrauth_member_function_pointer_type_discrimination)
++		// This compiler returns the same virtual thunk for every receiver.
++		// Keep the callbacks: comparing those thunks would discard overrides.
++		{
++#else
++		IOService *root = getPlatform()->getProvider();
+ 		assert(root);
+ 		if (!root ||
+ 		    ((OSMemberFunctionCast(void (*)(void),
+@@ -1347,6 +1351,7 @@ IOService::handleRegisterPowerDriver( IOPMRequest * request )
+ 		    root, &IOService::powerStateWillChangeTo)) !=
+ 		    ((OSMemberFunctionCast(void (*)(void),
+ 		    this, &IOService::powerStateWillChangeTo))))) {
++#endif
+ 			if (fInterestedDrivers->findItem(powerDriver) == NULL) {
+ 				PM_LOCK();
+ 				fInterestedDrivers->appendNewInformee(powerDriver);
