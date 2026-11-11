@@ -260,3 +260,71 @@ RTC 定向上机结果：clock_initialize_calendar 不再报 UTC=0；launchd 从
 2026-11-11 06:17:48（guest 本地时区）启动，configd 与 netlogon 也从当前时间启动，
 netlogon CPU=0%。四个输入服务保持正确挂接。早期 6×8 核采样 95.8% idle，
 该数值仅代表采样当时，后续登录前 audiomxd 的独立问题仍需观察。
+
+## 2026-11-11 P3 磁盘写入、吞吐与空闲唤醒定向验证
+
+在原 VM 上临时追加独立的 512 MiB `--block` 稀疏文件，不修改启动镜像、Data seed 或 Data 盘。
+AppleVirtIOBlockStorageDevice 将测试盘发布为 disk0（启动盘变为 disk1），测试程序用容量检查限定目标；
+直接访问 `/dev/rdisk0`，同步 pread/pwrite，QD=1。该轮没有计算文件散列或执行烟测。
+
+| 项目 | 本次结果 |
+| --- | --- |
+| 1 MiB 顺序写，256 MiB | 1023.56 MiB/s |
+| 1 MiB 顺序读，256 MiB | 1770.45 MiB/s |
+| 4 KiB 随机写，2048 次 | 8590.50 IOPS，33.56 MiB/s |
+| 4 KiB 随机读，2048 次 | 9346.82 IOPS，36.51 MiB/s |
+| 顺序/随机数据校验 | 按绝对偏移生成数据，逐字节比较全部 256 MiB 和 2048 个随机块，通过 |
+| 测试盘无 I/O 300.005 秒后首次 4 KiB 读 | 2.558 ms，内容正确 |
+| 随后首次 4 KiB 写 | 0.734 ms，回读正确 |
+
+空闲期多次读取 SPI 计数，测试盘 SPI 97 始终为 6679；唤醒后为 6687（+8），
+对应 IOBlockStorageDriver 的 Operations (Read) 4374→4381、Operations (Write) 2304→2305，
+包括窗口内系统额外读取。启动盘 SPI 64 一直为 18。读写 Errors/ Retries 均为 0，
+`kernel_debugger_entry_count=0`。未直接采集宿主 irqfd 次数，不能据此声称完成 irqfd 与 SPI 的独立计数核对。
+
+停止测试 VM 后，将宿主的完整测试镜像拉回，再按同一偏移模式逐字节核对：
+前 256 MiB、2048 个随机块以及空闲唤醒后的写入块全部通过，确认数据到达后端文件。
+随后移除测试盘配置并恢复原 VM 配置、启动 VM，测试镜像留在采集目录供复核。
+
+范围：单次虚拟盘路径测量，宿主文件缓存开启，以上不是闪存裸盘吞吐。
+raw-device fsync 返回成功不等于完成物理介质持久化保证，本次未验证掉电耐久性。
+空闲采样为 67.7% CPU idle；audiomxd/configd 仍有负载，故此项是测试盘空闲 5 分钟后的
+MSI 完成路径验证，不是整机休眠恢复或数小时空闲压力测试。
+
+原始记录与复现程序：[采集目录](../research/pcie-io-2026-11-11/)，
+[测试程序](../research/pcie-io-2026-11-11/disk-io.c)、
+[吞吐与校验](../research/pcie-io-2026-11-11/bulk.log)、
+[空闲唤醒](../research/pcie-io-2026-11-11/idle.log)、
+[宿主文件校验](../research/pcie-io-2026-11-11/backing-verify.log)。
+后端镜像副本：`out/k27/pcie-p1/pcie-io-test-after.img`。
+
+## 2026-11-11 P4：网卡迁到 AppleVirtIONetwork
+
+增加 `MACOS_NET_PCI=1`（同时启用 `MACOS_PCIE=1`）：App VM 保留原 br-wifi 网络和
+MAC `02:44:56:4d:00:01`，去掉 `--virtio-mmio-net`，让 crosvm 将同一网卡放到 PCI。
+ADT 不再生成 `/arm-io/net`，按新 FDT 移动后续 GPU、声卡、media 的 MMIO 地址。
+KC 不再包含 DroidVMEthernet 占位驱动及其 TimeSync 资源依赖，避免先占用 en0；
+AppleVirtIO 中已有的 AppleVirtIONetwork 直接挂接，无需修改苹果驱动或 crosvm。
+
+构建使用 `MACOS_PCIE=1 MACOS_NET_PCI=1 MACOS_DISPLAY=1 MACOS_GPU=1 MACOS_VIDEO=1 MACOS_AUDIO=1 K27_NO_BOOT=1 bash k27/try.sh 0`。
+修改已停机 VM 的网络用同样的 `MACOS_NET_PCI=1` 调用 `scripts/droidvm-app.py net`，
+它会重新采集 FDT；随后必须更新启动盘中的 ADT 和 KC 再启动。
+本次复制已验证的 `boot-pcie-input-rtc.img`，仅用 mcopy 替换 KC/ADT，未重新生成 Data seed。
+当前部署镜像为 `out/k27/pcie-p1/boot-pcie-net.img`。
+
+定向上机结果：
+- AppleVirtIONetwork active，DroidVMEthernet 实例不存在；en0 的 MAC 不变，DHCP 仍为 192.168.1.196，SSH 恢复。
+- TimeSyncRootService 和 TimeSyncClockManager 正常启动；PCI 网卡协商 RXCSUM/TXCSUM/TSO4。
+- 同一 Linux 主机（192.168.1.184）、同一程序双向各传 64 MiB，两个方向均逐字节校验通过。
+- MMIO 基线上传/下载 21.30/25.73 MiB/s；PCI 首次 13.60/42.51 MiB/s，因上传偏低复测为 20.80/38.38 MiB/s。
+  此为经手机 Wi-Fi 桥的单次对比，存在启动负载和无线波动，不代表驱动最大吞吐或稳定收益。
+- ping 网关 10/10 成功；网卡 Ierrs/Oerrs/Drop 均为 0；复测 TCP 输出未报告重传或校验错误。
+- 第一次传输及 ping 窗口内，SPI 84 为 193→2122、SPI 85 为 156→1917；磁盘 SPI 64 保持 18，
+  `kernel_debugger_entry_count=0`，收发完成走 MSI。
+
+回退保留 `boot-pcie-input-rtc.img` 和原 VM 配置 `/tmp/codex-pcie-net-vm-original.json`。
+停机后恢复原配置与旧启动镜像即可；后续构建不设置 `MACOS_NET_PCI` 时仍使用旧 MMIO 路径。
+Data 盘、xHCI 和 MSI 多 CPU 路由尚未迁移。
+
+采集与定向验证程序见 [pcie-net-2026-11-11](../research/pcie-net-2026-11-11/)，
+包括 MMIO 基线、PCI 两次传输、接口信息和 SPI 前后计数。

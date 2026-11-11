@@ -104,6 +104,9 @@ REFRESH_HZ = int(os.environ.get('MACOS_REFRESH_HZ') or 120)
 # (en0, DHCP from the Wi-Fi's router). The MAC is the one en0 had with no device behind it, so the Data volume's en0 stays en0.
 # MACOS_NET=0: no device, en0 drops every packet (it still exists for the TimeSync clock). The template changes: register and prepare.
 NET = os.environ.get('MACOS_NET', '1') == '1'
+# MACOS_NET_PCI=1 (with MACOS_PCIE=1): AppleVirtIONetwork on PCI/MSI,
+# using the same bridge and MAC; omit the MMIO transport and its ADT node.
+NET_PCI = os.environ.get('MACOS_NET_PCI') == '1'
 NET_MAC = '02:44:56:4d:00:01'
 NET_BRIDGE = 'br-wifi'
 # MACOS_MEDIA=1: VideoToolbox's paravirtualized codecs (DroidVMVideo) on the phone's MediaCodec: crosvm's virtio-media decoder and
@@ -157,7 +160,7 @@ def template(persistent):
     vm.update({'cpu_count': CPUS, 'cpu_affinity': CPU_AFFINITY, 'disks': [],
                'extra_options': ['--block', BOOT + ',lock=false', '--dump-device-tree-blob', DTB,
                                  *disk_options(),
-                                 *(['--virtio-mmio-net'] if NET else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else []),
+                                 *(['--virtio-mmio-net'] if NET and not NET_PCI else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else []),
                                  *snd_options(), *media_options()]})
     if NET:
         vm['networks'] = [{'network_id': network_id(), 'mac_address': NET_MAC}]
@@ -259,7 +262,7 @@ def boot_disk(args):
     # Below the shim's RAM base (0x600000 of firmware window), the framebuffer and the pools at the top of RAM (0xA00000 before:
     # the window and a 1280x800 framebuffer's 4 MiB)
     run.make_adt(fdt, hex(MEM_MB * 1024 * 1024 - 0x600000 - run.fdt_framebuffer_bytes(fdt) - run.fdt_pool_bytes(fdt)), '47554e5941480001', adt, cpu_regs=None,
-                 virtio_gpu=VIRTIO_GPU, net=NET, snd=SND, media=len(MEDIA))   # every vCPU the app gives the VM
+                 virtio_gpu=VIRTIO_GPU, net=NET and not NET_PCI, snd=SND, media=len(MEDIA))   # every vCPU the app gives the VM
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + ([a for a in GPU_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')] if GPU else []) +
                            ['exec-env=' + ';'.join(EXEC_ENV + (GPU_EXEC_ENV if GPU else []))] + args.kernel_arg)
@@ -299,15 +302,15 @@ def prepare(args):
 
 
 def net(args):
-    """The registered VM with (MACOS_NET=1) or without the virtio-mmio network: --virtio-mmio-net before --virtio-mmio-gpu (crosvm's
-    order) and the br-wifi network at NET_MAC. A new MMIO window moves the virtio-gpu one, so the FDT is dumped again."""
+    """Select MMIO or PCI (MACOS_NET_PCI=1) for the br-wifi network at NET_MAC.
+    Changing the MMIO windows moves later devices, so dump the FDT again."""
     ipc = ios.Ipc()
     row = ios.find_vm(ipc)
     if row and row.get('state') != 'STOPPED':
         raise SystemExit(f'stop the running VM first ({row.get("state")})')
     vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
     options = [o for o in vm['extra_options'] if o != '--virtio-mmio-net']
-    if NET:
+    if NET and not NET_PCI:
         options.insert(options.index('--virtio-mmio-gpu') if '--virtio-mmio-gpu' in options else len(options), '--virtio-mmio-net')
     vm.update({'extra_options': options, 'networks': [{'network_id': network_id(), 'mac_address': NET_MAC}] if NET else []})
     status = ipc.call('vm_config_status')
