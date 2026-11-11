@@ -406,3 +406,37 @@ App 默认启动参数加入 XNU 已有的 `ml-timeout-debug-ack-scale=100`，�
 [宿主调度等待](../research/pcie-data-2026-11-11/stackshot-host-scheduling.log)、
 [采样完成](../research/pcie-data-2026-11-11/stackshot-fixed.log)、
 [正常关机](../research/pcie-data-2026-11-11/stackshot-fixed-shutdown.log)。
+
+
+## 2026-11-12：虚拟 xHCI 改用单向量 MSI-X
+
+采用 crosvm 已有的 MsixConfig，将 xHCI 的唯一 interrupter 接到 vector 0。
+PCI capability 指向 BAR0+0x8000 的 16 字节 MSI-X table，BAR0+0x8800 的 8 字节 PBA；
+这两个区域均位于现有 64 KiB BAR 内，不覆盖 operational/runtime/doorbell 或 0xc000 起的扩展能力。
+不增加 interrupter 数量，不单独实现传统 MSI capability。
+
+- 创建 xHCI 时传入 IrqTube，与 virtio-pci 共用 AllocateOneMsi/AddMsiRoute 协议。
+- 通过已有 MsiRouteEvent 获取 MBI SPI 的事件，投递不增加专用中转线程。
+- MSI-X 启用时，完成事件交给 MsixConfig；屏蔽时保留 pending，解除屏蔽后补发。
+- 禁用 MSI-X 时保留 INTx，遵守 PCI Command.INTxDisable；INTx resample 不再重发 MSI-X 消息。
+- 设备销毁先停止 xHCI 工作线程，再释放 MSI 路由。
+- 同时修正 MsixConfig 的首次解除向量屏蔽分支：建立路由后也要补发已存在的 pending bit。
+
+此改动完成后仍需独立接入 guest 的 USB Host 驱动依赖。目前 KC 用 ARMPlatformStandIn
+顶替 IOUSBHostFamily；仅让 xHCI 支持 MSI-X 不会自动使 AppleUSBXHCIPCI 加载。
+手机当前没有枚举到外接 USB 设备，不能将单元验证表述为 USB 设备直通验收。
+
+实现提交：external/crosvm `9c63a289d`。
+定向验证在手机执行 devices_test 的 `usb::xhci::interrupter::tests::`：6/6 通过。
+新增用例通过模拟 IrqTube 的 AllocateOneMsi/AddMsiRoute 响应，确认返回的 MsiRouteEvent
+收到消息、屏蔽时只置 PBA、首次解除屏蔽补发并清 PBA、后续事件只发 MSI-X，以及禁用
+MSI-X 后 INTxDisable 对回退投递的控制。此用例验证消息交接，不是 guest/Gunyah 端到端测试。
+其余 5 项覆盖已有事件合并计时、无 ring 的完成事件、reset，未运行 smoke 或全量用例。
+
+测试构建有既有兼容问题：virtio/block/mod.rs 中 21 处 DiskOption 测试初始化缺 queue_size。
+仅构建测试二进制时临时补 `queue_size: None`，随后原样恢复，没有带入提交。
+结果见 [interrupter-tests.log](../research/xhci-msix-2026-11-12/interrupter-tests.log)。
+
+最终生产构建通过：`/home/qiuqiu/crosvm/build_crosvm.sh`（2 分 36 秒）。
+产物：`out/soong/.intermediates/external/crosvm/crosvm_device_only/crosvm_device_only_bin/android_arm64_armv8-a/crosvm`
+（相对于 AOSP 工作区）。本阶段未替换手机上运行中的 crosvm，也未切换 guest USB 配置。
