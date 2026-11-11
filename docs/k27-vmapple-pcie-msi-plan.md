@@ -378,3 +378,31 @@ MACOS_PCIE=1 MACOS_NET_PCI=1 MACOS_DATA_PCI=1 MACOS_DISPLAY=1 MACOS_GPU=1 MACOS_
 当前启动镜像：`out/k27/pcie-p1/boot-pcie-data.img`，保留旧 `boot-pcie-net.img` 和
 `/tmp/codex-pcie-data-vm-original.json`。回退需要同时恢复旧 VM 配置和启动盘；旧 store 是切换前快照，
 不会包含切换后在新 PCI 盘上的更改，两盘不能同时挂载相同 UUID 的容器。
+
+## 2026-11-12：stackshot 的 debugger IPI 响应预算
+
+普通运行执行 `sudo spindump <WindowServer PID> 10 1 -file /tmp/p4-stackshot.txt`，
+复现同一 `DebuggerXCallEnter` panic（本次 CPU 6 等 CPU 5），不依赖关机或存储卸载。
+保留的中断栈表明辅助 CPU 已进入 `DebuggerXCall/stackshot_aux_cpu_entry`；
+panic 后采集不能还原超时瞬间的全部状态，不能单凭这些栈判定 IPI 丢失。
+
+运行时读回 `debug_ack_timeout=240000`，在 24 MHz guest 时基下只有 10 ms。
+源码中的 24,000,000 ticks 兜底仅在该变量为零时使用，默认值非零，实际不会走 1 秒兜底。
+宿主 `/proc/<pid>/task/<vcpu>/sched` 的 `wait_max`（毫秒）为 13.21–36.35 ms（多颗 CPU），
+确认正常宿主调度等待本身即可超过该预算。
+
+App 默认启动参数加入 XNU 已有的 `ml-timeout-debug-ack-scale=100`，只调整 debugger 跨 CPU
+进入/退出的响应预算到 1 秒；保留超时 panic、spindump、stackshot 和全部 CPU 参与。
+不改内核代码，不改全局 timeout scale。启动后读回 24,000,000 ticks。
+
+定向验证：
+- 同一 10 秒、1 ms 请求间隔的 spindump 命令完成并生成报告；工具因处理速度主动降低采样频率。
+- 完成后 debugger entry count 回到 0，未 panic。
+- 随后正常关机，`vfs_unmountall(system) end`、APFS mounted volumes=0、`CPU halted`，无 panic。
+- 这是已复现路径的修正验证，不代表长期压力验证或对所有关机问题的保证。
+
+证据：[复现 panic](../research/pcie-data-2026-11-11/stackshot-repro-panic.txt)、
+[中断栈扫描](../research/pcie-data-2026-11-11/stackshot-repro-stacks.txt)、
+[宿主调度等待](../research/pcie-data-2026-11-11/stackshot-host-scheduling.log)、
+[采样完成](../research/pcie-data-2026-11-11/stackshot-fixed.log)、
+[正常关机](../research/pcie-data-2026-11-11/stackshot-fixed-shutdown.log)。

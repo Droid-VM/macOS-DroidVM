@@ -133,6 +133,9 @@ REQUIRED_ARGS = ['mac-amfi-launch-permissive=1', 'malloc-ranges-off=1', 'arm64_m
 # The board's -no_slto_panic is gone in xnu-12377: waitq and port locks spin under LockTimeOut (0.25 s, twice that for a waitq), and a
 # vCPU the busy host did not run for that long while holding one panicked the guest at launchd's spawn storms; 40 times is 10 s
 REQUIRED_ARGS.append('ml-timeout-lock-scale=40')
+# The debug cross-call default is 240,000 ticks (10 ms at our 24 MHz timebase).
+# Allow one second for host-scheduled vCPUs to acknowledge stackshot IPIs.
+REQUIRED_ARGS.append('ml-timeout-debug-ack-scale=100')
 # CoreAudio (and Swift's clocks) take the host clock as 24 MHz whatever mach_timebase_info says; the counter here runs at 19.2 MHz, so
 # without the kernel scaling it (patch 0042) the HAL writes every 80 ms instead of 64 ms and the sound stutters and falls behind the picture
 REQUIRED_ARGS.append('droidvm-timebase-hz=24000000')
