@@ -585,8 +585,9 @@ IOReturn DroidVMDisplay::do_power_state_change_gated()
     return kIOReturnSuccess;
 }
 
-// AppleParavirtDisplay::program_hardware_gated (its slot 473): show the swap, then complete it. There is no cursor plane (no
-// "CursorPlane" property), so WindowServer draws the cursor into the main surface.
+// AppleParavirtDisplay::program_hardware_gated (its slot 473): show the swap, then complete it. This driver has no cursor plane;
+// WindowServer needs the CAUseSWCursor preference to composite its pointer into the main surface. Omitting CursorPlane alone
+// still lets it submit a separate cursor surface, which this scanout cannot display.
 void DroidVMDisplay::program_hardware_gated()
 {
     IOMFBSwapIORequest *swap = at<IOMFBSwapIORequest *>(this, kCurrentSwap);
