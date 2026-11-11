@@ -15,6 +15,7 @@
                                                          new FDT, keeping every other setting made in the app; then boot
   droidvm-app.py media                                   only switch the registered VM's virtio-media codecs (MACOS_MEDIA) and dump
                                                          its new FDT, keeping every other setting made in the app; then boot
+  droidvm-app.py usb                                     enable xHCI with MACOS_USB_PCI=1 (0 disables it), keeping other settings
   droidvm-app.py disks                                   use the Data store as the registered VM's single disk
                                                          and dump its new FDT, keeping every other setting
                                                          made in the app; then boot
@@ -108,6 +109,7 @@ NET = os.environ.get('MACOS_NET', '1') == '1'
 # using the same bridge and MAC; omit the MMIO transport and its ADT node.
 NET_PCI = os.environ.get('MACOS_NET_PCI') == '1'
 DATA_PCI = os.environ.get('MACOS_DATA_PCI') == '1'
+USB_PCI = os.environ.get('MACOS_USB_PCI') == '1'
 # Converted GPT/APFS disk; the original SHNGDATA store remains available for rollback.
 DATA_PCI_IMAGE = FOLDER + '/data-pcie.img'
 NET_MAC = '02:44:56:4d:00:01'
@@ -168,6 +170,7 @@ def template(persistent):
                                  *disk_options(),
                                  *(['--virtio-mmio-net'] if NET and not NET_PCI else []), *(['--virtio-mmio-gpu'] if VIRTIO_GPU else []),
                                  *snd_options(), *media_options()]})
+    configure_usb(vm)
     if NET:
         vm['networks'] = [{'network_id': network_id(), 'mac_address': NET_MAC}]
     if VIRTIO_GPU:
@@ -357,6 +360,33 @@ def pcie(args):
     dump_fdt()
 
 
+def configure_usb(vm):
+    controllers = [p for p in vm.get('peripherals', []) if p.get('type') == 'xhci_usb']
+    if USB_PCI and not controllers:
+        index = int(vm.get('xhci_next', 0))
+        vm.setdefault('peripherals', []).append(
+            {'type': 'xhci_usb', 'id': f'xhci-{index}', 'usb2_ports': 8, 'usb3_ports': 8})
+        vm['xhci_next'] = index + 1
+    elif not USB_PCI:
+        vm['peripherals'] = [p for p in vm.get('peripherals', []) if p.get('type') != 'xhci_usb']
+    vm.pop('usb', None)  # The daemon derives USB enablement from peripherals.
+
+
+def usb(args):
+    """Enable or disable xHCI with MACOS_USB_PCI; PCI/MMIO bridge windows do not change."""
+    ipc = ios.Ipc()
+    row = ios.find_vm(ipc)
+    if row and row.get('state') != 'STOPPED':
+        raise SystemExit(f'stop the running VM first ({row.get("state")})')
+    vm = next(v for v in json.loads(sh(f'cat {ios.APP}/files/vms.json'))['vms'] if v['id'] == VM_ID)
+    configure_usb(vm)
+    status = ipc.call('vm_config_status')
+    reply = ipc.call('vm_config_apply', revision=status['revision'], operations=[{'op': 'replace', 'config': vm}])
+    print('replace', reply.get('success'), reply.get('message', ''), reply.get('error', ''))
+    if not reply.get('success'):
+        raise SystemExit(1)
+
+
 def disks(args):
     """The registered VM with the disks of disk_options(), every other setting kept. The disks' windows come first, so every other
     one moves: the FDT is dumped again."""
@@ -510,7 +540,7 @@ def main():
         sub.add_parser(name).add_argument('--kernel-arg', action='append', default=[], help='extra kernel argument NAME[=VALUE]')
     sub.add_parser('install').add_argument('dir')
     sub.add_parser('clone').add_argument('boot_img')
-    for name in ('push', 'register', 'disks', 'net', 'pcie', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
+    for name in ('push', 'register', 'disks', 'net', 'pcie', 'usb', 'snd', 'media', 'store-patch', 'start', 'stop', 'status'):
         sub.add_parser(name)
     args = parser.parse_args()
     if args.cmd in ('status', 'stop'):
@@ -527,6 +557,8 @@ def main():
         net(args)
     elif args.cmd == 'pcie':
         pcie(args)
+    elif args.cmd == 'usb':
+        usb(args)
     elif args.cmd == 'snd':
         snd(args)
     elif args.cmd == 'media':
