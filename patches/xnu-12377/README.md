@@ -25,3 +25,9 @@ authenticate them on access and re-sign them when a Block moves. Incremental ker
 Directed on-device validation (2026-11-11): DriverKit mouse and two trackpad services attached,
 kernel_debugger_entry_count remained zero, and native PCIe block reads returned the expected bytes
 with SPI 64 increasing once per read. The 47-patch replay record above predates this addition.
+
+`IOServicePM-virtual-thunk-callbacks.patch` (`e59b8c5`) follows 0048. With upstream
+Clang's arm64e member-pointer thunks, comparing virtual callback addresses cannot
+distinguish IOService defaults from overrides. Preserve power informees on that
+compiler configuration. Directed USB validation created all 16 xHCI ports; with
+ArmDTPlatform's bus power hierarchy fix, the physical Logitech mouse enumerated.

@@ -532,3 +532,36 @@ SPI 编号及对应 CPU 随设备注册顺序变化，分配不依赖固定设�
 debugger entry count 仍为 0；实际投递继续分布在多个 CPU。
 见 [restart.log](../research/msi-affinity-2026-11-12/restart.log)、
 [restart-cpus.json](../research/msi-affinity-2026-11-12/restart-cpus.json)。VM 保持运行。
+
+## 2026-11-12：物理 USB 鼠标直通验证
+
+接入 Android 的 Logitech G102 LIGHTSYNC（046d:c092，USB 1:2，12 Mbps）
+经 `crosvm usb attach` 分配给虚拟 xHCI 端口 1，完成原生 USB/HID 绑定及实际输入验证。
+本次补齐三个阻塞项：
+
+- `9a274a2`：上游 Clang 的 arm64e 虚成员函数 thunk 地址比较不能区分回调覆盖，
+  导致 IOServicePM 丢弃电源通知。保留该编译器配置下的 informee 后，xHCI 创建 16 个端口。
+- `b0b8448`：ArmDTPlatform 优先接入最近的电源父设备，USB 端口和设备的电源需求
+  能传递到 xHCI；此前平铺到 root domain 会使控制器在端口存在时仍关电。
+- `5359ccf`：USB KC 显式保留 AppleUSBHostCompositeDevice 和通用 HID 匹配依赖。
+  复合设备驱动选中配置 1 并发布两个 IOUSBHostInterface，最终由系统
+  AppleUserUSBHostHIDDevice / AppleUserHIDEventDriver 绑定。
+
+用户实际移动、点击和滚动后，鼠标 InputReportCount=2810，
+IOHIDInterface ReportAvailableCalls/Runs=2810，事件 EnqueueEventCount=2810；
+事件队列 head=tail=13000，NoFullMsg=0，xHCI SpuriousInterruptCount=0。
+解除分配后 IOUSBHostDevice 消失，再次挂接后两个接口及 HID/Event 服务均自动恢复。
+当前鼠标保持分配给 guest；该手动分配不跨 VM 重启持久化。
+
+本次启动 8 个 CPU 的中断处理器均就绪，kernel_debugger_entry_count=0。
+先前看到的约十万累计 SPI 计数不能据此判为持续风暴；后续取样无持续高速增长，
+实际输入后 USB I/O 计数稳定于 2827，虚假中断计数仍为零。
+没有把这些结果扩展为 USB 大容量存储、USB3、等时传输、独立次事件环或系统睡眠唤醒验证。
+
+原始证据：
+[电源层级](../research/usb-passthrough-2026-11-12/p4-usb-hierarchy-ioreg.log)、
+[启动](../research/usb-passthrough-2026-11-12/p4-usb-hid-boot.log)、
+[完整 HID 服务](../research/usb-passthrough-2026-11-12/p4-usb-hid-service.log)、
+[实际输入计数](../research/usb-passthrough-2026-11-12/p4-usb-hid-stats-after.log)、
+[解除分配](../research/usb-passthrough-2026-11-12/p4-usb-hid-detached.log)、
+[重新挂接](../research/usb-passthrough-2026-11-12/p4-usb-hid-reattach.log)。
