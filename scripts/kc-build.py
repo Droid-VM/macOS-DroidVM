@@ -381,7 +381,7 @@ def build(args):
             entries.append(entry)
         elif entry.get('OSKernelResource'):
             entries.append(entry)        # the kernel's pseudo-extensions (com.apple.kpi.*), which kexts list as libraries
-        elif '_PrelinkExecutableLoadAddr' not in entry and set(entry.get('OSBundleLibraries', {})) <= (keep | resources):
+        elif name not in kc.entries and set(entry.get('OSBundleLibraries', {})) <= (keep | resources):
             entries.append(entry)        # personality-only bundles whose libraries survive
     entries.extend(native_entries)
     entries.extend({'CFBundleIdentifier': spec['bundle'], 'CFBundleName': spec['name'], 'CFBundleVersion': spec.get('version', '1.0.0'),
