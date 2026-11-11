@@ -1,0 +1,65 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -188,6 +188,10 @@
+ static ArmCpuSpi gSpi[ARMCPU_SPI_SLOTS];
+ static volatile uint32_t gSpiUsed = 0;
+ static uint64_t gBootAffinity = 0;
++static uint64_t gSpiCpuAffinity[ARMCPU_SMP_SLOTS];
++static uint32_t gSpiCpuReady[ARMCPU_SMP_SLOTS];
++// Actual delivery counts, indexed by gSpi slot and logical CPU.
++volatile uint64_t armcpu_spi_cpu_counts[ARMCPU_SPI_SLOTS][ARMCPU_SMP_SLOTS];
+ extern "C" {
+ volatile uint64_t armcpu_spi_unhandled = 0;
+ volatile uint32_t armcpu_spi_unhandled_id = 0;
+@@ -571,6 +575,8 @@
+     ml_install_interrupt_handler (this, static_cast<int> (logicalId), this, reinterpret_cast<IOInterruptHandler> (&ArmCpu::dispatch), nullptr);
+     enableCPUTimeBase (true);
+     setCPUState (kIOCPUStateRunning);
++    gSpiCpuAffinity[logicalId] = affinity & 0xff00ffffffULL;
++    __atomic_store_n (&gSpiCpuReady[logicalId], 1, __ATOMIC_RELEASE);
+     armcpu_smp_step[logicalId] = 7;
+     armcpu_smp_running = armcpu_smp_running + 1;
+     // XNU clears SIGPdisabled for a core the first time that core takes an IPI, and cpu_signal() silently skips a core until then; Apple's
+@@ -589,6 +595,8 @@
+   if (gSpiIpi) { spiIpiConfigure (gDist, logicalId, affinity); }
+   enableCPUTimeBase (true);
+   setCPUState (kIOCPUStateRunning);
++  gSpiCpuAffinity[logicalId] = affinity & 0xff00ffffffULL;
++  __atomic_store_n (&gSpiCpuReady[logicalId], 1, __ATOMIC_RELEASE);
+   if (gSelfIpi) { signalCPU (this); }
+   // Bring-up: the cores that did not join park in WFI (parkCore) instead of spinning in WFE; the failure code says which step
+   // refused them (1 MPIDR mismatch, 2 redistributor wake, 3 remote wake, 4 processor registration).
+@@ -646,6 +654,7 @@
+       if (spi != nullptr) {
+         armcpu_irq_phase = 7;
+         spi->count = spi->count + 1;
++        armcpu_spi_cpu_counts[spi - gSpi][logicalId] = armcpu_spi_cpu_counts[spi - gSpi][logicalId] + 1;
+         spi->handler (spi->context);
+       } else if (intid >= 32 && gDist != 0) {
+         armcpu_spi_unhandled = armcpu_spi_unhandled + 1;
+@@ -876,6 +885,25 @@
+   return kIOReturnSuccess;
+ }
+ 
++// Select a running logical CPU by ordinal; called while the SPI is masked.
++extern "C" IOReturn armcpu_spi_distribute (uint32_t intid, uint32_t ordinal, uint32_t *cpu, uint64_t *router)
++{
++  if (gDist == 0 || armcpu_gic_ready == 0) { return kIOReturnNotReady; }
++  if (intid < 32 || intid >= 1020) { return kIOReturnBadArgument; }
++  uint32_t online[ARMCPU_SMP_SLOTS], count = 0;
++  for (uint32_t i = 0; i < ARMCPU_SMP_SLOTS; i++) {
++    if (__atomic_load_n (&gSpiCpuReady[i], __ATOMIC_ACQUIRE)) { online[count++] = i; }
++  }
++  if (count == 0) { return kIOReturnNotReady; }
++  const uint32_t target = online[ordinal % count];
++  volatile uint64_t *route = reinterpret_cast<volatile uint64_t *> (gDist + 0x6000 + 8 * intid);
++  *route = gSpiCpuAffinity[target];
++  __asm__ volatile ("dsb sy" ::: "memory");
++  *cpu = target;
++  *router = *route;
++  return kIOReturnSuccess;
++}
++
+ extern "C" uint64_t armcpu_spi_count (uint32_t intid)
+ {
+   const uint32_t used = __atomic_load_n (&gSpiUsed, __ATOMIC_ACQUIRE);

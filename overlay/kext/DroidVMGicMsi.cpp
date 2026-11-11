@@ -10,7 +10,7 @@
 // and disableVectorHard. So the phandle is set only once all of that is in place, on this service (the nub was registered
 // long before), and an interrupt calls the vector's handler directly (the MSI controller's handleInterrupt panics).
 //
-// The SPIs are ArmCpu's (armcpu_spi_attach: edge, group 1, routed to the boot CPU; the handler runs before the EOI). A line
+// The SPIs are ArmCpu's (edge, group 1, distributed across running CPUs; the handler runs before the EOI). A line
 // is attached the first time its vector is initialized and stays attached; enable and disable mask it at the distributor.
 // An MSI that comes while the line is masked stays pending in the distributor and is taken once it is unmasked.
 #include <IOKit/IOInterruptController.h>
@@ -22,6 +22,7 @@
 extern "C" IOReturn armcpu_spi_attach(uint32_t intid, bool edge, void (*handler)(void *), void *context, uint32_t *readback,
                                       uint64_t *router);
 extern "C" IOReturn armcpu_spi_set_enabled(uint32_t intid, bool enabled);
+extern "C" IOReturn armcpu_spi_distribute(uint32_t intid, uint32_t ordinal, uint32_t *cpu, uint64_t *router);
 
 // /arm-io/pcie's device-interrupt-parent ('MBIF'; scripts/run-macos-vm.py GIC_MBI_PHANDLE). ADT nodes carry no AAPL,phandle.
 static constexpr uint32_t kGicMbiPhandle = 0x4d424946;
@@ -32,11 +33,13 @@ class DroidVMGicMsi : public IOInterruptController {
     struct Line {
         DroidVMGicMsi *owner;
         uint32_t intid;
+        uint32_t cpuOrdinal;
         bool attached;
         IOInterruptVector *volatile vector;
     };
     uint32_t fBase = 0;
     uint32_t fCount = 0;
+    uint32_t fNextCpu = 0;
     Line *fLines = nullptr;
 
     Line *line(IOInterruptVectorNumber number);
@@ -184,9 +187,18 @@ void DroidVMGicMsi::initVector(IOInterruptVectorNumber number, IOInterruptVector
             return;
         }
         entry->attached = true;
+        entry->cpuOrdinal = __atomic_fetch_add(&fNextCpu, 1U, __ATOMIC_RELAXED);
     }
     // armcpu_spi_attach enables the line; a vector starts hard disabled until enableVector.
     armcpu_spi_set_enabled(entry->intid, false);
+    uint32_t cpu;
+    uint64_t router;
+    IOReturn result = armcpu_spi_distribute(entry->intid, entry->cpuOrdinal, &cpu, &router);
+    if (result != kIOReturnSuccess) {
+        IOLog("DroidVMGicMsi: route INTID %u: 0x%x\n", entry->intid, result);
+        return;
+    }
+    IOLog("DroidVMGicMsi: INTID %u -> CPU %u IROUTER 0x%llx\n", entry->intid, cpu, router);
 }
 
 void DroidVMGicMsi::disableVectorHard(IOInterruptVectorNumber number, IOInterruptVector *)

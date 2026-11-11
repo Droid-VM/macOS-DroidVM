@@ -18,6 +18,7 @@ U=$PWD/un; FR=$PWD/fakeroot
 . ./env.sh
 export CCC_OVERRIDE_OPTIONS='+-Wno-error=missing-designated-field-initializers'
 bash "$K27/build-platform-rtc.sh"
+bash "$K27/build-platform-cpu.sh"
 DT=$U/build/platform-12377-arm64e/ArmDTPlatform/libArmDTPlatform.a; CPU=$U/build/platform-12377-arm64e/ArmCpu/libArmCpu.a
 FH=$FR/usr/local/lib/kernel-arm64e
 LDX="-Wl,-no_fixup_chains -Wl,-threaded_starts_section"
