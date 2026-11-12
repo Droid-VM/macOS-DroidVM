@@ -1,0 +1,92 @@
+--- a/DroidVMVirtioGpu.cpp
++++ b/DroidVMVirtioGpu.cpp
+@@ -85,6 +85,9 @@
+ IOLock *lock;
+ IOLock *cursorLock;
+ uint16_t cursorAvailable;
++struct CursorCommand { Header h; uint32_t scanout; int32_t x, y; uint32_t padding, resource, hotX, hotY, padding2; };
++CursorCommand pendingCursor;
++bool cursorPending;
+ uint32_t interruptId;
+ IOWorkLoop *interruptLoop;
+ IOInterruptEventSource *interruptSource;
+@@ -166,6 +169,24 @@
+     }
+     if (any) completed();
+ }
++// One DMA buffer is in flight; only an unsent MOVE may be replaced by a newer position.
++void sendCursor(const CursorCommand &command) {
++    barrier();
++    memcpy(queues[1] + 512, &command, sizeof(command));
++    uint64_t pa;
++    physical(queues[1], sizeof queues[1], pa);
++    reinterpret_cast<Desc *>(queues[1])[0] = {pa + 512, sizeof(command), 0, 0};
++    auto avail = reinterpret_cast<volatile uint16_t *>(queues[1] + 128);
++    avail[2 + cursorAvailable % 4] = 0;
++    barrier(); avail[1] = ++cursorAvailable; barrier(); wr(0x50, 1);
++}
++void flushCursorMove() {
++    auto used = reinterpret_cast<volatile uint16_t *>(queues[1] + 256);
++    if (cursorPending && used[1] == cursorAvailable) {
++        sendCursor(pendingCursor);
++        cursorPending = false;
++    }
++}
+ // Mask the level line until the work loop acknowledges the device, before the GIC EOI/resample.
+ void interruptHandler(void *) {
+     armcpu_spi_set_enabled(interruptId, false);
+@@ -176,6 +197,7 @@
+     if (status) wr(0x64, status);
+     IOLockLock(lock);
+     reap();
++    flushCursorMove();
+     completed(); // also wakes cursor queue and configuration waiters
+     IOLockUnlock(lock);
+     armcpu_spi_set_enabled(interruptId, true);
+@@ -280,24 +302,26 @@
+ uint64_t features() { return negotiated; }
+ IOReturn cursor(uint32_t resource, int32_t x, int32_t y, uint32_t hotX, uint32_t hotY, bool image) {
+     if (!ready()) return kIOReturnNotReady;
+-    struct Command { Header h; uint32_t scanout; int32_t x, y; uint32_t padding, resource, hotX, hotY, padding2; };
+     IOLockLock(cursorLock);
++    IOLockLock(lock);
++    const CursorCommand command = {{image ? 0x300u : 0x301u, 0, 0, 0, 0, {}}, 0, x, y, 0, resource, hotX, hotY, 0};
++    if (!image) {
++        pendingCursor = command;
++        cursorPending = true;
++        flushCursorMove();
++        IOLockUnlock(lock);
++        IOLockUnlock(cursorLock);
++        return kIOReturnSuccess;
++    }
++    // UPDATE/hide is ordered after all moves and remains synchronous, including before resource release.
+     auto used = reinterpret_cast<volatile uint16_t *>(queues[1] + 256);
+     const uint64_t deadline = deadlineUs(1000000);
+-    IOLockLock(lock);
+-    while (used[1] != cursorAvailable) {
++    while (cursorPending || used[1] != cursorAvailable) {
+         if (IOLockSleepDeadline(lock, &completion, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
+             IOLockUnlock(lock); IOLockUnlock(cursorLock); return kIOReturnTimeout;
+         }
+     }
+-    Command command = {{image ? 0x300u : 0x301u, 0, 0, 0, 0, {}}, 0, x, y, 0, resource, hotX, hotY, 0};
+-    memcpy(queues[1] + 512, &command, sizeof(command));
+-    uint64_t pa;
+-    physical(queues[1], sizeof queues[1], pa);
+-    reinterpret_cast<Desc *>(queues[1])[0] = {pa + 512, sizeof(command), 0, 0};
+-    auto avail = reinterpret_cast<volatile uint16_t *>(queues[1] + 128);
+-    avail[2 + cursorAvailable % 4] = 0;
+-    barrier(); avail[1] = ++cursorAvailable; barrier(); wr(0x50, 1);
++    sendCursor(command);
+     while (used[1] != cursorAvailable) {
+         if (IOLockSleepDeadline(lock, &completion, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
+             IOLockUnlock(lock); IOLockUnlock(cursorLock); return kIOReturnTimeout;
+@@ -400,7 +424,7 @@
+     Slot &slot = slots[s];
+     if (slot.generation == ticket >> 8) {
+         if (slot.state == Posted) slot.state = Abandoned;
+-        else if (slot.state == Done) slot.state = Free;
++        else if (slot.state == Done) { slot.state = Free; completed(); }
+         droidvm_virtio_gpu_stray[4] = droidvm_virtio_gpu_stray[4] + 1;
+     }
+     IOLockUnlock(lock);
