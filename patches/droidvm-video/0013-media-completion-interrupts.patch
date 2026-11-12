@@ -1,37 +1,23 @@
 --- a/DroidVMVirtioMedia.c
 +++ b/DroidVMVirtioMedia.c
-@@ -8,8 +8,8 @@
- // The devices' MMAP buffers live there; MMAP answers with an offset into it.
- //
+@@ -10,4 +10,4 @@
  // This file is the transport half: it maps each window, brings the device up (VIRTIO_F_VERSION_1, and ACCESS_PLATFORM where
 -// offered), keeps the event queue stocked, and runs one command at a time per device, polling as every virtio driver of this
 -// guest does (the queues are NO_INTERRUPT). The protocol (driver/protocol.h of the virtio-media repository):
 +// offered), keeps the event queue stocked, and runs one command at a time per device.
 +// Level SPIs acknowledge queue completions and wake command waiters and the event worker. The protocol (driver/protocol.h of the virtio-media repository):
  //   commandq  OPEN -> session id; CLOSE; IOCTL(session, the _IO* number of a VIDIOC_*) with the ioctl's payload out (for _IOW
- //             and _IOWR) and back (for _IOR and _IOWR), the response header in front of it; MMAP(session, offset) -> an offset
- //             into the pool; MUNMAP. A response's status is 0 or a Linux errno. VIDIOC_QUERYCAP is the driver's to answer
-@@ -23,6 +23,8 @@
- #include <stdbool.h>
- #include <string.h>
+@@ -25,2 +25,4 @@
  #include <kern/thread.h>
 +#include <kern/sched_prim.h>
 +#include <kern/clock.h>
  #include <kern/locks.h>
- #include <kern/misc_protos.h>
- #include <machine/machine_routines.h>
-@@ -32,7 +34,7 @@
- #include "DroidVMDmaRegion.h"
- #endif
+@@ -34,3 +36,3 @@
  
 -extern void IOSleep(unsigned milliseconds);
 +extern int armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *);
  extern void delay(int usec);
- 
- enum {
-@@ -67,11 +69,10 @@
-     uint16_t avail[2], used[2];        // our indices into each queue's available and used rings
-     lck_mtx_t *lock;                   // one command at a time
+@@ -69,7 +71,6 @@
      bool up;
 -    // The layer above that takes this device's events (DroidVMVTHost.cpp), called with the lock held as each arrives: it must
 -    // copy what it needs and return, never issue a command.
@@ -41,19 +27,11 @@
 -    volatile uint32_t fast;            // sessions streaming: the event queue is polled every millisecond, not every 50
 +    uint32_t interrupt_id;
  };
- 
- // Per device: one page per queue (descriptors at 0, the driver ring at 1024, the device ring at 2048), the event buffers,
-@@ -106,6 +107,7 @@
- static struct media_device media[MEDIA_MAX];
- static unsigned media_count;
+@@ -108,2 +109,3 @@
  static lck_grp_t *media_group;
 +static bool media_pending;
  
- // For the host rig (peek.py).
- volatile uint32_t droidvm_media_found, droidvm_media_up;
-@@ -147,18 +149,36 @@
-     media_write32(d, 0x50, q);
- }
+@@ -149,5 +151,20 @@
  
 -// The events the device has written back: counted (the layers above take them once they exist) and the buffers returned.
 +// ACK before the GIC EOI/resample. No mutex or session callback runs in interrupt context.
@@ -76,8 +54,7 @@
 +        lck_mtx_lock(d->lock);
 +        if (used(d, MEDIA_EVENTQ)[1] == d->used[MEDIA_EVENTQ]) { lck_mtx_unlock(d->lock); return; }
          media_barrier();
-         const uint32_t *ring = (const uint32_t *)(used(d, MEDIA_EVENTQ) + 2);
-         const uint32_t id = ring[(d->used[MEDIA_EVENTQ] % MEDIA_QUEUE) * 2];
+@@ -156,7 +173,10 @@
          ++d->used[MEDIA_EVENTQ];
 +        memcpy(copy, media_events[index_of(d)][id % MEDIA_EVENTS], sizeof copy);
          uint32_t event;
@@ -90,11 +67,7 @@
 +        lck_mtx_unlock(d->lock);
 +        if (sink) sink(context, copy, sizeof copy);
      }
- }
- 
-@@ -183,10 +203,19 @@
-     memset(media_io[index_of(d)].response, 0, sizeof(media_io[0].response));
-     droidvm_media_commands++;
+@@ -185,6 +205,15 @@
      post(d, MEDIA_COMMANDQ, 0);
 -    for (unsigned waited = 0; used(d, MEDIA_COMMANDQ)[1] == d->used[MEDIA_COMMANDQ]; ++waited) {
 -        if (waited == 5000) { droidvm_media_timeouts++; return -1; }   // 5 s
@@ -114,19 +87,12 @@
 +            return -1;
 +        }
      }
-     media_barrier();
-     ++d->used[MEDIA_COMMANDQ];
-@@ -280,20 +309,13 @@
- const char *droidvm_media_card(unsigned device) { return device < media_count ? media[device].card : ""; }
- bool droidvm_media_is_up(unsigned device) { return device < media_count && media[device].up; }
+@@ -282,3 +311,3 @@
  
 -// The layer above's event sink (see struct media_device), set once before its first session.
 +// The layer above's event sink, set once before its first session; its code/context stay alive with the transport.
  void droidvm_media_set_sink(unsigned device, void (*sink)(void *, const uint8_t *, uint32_t), void *context) {
-     if (device >= media_count) return;
-     lck_mtx_lock(media[device].lock);
-     media[device].sink_context = context;
-     media[device].sink = sink;
+@@ -289,9 +318,2 @@
      lck_mtx_unlock(media[device].lock);
 -}
 -
@@ -136,28 +102,16 @@
 -    if (on) __atomic_add_fetch(&media[device].fast, 1, __ATOMIC_RELAXED);
 -    else __atomic_sub_fetch(&media[device].fast, 1, __ATOMIC_RELAXED);
  }
- 
- static const char *bring_up(struct media_device *d) {
-@@ -311,7 +333,7 @@
-     if (!(media_read32(d, 0x70) & 8)) return "features refused";
-     for (unsigned q = 0; q < 2; ++q) {
+@@ -313,3 +335,3 @@
          memset(media_rings[index_of(d)][q], 0, 4096);
 -        *(volatile uint16_t *)(media_rings[index_of(d)][q] + 1024) = 1;   // VIRTQ_AVAIL_F_NO_INTERRUPT: we poll
 +        *(volatile uint16_t *)(media_rings[index_of(d)][q] + 1024) = 0;   // used-buffer interrupts
          media_write32(d, 0x30, q);
-         if (media_read32(d, 0x44) || media_read32(d, 0x34) < MEDIA_QUEUE) return "queue unavailable or too small";
-         const uint64_t base = pa(media_rings[index_of(d)][q]);
-@@ -319,6 +341,7 @@
-         media_write64(d, 0x80, base); media_write64(d, 0x90, base + 1024); media_write64(d, 0xa0, base + 2048);
-         media_write32(d, 0x44, 1);
+@@ -321,2 +343,3 @@
      }
 +    if (armcpu_spi_attach(d->interrupt_id, false, media_interrupt, d, NULL, NULL)) return "cannot attach level SPI";
      media_barrier();
-     media_write32(d, 0x70, 15);         // DRIVER_OK
-     if ((media_read32(d, 0x70) & 0x4f) != 15) return "device not ready";
-@@ -372,17 +395,15 @@
-     (void)arg; (void)result;
-     for (unsigned device = 0; device < media_count; ++device)
+@@ -374,13 +397,11 @@
          if (media[device].up) check(device);
 -    // The event queues stay stocked, and their events go to the layer above that took the device (droidvm_media_set_sink).
 +    // Sleep until an IRQ; an interrupt arriving before assert_wait is retained in media_pending.
@@ -179,59 +133,35 @@
 +        for (unsigned device = 0; device < media_count; ++device)
 +            if (media[device].up) reap_events(&media[device]);
      }
- }
- 
-@@ -411,6 +432,10 @@
-             memcpy(&d->pool_base, value, 8);
-             memcpy(&d->pool_size, (const uint8_t *)value + 8, 8);
+@@ -413,2 +434,6 @@
          }
 +        if (SecureDTGetProperty(node, "gic-spi", &value, &size) != kSuccess || size != sizeof d->interrupt_id) {
 +            snprintf(line, line_size, "no GIC SPI"); continue;
 +        }
 +        memcpy(&d->interrupt_id, value, size);
          if (SecureDTGetProperty(node, "reg", &value, &size) != kSuccess || size != sizeof(reg)) continue;
-         memcpy(reg, value, sizeof(reg));
-         if (reg[0] < ranges[0] || reg[1] < 0x110 || reg[1] > ranges[2] || reg[0] - ranges[0] > ranges[2] - reg[1]) continue;
 --- a/DroidVMVTHost.cpp
 +++ b/DroidVMVTHost.cpp
-@@ -66,7 +66,6 @@
- const char *droidvm_media_card(unsigned device);
- bool droidvm_media_is_up(unsigned device);
+@@ -68,3 +68,2 @@
  void droidvm_media_set_sink(unsigned device, void (*sink)(void *, const uint8_t *, uint32_t), void *context);
 -void droidvm_media_set_fast(unsigned device, bool on);
  int proc_selfpid(void);
- ipc_space_t get_task_ipcspace(task_t task);
- kern_return_t mach_port_deallocate(ipc_space_t space, mach_port_name_t name);
-@@ -355,7 +354,7 @@
- 
-     unsigned device = ~0u;
+@@ -357,3 +356,3 @@
      uint32_t v4l2 = 0;
 -    bool open = false, outputStreaming = false, captureStreaming = false, fast = false;
 +    bool open = false, outputStreaming = false, captureStreaming = false;
      Mapped output[OutputBuffers];
-     Mapped capture[MaxCaptureBuffers];
-     unsigned captureCount = 0;
-@@ -491,7 +490,7 @@
-     IOLockUnlock(gTableLock);
- }
+@@ -493,3 +492,3 @@
  
 -// The device's events (with its lock held): copied into their session's ring.
 +// Copied device events arrive outside the transport lock and are queued under the session lock.
  void mediaSink(void *context, const uint8_t *event, uint32_t size) {
-     const unsigned device = unsigned(uintptr_t(context));
-     if (size < 8) return;
-@@ -2059,8 +2058,6 @@
-     if (r) { failed(90, r); return -12911; }
-     s->open = true;
+@@ -2061,4 +2060,2 @@
      registerSession(s);
 -    droidvm_media_set_fast(s->device, true);
 -    s->fast = true;
      uint32_t subscription[8] = {EventEos, 0, 0, 0, 0, 0, 0, 0};
-     ioctl(s, IocSubscribeEvent, subscription, sizeof subscription, 0);
-     V4l2Format f = {};
-@@ -2166,9 +2163,8 @@
-         for (Mapped &m : s->capture) unmapBuffer(s, m);
-         unregisterSession(s);
+@@ -2168,5 +2165,4 @@
          droidvm_media_close(s->device, s->v4l2);
 -        if (s->fast) droidvm_media_set_fast(s->device, false);
 -    }
@@ -239,14 +169,8 @@
 +    }
 +    s->open = s->outputStreaming = s->captureStreaming = s->direct = false;
      s->captureCount = 0;
- }
- 
-@@ -2517,8 +2513,6 @@
-     // device session no one would close until the dinv).
-     auto refuse = [s](int error) { closeDevice(s); return error; };
+@@ -2519,4 +2515,2 @@
      registerSession(s);
 -    droidvm_media_set_fast(s->device, true);
 -    s->fast = true;
      if (!decodableSize(s, d.codec == cc("avc1") ? cc("462H") : cc("CVEH"))) { teardown(s); return -12910; }
-     uint32_t subscription[8] = {EventSourceChange, 0, 0, 0, 0, 0, 0, 0};
-     r = ioctl(s, IocSubscribeEvent, subscription, sizeof subscription, 0);
