@@ -275,7 +275,9 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                                     " for address, size in vm['virtio_mmio'] if address == args.net_mmio],\n"
                                     # virtio-snd (crosvm --virtio-mmio-snd): DroidVMAudio's sound card (as the upstream tool's --snd-mmio)
                                     "              *[node('virtio-snd', [('compatible', b'droidvm,virtio-snd\\0'),"
-                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b'')])"
+                                    " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b''),"
+                                    " *[('gic-spi', struct.pack('<I', cells(props['interrupts'])[1] + 32)) for props in fdt_nodes.values()"
+                                    " if props.get('compatible', b'').startswith(b'virtio,mmio\\0') and reg_pairs(props['reg'])[0][0] == address]])"
                                     " for address, size in vm['virtio_mmio'] if address == args.snd_mmio],\n"
                                     # virtio-media-N (crosvm --virtio-mmio-media): DroidVMVideo's decoder and encoder, with the FDT's
                                     # media_host pool (absolute GPA, size) their MMAP buffers live in (as the upstream tool's --media-mmio)
