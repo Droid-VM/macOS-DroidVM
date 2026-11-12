@@ -15,7 +15,7 @@ ADT 从 FDT 的对应 virtio-mmio 节点导出 gic-spi；本次 decoder/encoder 
 会话原有 drain、停止及空闲资源回收期限保留。
 
 源由 `k27/build-native-video.sh` 导出，补丁为
-`patches/droidvm-video/0013-media-completion-interrupts.patch`；提交 `d079a8e`。
+`patches/droidvm-video/0013-media-completion-interrupts.patch`。
 
 ## 启动时序修复
 
@@ -24,7 +24,7 @@ ADT 从 FDT 的对应 virtio-mmio 节点导出 gic-spi；本次 decoder/encoder 
 ArmCpu 现在在注册线程等待 GIC 就绪，并用互斥锁串行修改 SPI 表及共享 distributor 配置。
 锁在可分配内存的设备注册线程初始化；GIC 初始化只发布 ready，不能在关中断上下文分配锁。
 首次修正将分配放在 GIC 初始化，触发 zalloc 关中断断言；已移出并重新构建部署。
-最终启动恢复桌面和根盘 I/O，debugger entry 为 0。对应修复提交 `fe000b4`。
+最终启动恢复桌面和根盘 I/O，debugger entry 为 0。修复由 `patches/drivers/ArmCpu-spi-attach-startup.patch` 承载。
 
 ## 定向验证
 
@@ -52,16 +52,9 @@ guest 直连 SSH 当时不可达，使用宿主 192.168.1.203:2223 转发完成�
 4K 420v 路径出现既有的 Metal YCbCr surface texture refused 提示并转 CPU 格式转换，
 最终 480 帧全部输出；不把这次验证当作渲染加速或性能提升证明。
 
-原始记录：[解码](../research/video-interrupts-2026-11-12/decode.log)、
-[编码](../research/video-interrupts-2026-11-12/encode.log)、
-[解码后计数](../research/video-interrupts-2026-11-12/after-decode.json)、
-[编码后计数](../research/video-interrupts-2026-11-12/after-encode.json)。
+原始采集仅保留本地，不纳入版本控制。
 
 空闲两次采样相隔约 92.2 秒，SPI 48/49、媒体命令和帧计数的增量均为 0。
 随后重新创建 H.264/HEVC 编码会话，各输出 30 帧、失败 0；最终累计输入/输出均为 1140 帧，
 2556 条命令，传输超时、会话错误及 debugger entry 仍为 0。
 本次验证覆盖新会话启动、工作、停止及空闲后再启动；不声称已覆盖所有编解码器或长时播放。
-见[空闲前](../research/video-interrupts-2026-11-12/idle-before.json)、
-[空闲后](../research/video-interrupts-2026-11-12/idle-after.json)、
-[恢复编码](../research/video-interrupts-2026-11-12/resume.log)、
-[恢复后计数](../research/video-interrupts-2026-11-12/after-resume.json)。

@@ -86,7 +86,7 @@ GPU 命令完成不能直接作为 VBL；MSI-X 本身不提供屏幕刷新时刻
 | P1 输入 MSI-X | 四路绑定及空闲验证通过，用户确认触摸正常；相对鼠标/绝对指针仍待单独操作验收 |
 | P2 GPU/光标 | P2a/P2b 已部署，用户确认鼠标、拖动、四边及换形状全部正常；用户态 seqno/WAIT_ANY 检查保留 |
 | P3 视频 | 已部署验收：1020 帧解码、两轮合计 120 帧编码通过；空闲 SPI 不增长，恢复任务无丢唤醒 |
-| P4 音频 | 待实施 |
+| P4 音频 | SPI 47 已部署；播放/录音、重复启停及空闲后恢复已验证，人工音质与真实设备事件待验收 |
 | P5 VBL | 保留定时器 |
 
 ### P1 当前实施记录
@@ -97,15 +97,14 @@ GPU 命令完成不能直接作为 VBL；MSI-X 本身不提供屏幕刷新时刻
 修正版启动日志确认 mouse、tablet、keyboard、touch screen 四个 function 的 vector 0 启用；
 IORegistry 四个 DroidVMInput 均为 active，InputNotificationMode=MSI-X，
 AppleMultitouchDevice 继续取得显示 UUID，8 个 CPU ready，内核 debugger entry 为 0。
-原始启动记录见 [boot.log](../research/input-msix-2026-11-12/boot.log)。
+原始采集仅保留本地，不纳入版本控制。
 本次启动 mouse/touch/tablet/keyboard 分别使用 SPI 83/93/92/82；
-空闲两次采样四路中断增量均为 0，见
-[采样前](../research/input-msix-2026-11-12/idle-before.json)和
-[采样后](../research/input-msix-2026-11-12/idle-after.json)。
+空闲两次采样四路中断增量均为 0。
 用户随后确认“触摸正常”。操作后 touch SPI 93 累计 194 次，全部在 CPU 2；
 keyboard SPI 82 累计 12 次，在 CPU 1；kernel debugger entry 仍为 0。
-见[操作后计数](../research/input-msix-2026-11-12/after-touch.json)。
 触摸已通过真实操作验收；相对鼠标/绝对指针本次 SPI 计数仍为 0，不据此宣称两条路径已验收。
 
 P2 的实现及验证记录见 [GPU 完成中断迁移](../../win3d/docs/presentation/macos-gpu-interrupts-2026-11-12.md)。
 P3 见 [视频完成中断记录](k27-video-interrupts.md)。
+
+P4 见 [音频完成中断记录](k27-audio-interrupts.md)。

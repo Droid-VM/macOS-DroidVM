@@ -364,7 +364,7 @@ AppleAPFSMedia，移除该属性，并每 2 秒处理 APFS 重新设置属性的
 已用运行时 panic-spin 保留现场，panic 中进程为 spindump，符号化栈不含存储路径。
 该现象在引入可见性 kext 之前和之后均出现；首次干净关机后的文件持久化已验证，
 不能把这些结果表述为“每次关机都正常”或宣称关机 panic 已修复。
-异常停止后再次启动，原 64 MiB 文件仍逐字节校验通过（post-panic-verify.log），
+异常停止后再次启动，原 64 MiB 文件仍逐字节校验通过，
 最终运行时 debugger entry count 为 0；验证文件随后删除，VM 保持运行。
 
 构建：
@@ -401,11 +401,7 @@ App 默认启动参数加入 XNU 已有的 `ml-timeout-debug-ack-scale=100`，�
 - 随后正常关机，`vfs_unmountall(system) end`、APFS mounted volumes=0、`CPU halted`，无 panic。
 - 这是已复现路径的修正验证，不代表长期压力验证或对所有关机问题的保证。
 
-证据：[复现 panic](../research/pcie-data-2026-11-11/stackshot-repro-panic.txt)、
-[中断栈扫描](../research/pcie-data-2026-11-11/stackshot-repro-stacks.txt)、
-[宿主调度等待](../research/pcie-data-2026-11-11/stackshot-host-scheduling.log)、
-[采样完成](../research/pcie-data-2026-11-11/stackshot-fixed.log)、
-[正常关机](../research/pcie-data-2026-11-11/stackshot-fixed-shutdown.log)。
+原始诊断采集仅保留本地，不纳入版本控制。
 
 
 ## 2026-11-12：虚拟 xHCI 改用单向量 MSI-X
@@ -435,7 +431,7 @@ MSI-X 后 INTxDisable 对回退投递的控制。此用例验证消息交接，�
 
 测试构建有既有兼容问题：virtio/block/mod.rs 中 21 处 DiskOption 测试初始化缺 queue_size。
 仅构建测试二进制时临时补 `queue_size: None`，随后原样恢复，没有带入提交。
-结果见 [interrupter-tests.log](../research/xhci-msix-2026-11-12/interrupter-tests.log)。
+上述定向用例的原始日志仅保留本地。
 
 最终生产构建通过：`/home/qiuqiu/crosvm/build_crosvm.sh`（2 分 36 秒）。
 产物：`out/soong/.intermediates/external/crosvm/crosvm_device_only/crosvm_device_only_bin/android_arm64_armv8-a/crosvm`
