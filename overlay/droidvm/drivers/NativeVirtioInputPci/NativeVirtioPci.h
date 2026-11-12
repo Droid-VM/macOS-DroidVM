@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Modern virtio-pci transport (VirtIO 1.2 4.1) on bus 0 of a generic ECAM host bridge, shared by the UniXNU-droidvm
 // virtio drivers. crosvm (DroidVM) has virtio-pci only; QEMU virt runs with highmem=off so ECAM and BARs stay below 4 GiB.
-// The firmware has assigned the BARs; a transport only enables memory decode and bus mastering. Polling only: no INTx or
-// MSI-X is set up, so drivers suppress used-buffer notifications or ignore them.
+// The firmware has assigned the BARs; the transport enables memory decode and bus mastering.
+// Enumerated PCI clients may map queue MSI-X vectors after the PCI family allocates them.
 #pragma once
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -53,7 +53,8 @@ enum : unsigned { deviceBlock = 2, deviceGpu = 16, deviceInput = 18 };
 // virtio_pci_common_cfg
 enum : unsigned {
   deviceFeatureSelect = 0x00, deviceFeature = 0x04, driverFeatureSelect = 0x08, driverFeature = 0x0c,
-  deviceStatus = 0x14, configGeneration = 0x15, queueSelect = 0x16, queueSize = 0x18,
+  configMsixVector = 0x10, deviceStatus = 0x14, configGeneration = 0x15, queueSelect = 0x16, queueSize = 0x18,
+  queueMsixVector = 0x1a,
   queueEnable = 0x1c, queueNotifyOff = 0x1e, queueDesc = 0x20, queueDriver = 0x28, queueDevice = 0x30,
 };
 // virtio_pci_cap cfg_type
@@ -258,6 +259,14 @@ public:
       mmioWrite<uint16_t>(notifyAddress[queue], queue);
     }
   }
+
+  bool setQueueVector(uint16_t queue, uint16_t vector) {
+    write<uint16_t>(capCommon, queueSelect, queue);
+    write<uint16_t>(capCommon, queueMsixVector, vector);
+    return read<uint16_t>(capCommon, queueMsixVector) == vector;
+  }
+
+  void disableConfigInterrupt() { write<uint16_t>(capCommon, configMsixVector, 0xffff); }
 
   // Reading the ISR status acknowledges (and deasserts) a pending INTx.
   void acknowledgeInterrupt() { if (window[capIsr]) (void)read<uint8_t>(capIsr, 0); }

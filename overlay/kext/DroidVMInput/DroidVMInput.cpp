@@ -11,10 +11,12 @@
 //     it, then Apple's multitouch protocol (feature reports and path frames, below) for HSTouchHIDService.plugin;
 //   - an absolute pointer: the tablet report (absolute X/Y 0..32767, three buttons, wheel);
 //   - a relative mouse: the boot mouse report.
-// No interrupts: a kernel thread polls every 4 ms. Headers: the SDK's IOKit/hid (out/x12377/inc-hid).
+// Enumerated PCI devices use MSI-X; the raw ECAM mode retains its 4 ms polling thread.
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
+#include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/hid/IOHIDDevice.h>
 #include <os/availability.h>
@@ -285,6 +287,11 @@ class DroidVMInput : public IOService {
   IOMemoryMap *fEcam = nullptr;
   DroidVMInputDevice fDevices[maxDevices];
   unsigned fCount = 0;
+  IOWorkLoop *fInterruptLoop = nullptr;
+  IOInterruptEventSource *fInterrupt = nullptr;
+  IONotifier *fMultitouchNotifier = nullptr;
+  IOLock *fPollLock = nullptr;
+  bool fStopping = false, fPolling = false;
   // droidvm-input-times=1 (diagnostics, research/debug-2026-10-28): the times (mach_absolute_time) of the last 256 pointer and touch
   // reports, published as the ReportTimes property (the count, then the ring) for WindowServer's latency rows.
   bool fRecordTimes = false;
@@ -294,6 +301,9 @@ class DroidVMInput : public IOService {
 
   void recordTime(DroidVMInputDevice &d) { if (fRecordTimes && d.kind != Kind::keyboard) fTimes[1 + fTimes[0]++ % 256] = mach_absolute_time(); }
   static void pollThread(void *self, wait_result_t);
+  static void interruptAction(OSObject *owner, IOInterruptEventSource *sender, int count);
+  void publishTimes();
+  void releaseResources();
   void poll(DroidVMInputDevice &d);
   void event(DroidVMInputDevice &d, const Event &e);
   void report(DroidVMInputDevice &d);
@@ -305,6 +315,8 @@ class DroidVMInput : public IOService {
 
 public:
   bool start(IOService *provider) override;
+  void stop(IOService *provider) override;
+  void free() override;
 };
 
 OSDefineMetaClassAndStructors(DroidVMInput, IOService)
@@ -362,7 +374,7 @@ IOBufferMemoryDescriptor *contiguous(unsigned bytes, uint64_t *physical)
   return memory;
 }
 
-bool configure(DroidVMInputDevice &d)
+bool configure(DroidVMInputDevice &d, bool activate)
 {
   if (!d.transport.hasDeviceConfig() || !d.transport.negotiate(0)) return false;
   d.kind = identify(d);
@@ -386,10 +398,12 @@ bool configure(DroidVMInputDevice &d)
   dmaBarrier();
   if (!d.transport.enableQueue(0, d.size, physical, physical + 1024, physical + 2048) ||
       !d.transport.enableQueue(1, statusSize, statusPhysical, statusPhysical + 1024, statusPhysical + 2048)) return false;
-  d.transport.setStatus(virtio_pci::statusAcknowledge | virtio_pci::statusDriver | virtio_pci::statusFeaturesOk |
-                        virtio_pci::statusDriverOk);
-  d.transport.notify(0);
-  return (d.transport.status() & 15) == 15;
+  if (activate) {
+    d.transport.setStatus(virtio_pci::statusAcknowledge | virtio_pci::statusDriver | virtio_pci::statusFeaturesOk |
+                          virtio_pci::statusDriverOk);
+    d.transport.notify(0);
+  }
+  return true;
 }
 
 int32_t scale(int32_t value, int32_t minimum, int32_t span)
@@ -460,7 +474,7 @@ bool DroidVMInput::start(IOService *provider)
           d.transport.open(static_cast<uintptr_t>(fEcam->getVirtualAddress()), fEcam->getLength(), virtio_pci::deviceInput, index)))
       break;
     ++functions;
-    if (!configure(d)) {
+    if (!configure(d, !pci)) {
       d.transport.reset();
       d.transport.close();
       OSSafeReleaseNULL(d.memory);
@@ -511,17 +525,61 @@ bool DroidVMInput::start(IOService *provider)
   if (gDisplayUUID[0]) {
     OSDictionary *matching = IOService::serviceMatching("AppleMultitouchDevice");
     if (matching)
-      IOService::addMatchingNotification(gIOFirstPublishNotification, matching, multitouchPublished, this, nullptr);
+      fMultitouchNotifier = IOService::addMatchingNotification(gIOFirstPublishNotification, matching, multitouchPublished, this, nullptr);
     OSSafeReleaseNULL(matching);
   }
   if (!fCount)
     return false;
   uint32_t recordTimes = 0;
   fRecordTimes = PE_parse_boot_argn("droidvm-input-times", &recordTimes, sizeof(recordTimes)) && recordTimes;
-  thread_t thread;
-  if (kernel_thread_start(pollThread, this, &thread) != KERN_SUCCESS)
-    return false;
-  thread_deallocate(thread);
+  if (pci) {
+    IOReturn result = pci->configureInterrupts(kIOInterruptTypePCIMessagedX, 1, 1);
+    if (result != kIOReturnSuccess) {
+      IOLog("DroidVMInput: MSI-X allocation failed: 0x%x\n", result);
+      releaseResources();
+      return false;
+    }
+    fInterruptLoop = IOWorkLoop::workLoop();
+    fInterrupt = IOInterruptEventSource::interruptEventSource(this, interruptAction, pci, 0);
+    result = fInterruptLoop && fInterrupt ? fInterruptLoop->addEventSource(fInterrupt) : kIOReturnNoResources;
+    if (result != kIOReturnSuccess) {
+      IOLog("DroidVMInput: MSI-X event source setup failed: 0x%x (loop %u, source %u)\n", result,
+            fInterruptLoop != nullptr, fInterrupt != nullptr);
+      releaseResources();
+      return false;
+    }
+    auto &transport = fDevices[0].transport;
+    transport.disableConfigInterrupt();
+    if (!transport.setQueueVector(0, 0) || !transport.setQueueVector(1, 0xffff)) {
+      IOLog("DroidVMInput: MSI-X queue vector rejected\n");
+      releaseResources();
+      return false;
+    }
+    // Queue setup suppressed notifications until both the HID device and IRQ handler were ready.
+    fDevices[0].available()[0] = 0;
+    dmaBarrier();
+    fInterrupt->enable();
+    // crosvm snapshots queue vectors at activation, so publish DRIVER_OK only after mapping them.
+    transport.setStatus(virtio_pci::statusAcknowledge | virtio_pci::statusDriver | virtio_pci::statusFeaturesOk |
+                        virtio_pci::statusDriverOk);
+    transport.notify(0);
+    // Reap completions that arrived before notifications were enabled, on the same work loop as IRQs.
+    fInterrupt->interruptOccurred(nullptr, pci, 0);
+    setProperty("InputNotificationMode", "MSI-X");
+    IOLog("DroidVMInput: function %u MSI-X event queue vector 0 enabled\n", pci->getDeviceNumber());
+  } else {
+    fPollLock = IOLockAlloc();
+    if (!fPollLock) { releaseResources(); return false; }
+    thread_t thread;
+    fPolling = true;
+    if (kernel_thread_start(pollThread, this, &thread) != KERN_SUCCESS) {
+      fPolling = false;
+      releaseResources();
+      return false;
+    }
+    thread_deallocate(thread);
+    setProperty("InputNotificationMode", "ECAM polling");
+  }
   registerService();
   return true;
 }
@@ -530,19 +588,81 @@ void DroidVMInput::pollThread(void *self, wait_result_t)
 {
   DroidVMInput *input = static_cast<DroidVMInput *>(self);
   for (unsigned tick = 0;; ++tick) {
+    IOLockLock(input->fPollLock);
+    if (input->fStopping) {
+      input->fPolling = false;
+      IOLockWakeup(input->fPollLock, &input->fPolling, false);
+      IOLockUnlock(input->fPollLock);
+      return;
+    }
+    IOLockUnlock(input->fPollLock);
     if (tick == 30000 / pollMs || tick == 240000 / pollMs)   // bring-up: who attached to the HID devices, and the event services user space can see
       input->describe();
     for (unsigned i = 0; i < input->fCount; ++i)
       input->poll(input->fDevices[i]);
-    if (input->fRecordTimes && tick % (100 / pollMs) == 0 && input->fTimes[0] != input->fPublished) {
-      input->fPublished = static_cast<unsigned>(input->fTimes[0]);
-      if (OSData *times = OSData::withBytes(input->fTimes, sizeof(input->fTimes))) {
-        input->setProperty("ReportTimes", times);
-        times->release();
-      }
-    }
+    if (tick % (100 / pollMs) == 0) input->publishTimes();
     IOSleep(pollMs);
   }
+}
+
+void DroidVMInput::publishTimes()
+{
+  if (!fRecordTimes || fTimes[0] == fPublished) return;
+  fPublished = static_cast<unsigned>(fTimes[0]);
+  if (OSData *times = OSData::withBytes(fTimes, sizeof(fTimes))) {
+    setProperty("ReportTimes", times);
+    times->release();
+  }
+}
+
+void DroidVMInput::interruptAction(OSObject *owner, IOInterruptEventSource *, int)
+{
+  auto *input = static_cast<DroidVMInput *>(owner);
+  for (unsigned i = 0; i < input->fCount; ++i) input->poll(input->fDevices[i]);
+  input->publishTimes();
+}
+
+void DroidVMInput::releaseResources()
+{
+  if (fMultitouchNotifier) {
+    fMultitouchNotifier->remove();
+    fMultitouchNotifier = nullptr;
+  }
+  if (fInterrupt) {
+    fInterrupt->disable();
+    if (fInterrupt->getWorkLoop()) fInterruptLoop->removeEventSource(fInterrupt);
+    OSSafeReleaseNULL(fInterrupt);
+  }
+  OSSafeReleaseNULL(fInterruptLoop);
+  for (unsigned i = 0; i < fCount; ++i) {
+    auto &d = fDevices[i];
+    d.transport.reset();
+    if (d.hid) d.hid->terminate(kIOServiceSynchronous);
+    OSSafeReleaseNULL(d.hid);
+    d.transport.close();
+    OSSafeReleaseNULL(d.memory);
+    OSSafeReleaseNULL(d.status);
+  }
+  fCount = 0;
+  OSSafeReleaseNULL(fEcam);
+}
+
+void DroidVMInput::stop(IOService *provider)
+{
+  if (fPollLock) {
+    IOLockLock(fPollLock);
+    fStopping = true;
+    while (fPolling) IOLockSleep(fPollLock, &fPolling, THREAD_UNINT);
+    IOLockUnlock(fPollLock);
+  }
+  releaseResources();
+  IOService::stop(provider);
+}
+
+void DroidVMInput::free()
+{
+  if (fPollLock) IOLockFree(fPollLock);
+  IOService::free();
 }
 
 // Takes what the device wrote and gives the buffers back.
@@ -566,7 +686,7 @@ void DroidVMInput::poll(DroidVMInputDevice &d)
     dmaBarrier();
     d.transport.notify(0);
   }
-  d.transport.acknowledgeInterrupt();
+  if (!fInterrupt) d.transport.acknowledgeInterrupt();
 }
 
 void DroidVMInput::event(DroidVMInputDevice &d, const Event &e)
