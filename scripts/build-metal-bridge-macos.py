@@ -29,7 +29,9 @@ TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
 # Use AdrenoMetal's complete patch stack at its matching translator pin. Patch 0040
 # consolidates the older runtime/board patches; do not append that older stack.
 # Set METAL2VULKAN_PREPATCHED=1 when reusing the dedicated patched worktree.
-PATCHES = sorted((NATIVE / 'bridge/patches').glob('*.patch'))
+PATCHES = sorted((NATIVE / 'bridge/patches').glob('*.patch')) + [
+    ROOT / 'patches/metal2vulkan-macos/0003-rate-map-buffer-reflection.patch',
+]
 pin = '555b13d57e09bff70996a88cff64f1275256d5cf'
 
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:
@@ -41,7 +43,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 if os.environ.get('METAL2VULKAN_PREPATCHED') != '1':
     for patch in PATCHES:
         subprocess.run(['git', '-C', str(SOURCE), 'apply', str(patch)], check=True)
-runtime_id = os.environ.get('NMB_RUNTIME_ID', 'upstream-integration-20261113')
+runtime_id = os.environ.get('NMB_RUNTIME_ID', 'upstream-rate-map-20261113')
 # the runtime's example library and function-constant fixture, assembled to AIR for the bridge's self-tests
 air, fc_air = OUT / 'runtime_examples.air', OUT / 'function_constant.air'
 fixtures = SOURCE / 'crates/metal2vulkan-validation/fixtures/public'
