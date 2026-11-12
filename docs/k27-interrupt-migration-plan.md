@@ -83,8 +83,8 @@ GPU 命令完成不能直接作为 VBL；MSI-X 本身不提供屏幕刷新时刻
 
 | 阶段 | 状态 |
 | --- | --- |
-| P1 输入 MSI-X | 已构建部署，四路绑定及空闲中断验证通过；真实输入待验收 |
-| P2 GPU/光标 | 待 P1 验收后实施 |
+| P1 输入 MSI-X | 四路绑定及空闲验证通过，用户确认触摸正常；相对鼠标/绝对指针仍待单独操作验收 |
+| P2 GPU/光标 | 已开始梳理实际构建源、队列完成与共享内存 fence 路径；尚未修改或部署 |
 | P3 视频 | 待实施 |
 | P4 音频 | 待实施 |
 | P5 VBL | 保留定时器 |
@@ -102,4 +102,7 @@ AppleMultitouchDevice 继续取得显示 UUID，8 个 CPU ready，内核 debugge
 空闲两次采样四路中断增量均为 0，见
 [采样前](../research/input-msix-2026-11-12/idle-before.json)和
 [采样后](../research/input-msix-2026-11-12/idle-after.json)。
-启动及绑定验证不代替真实输入验收；需确认事件触发 MSI-X、HID 收到报告及桌面操作正常后再进入 P2。
+用户随后确认“触摸正常”。操作后 touch SPI 93 累计 194 次，全部在 CPU 2；
+keyboard SPI 82 累计 12 次，在 CPU 1；kernel debugger entry 仍为 0。
+见[操作后计数](../research/input-msix-2026-11-12/after-touch.json)。
+触摸已通过真实操作验收；相对鼠标/绝对指针本次 SPI 计数仍为 0，不据此宣称两条路径已验收。
