@@ -114,6 +114,7 @@ extern "C" volatile uint64_t droidvm_virtio_gpu_commands;
 // DroidVMVirtioGpu3D.cpp: the number of the latest fenced 3D submission of any client, and whether every one up to a number has finished.
 extern "C" uint64_t droidvm_virtgpu_submitted(void);
 extern "C" bool droidvm_virtgpu_finished(uint64_t);
+extern "C" bool droidvm_virtgpu_wait_finished(uint64_t, uint64_t);
 
 class VirtioGpu {
 public:
@@ -868,15 +869,10 @@ void DroidVMDisplay::copyLoop()
                 fWakeMaxNs = waited;
         }
         if (!droidvm_virtgpu_finished(work)) {
-            // Sleep in steps of 100 us (the vCPU goes idle; IOSleep's 1 ms would add half a millisecond a frame), 200 ms at most.
             const uint64_t begin = mach_absolute_time();
+            const bool drawn = droidvm_virtgpu_wait_finished(work, 200000);
             uint64_t took = 0;
-            bool drawn = false;
-            while (!drawn && took < 200000000) {
-                delay_for_interval(100, NSEC_PER_USEC);
-                drawn = droidvm_virtgpu_finished(work);
-                absolutetime_to_nanoseconds(mach_absolute_time() - begin, &took);
-            }
+            absolutetime_to_nanoseconds(mach_absolute_time() - begin, &took);
             fGpuWaits++;
             fGpuWaitNs += took;
             if (took > fGpuWaitMaxNs)

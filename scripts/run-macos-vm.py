@@ -262,6 +262,8 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
         text = text.replace(marker, "                for address, size in gpu],\n"
                                     "              *[node('virtio-gpu', [('compatible', b'droidvm,virtio-gpu\\0'),"
                                     " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b''),"
+                                    " *[('gic-spi', struct.pack('<I', cells(props['interrupts'])[1] + 32)) for props in fdt_nodes.values()"
+                                    " if props.get('compatible', b'').startswith(b'virtio,mmio\\0') and reg_pairs(props['reg'])[0][0] == address],"
                                     # drm-host-pool: the FDT's drm2kgsl_host pool (absolute GPA, size), where the host carves the 3D
                                     # contexts' shmem (DroidVMVirtioGpu3D.cpp; as the upstream tool's)
                                     " *[('drm-host-pool', struct.pack('<QQ', *reg_pairs(props['reg'])[0])) for path, props in fdt_nodes.items()"

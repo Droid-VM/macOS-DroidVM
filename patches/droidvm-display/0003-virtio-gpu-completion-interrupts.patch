@@ -1,0 +1,278 @@
+--- a/DroidVMVirtioGpu.h
++++ b/DroidVMVirtioGpu.h
+@@ -20,6 +20,9 @@
+ bool start();
+ bool ready();
+ uint64_t features();
++// Snapshot before checking a predicate, then sleep only if no completion occurred in between.
++uint64_t completionEpoch();
++void waitCompletion(uint64_t epoch, uint64_t timeoutUs);
+ IOReturn cursor(uint32_t resource, int32_t x, int32_t y, uint32_t hotX, uint32_t hotY, bool image);
+ IOReturn command(const void *, uint32_t, const void *, uint32_t, void *, uint32_t, uint32_t * = nullptr);
+ IOReturn post(const void *, uint32_t, const void *, uint32_t, uint32_t capacity, bool globalFence, uint32_t *ticket);
+--- a/DroidVMVirtioGpu.cpp
++++ b/DroidVMVirtioGpu.cpp
+@@ -2,6 +2,10 @@
+ // Modern virtio-mmio GPU transport. No renderer or display policy belongs here.
+ #include "DroidVMVirtioGpu.h"
+ #include <kern/clock.h>
++#include <IOKit/IOInterruptEventSource.h>
++#include <IOKit/IOWorkLoop.h>
++extern "C" IOReturn armcpu_spi_attach(uint32_t, bool, void (*)(void *), void *, uint32_t *, uint64_t *);
++extern "C" IOReturn armcpu_spi_set_enabled(uint32_t, bool);
+ #if DROIDVM_VIRTIO_GPU_DYNAMIC
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #endif
+@@ -81,6 +85,10 @@
+ IOLock *lock;
+ IOLock *cursorLock;
+ uint16_t cursorAvailable;
++uint32_t interruptId;
++IOWorkLoop *interruptLoop;
++IOInterruptEventSource *interruptSource;
++uint64_t completion;
+ bool attempted;
+ uint32_t rd(unsigned offset) {
+     uint32_t v; __asm__ volatile("ldr %w0, [%1]" : "=r"(v) : "r"(registers + offset) : "memory"); return v;
+@@ -103,13 +111,12 @@
+     return pa != 0;
+ }
+ bool fail(const char *why) { droidvm_virtio_gpu_state = 3; IOLog("virtio-gpu: %s\n", why); return false; }
+-// Polling, as every virtio driver of this guest does (the queues are NO_INTERRUPT): the used ring is guest memory, so reading it
+-// costs no exit. A wait spins for its first 200 us and then sleeps, so the vCPUs of waiting threads go idle (WFI, on which the
+-// hypervisor blocks them): four vCPUs that spun through commands the host was slow to return came before each host watchdog
+-// bite on 2026-10-25, when this spun for 2 ms.
+-// A waiter's step between looks at the used ring (the device raises no interrupt): a short spin, then sleeps of 100 us -- not
+-// IOSleep(1), whose millisecond (and timer leeway) every command's completion paid.
+-void pause(uint64_t begin) { if (nowUs() - begin < 50) IODelay(5); else delay_for_interval(100, NSEC_PER_USEC); }
++// All completion and free-slot waiters use this generation under the transport lock.
++void completed() { ++completion; IOLockWakeup(lock, &completion, false); }
++uint64_t deadlineUs(uint64_t us) {
++    uint64_t interval; nanoseconds_to_absolutetime(us * NSEC_PER_USEC, &interval);
++    return mach_absolute_time() + interval;
++}
+ // Takes every command the device has returned off the used ring, in whatever order it returned them (a fenced command comes back
+ // when its fence signals). Called with the lock held, by whichever thread is waiting.
+ // The element is read only after a barrier that follows the index read: ARM reorders loads, and without one a waiter that saw the
+@@ -157,7 +164,21 @@
+             droidvm_virtio_gpu_in_flight = droidvm_virtio_gpu_in_flight - 1;
+         }
+     }
+-    if (any) { uint32_t interrupts = rd(0x60) & 3; if (interrupts) wr(0x64, interrupts); }
++    if (any) completed();
++}
++// Mask the level line until the work loop acknowledges the device, before the GIC EOI/resample.
++void interruptHandler(void *) {
++    armcpu_spi_set_enabled(interruptId, false);
++    interruptSource->interruptOccurred(nullptr, nullptr, 0);
++}
++void interruptAction(OSObject *, IOInterruptEventSource *, int) {
++    uint32_t status = rd(0x60) & 3;
++    if (status) wr(0x64, status);
++    IOLockLock(lock);
++    reap();
++    completed(); // also wakes cursor queue and configuration waiters
++    IOLockUnlock(lock);
++    armcpu_spi_set_enabled(interruptId, true);
+ }
+ }
+ #if DROIDVM_VIRTIO_GPU_DYNAMIC
+@@ -192,6 +213,9 @@
+     DTEntry armio, node; const void *value; unsigned size; uint64_t ranges[3], reg[2];
+     if (SecureDTLookupEntry(nullptr, "/arm-io/virtio-gpu", &node) != kSuccess) return false;
+     droidvm_virtio_gpu_state = 1;
++    if (SecureDTGetProperty(node, "gic-spi", &value, &size) != kSuccess || size != sizeof interruptId)
++        return fail("no GPU GIC SPI");
++    memcpy(&interruptId, value, size);
+     if (SecureDTLookupEntry(nullptr, "/arm-io", &armio) != kSuccess ||
+         SecureDTGetProperty(armio, "ranges", &value, &size) != kSuccess || size != sizeof ranges) return fail("no arm-io ranges");
+     memcpy(ranges, value, sizeof ranges);
+@@ -235,13 +259,21 @@
+         wr(0x30, q);
+         if (rd(0x44) || rd(0x34) < sizes[q]) return fail("queue unavailable or too small");
+         memset(queues[q], 0, sizeof queues[q]);
+-        *reinterpret_cast<uint16_t *>(queues[q] + availAt[q]) = 1; // no interrupts; waiters poll
++        *reinterpret_cast<uint16_t *>(queues[q] + availAt[q]) = 0; // used-buffer interrupts
+         wr(0x38, sizes[q]); wr64(0x80, pa); wr64(0x90, pa + availAt[q]); wr64(0xa0, pa + usedAt[q]); wr(0x44, 1);
+     }
++    interruptLoop = IOWorkLoop::workLoop();
++    interruptSource = IOInterruptEventSource::interruptEventSource(interruptLoop, interruptAction);
++    if (!interruptLoop || !interruptSource || interruptLoop->addEventSource(interruptSource) != kIOReturnSuccess)
++        return fail("no completion work loop");
++    interruptSource->enable();
++    if (armcpu_spi_attach(interruptId, false, interruptHandler, nullptr, nullptr, nullptr) != kIOReturnSuccess)
++        return fail("cannot attach GPU level SPI");
+     barrier(); wr(0x70, 15);
+     if ((rd(0x70) & 0x4f) != 15) return fail("device not ready");
+     droidvm_virtio_gpu_state = 2;
+     IOLog("virtio-gpu: control queue of %u commands and cursor queue ready, features %llx\n", Slots, negotiated);
++    IOLog("virtio-gpu: level SPI %u completion notifications enabled\n", interruptId);
+     return true;
+ }
+ bool ready() { return droidvm_virtio_gpu_state == 2; }
+@@ -251,10 +283,12 @@
+     struct Command { Header h; uint32_t scanout; int32_t x, y; uint32_t padding, resource, hotX, hotY, padding2; };
+     IOLockLock(cursorLock);
+     auto used = reinterpret_cast<volatile uint16_t *>(queues[1] + 256);
+-    const uint64_t begin = nowUs();
++    const uint64_t deadline = deadlineUs(1000000);
++    IOLockLock(lock);
+     while (used[1] != cursorAvailable) {
+-        if (nowUs() - begin >= 1000000) { IOLockUnlock(cursorLock); return kIOReturnTimeout; }
+-        pause(begin);
++        if (IOLockSleepDeadline(lock, &completion, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
++            IOLockUnlock(lock); IOLockUnlock(cursorLock); return kIOReturnTimeout;
++        }
+     }
+     Command command = {{image ? 0x300u : 0x301u, 0, 0, 0, 0, {}}, 0, x, y, 0, resource, hotX, hotY, 0};
+     memcpy(queues[1] + 512, &command, sizeof(command));
+@@ -265,10 +299,12 @@
+     avail[2 + cursorAvailable % 4] = 0;
+     barrier(); avail[1] = ++cursorAvailable; barrier(); wr(0x50, 1);
+     while (used[1] != cursorAvailable) {
+-        if (nowUs() - begin >= 1000000) { IOLockUnlock(cursorLock); return kIOReturnTimeout; }
+-        pause(begin);
++        if (IOLockSleepDeadline(lock, &completion, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
++            IOLockUnlock(lock); IOLockUnlock(cursorLock); return kIOReturnTimeout;
++        }
+     }
+     barrier();
++    IOLockUnlock(lock);
+     IOLockUnlock(cursorLock);
+     return kIOReturnSuccess;
+ }
+@@ -300,7 +336,8 @@
+             droidvm_virtio_gpu_timeouts = droidvm_virtio_gpu_timeouts + 1;
+             IOLockUnlock(lock); IOLog("virtio-gpu: no command returned in 60 s and no free slot\n"); return kIOReturnNoResources;
+         }
+-        IOLockUnlock(lock); pause(begin); IOLockLock(lock);
++        const uint64_t returned = lastReturnUs > begin ? lastReturnUs : begin;
++        IOLockSleepDeadline(lock, &completion, deadlineUs(60000000 - (now - returned)), THREAD_UNINT);
+     }
+     const uint64_t waited = nowUs() - begin;
+     if (waited > droidvm_virtio_gpu_slot_wait_max_us) droidvm_virtio_gpu_slot_wait_max_us = waited;
+@@ -349,6 +386,7 @@
+     if (actual) *actual = length;
+     if (result) *result = slot.result;
+     slot.state = Free;
++    completed();
+     IOLockUnlock(lock);
+     return true;
+ }
+@@ -370,8 +408,11 @@
+ IOReturn wait(uint32_t ticket, uint64_t timeoutUs, void *reply, uint32_t capacity, uint32_t *actual) {
+     const uint64_t begin = nowUs();
+     IOReturn result = kIOReturnSuccess;
+-    while (!poll(ticket, &result, reply, capacity, actual)) {
+-        if (nowUs() - begin >= timeoutUs) {
++    for (;;) {
++        const uint64_t epoch = completionEpoch();
++        if (poll(ticket, &result, reply, capacity, actual)) break;
++        const uint64_t elapsed = nowUs() - begin;
++        if (elapsed >= timeoutUs) {
+             // The device still owns the slot's buffers: it is freed only when the device returns it.
+             IOLockLock(lock);
+             Slot &slot = slots[ticket & 0xff];
+@@ -380,9 +421,21 @@
+             droidvm_virtio_gpu_timeouts = droidvm_virtio_gpu_timeouts + 1;
+             return kIOReturnTimeout;
+         }
+-        pause(begin);
++        waitCompletion(epoch, timeoutUs - elapsed);
+     }
+     return result;
++}
++uint64_t completionEpoch() {
++    IOLockLock(lock);
++    reap();
++    const uint64_t epoch = completion;
++    IOLockUnlock(lock);
++    return epoch;
++}
++void waitCompletion(uint64_t epoch, uint64_t timeoutUs) {
++    IOLockLock(lock);
++    if (completion == epoch) IOLockSleepDeadline(lock, &completion, deadlineUs(timeoutUs), THREAD_UNINT);
++    IOLockUnlock(lock);
+ }
+ IOReturn command(const void *data, uint32_t size, const void *extra, uint32_t extraSize,
+                  void *reply, uint32_t capacity, uint32_t *actual) {
+--- a/DroidVMVirtioGpu3D.cpp
++++ b/DroidVMVirtioGpu3D.cpp
+@@ -186,8 +186,7 @@
+ // fenced command once its fence signals, after the GPU ran it): count, total and largest (us), and a histogram by power-of-two
+ // milliseconds (<1, <2 ... <256, more). What of a frame's commit-to-completion is the host's and the GPU's.
+ volatile uint64_t droidvm_virtgpu_rs_fences[3], droidvm_virtgpu_rs_fence_hist[10];
+-// The step (us) a fence wait sleeps between looks at the device's returned commands (waitFence).
+-volatile uint32_t droidvm_virtgpu_fence_poll_us = 100;
++
+ // Guest blobs whose pages, or the rest of them, came as ordinary pages because no 64 KiB contiguous piece was free, and their bytes.
+ volatile uint64_t droidvm_virtgpu_scattered_blobs, droidvm_virtgpu_scattered_bytes;
+ // Display holds (see hold()): taken, ended, ended because their connection closed, refused (too many open).
+@@ -324,7 +323,13 @@
+ // Waits for every submission of the client in flight (before its resources' pages go back), at most `timeoutUs`.
+ void drain(Client *c, uint64_t timeoutUs) {
+     const uint64_t begin = nowUsLocal();
+-    for (reapPending(c); c->pendingCount && nowUsLocal() - begin < timeoutUs; reapPending(c)) IOSleep(1);
++    for (;;) {
++        const uint64_t epoch = completionEpoch();
++        reapPending(c);
++        const uint64_t elapsed = nowUsLocal() - begin;
++        if (!c->pendingCount || elapsed >= timeoutUs) break;
++        waitCompletion(epoch, timeoutUs - elapsed);
++    }
+ }
+ IOReturn submitCommand(Client *c, const void *command, uint32_t size) {
+     Submit submit = {{CmdSubmit3D, 0, 0, c->context, 0, {}}, size, 0};
+@@ -703,7 +708,12 @@
+     count(4);
+     if (!(in.flags & DROIDVM_VIRTGPU_EXEC_FENCE)) { out.fence = 0; return submitCommand(c, commands, in.size); }
+     if (in.ring_idx >= c->rings) return kIOReturnBadArgument;
+-    for (reapPending(c); c->pendingCount == MaxPending; reapPending(c)) IOSleep(1);
++    for (;;) {
++        const uint64_t epoch = completionEpoch();
++        reapPending(c);
++        if (c->pendingCount < MaxPending) break;
++        waitCompletion(epoch, 60000000);
++    }
+     // Numbered on its ring: the host retires a ring's fences in order, and crosvm returns the command when its fence signals.
+     const uint64_t fence = c->nextFence[in.ring_idx] + 1;
+     Submit submit = {{CmdSubmit3D, uint32_t(FlagFence) | uint32_t(FlagRingIndex), fence, c->context, uint8_t(in.ring_idx), {}}, in.size, 0};
+@@ -722,6 +732,7 @@
+     if (in.ring_idx >= MaxRings) return kIOReturnBadArgument;
+     const uint64_t begin = nowUsLocal(), timeoutUs = in.timeout_ns / 1000;
+     for (;;) {
++        const uint64_t epoch = completionEpoch();
+         IOLockLock(c->fenceLock);
+         reapFences(c);
+         const bool done = c->completed[in.ring_idx] >= in.fence || in.fence > c->nextFence[in.ring_idx];
+@@ -733,12 +744,7 @@
+         }
+         const uint64_t waited = nowUsLocal() - begin;
+         if (waited >= timeoutUs) { if (timeoutUs) count(6); return kIOReturnTimeout; }
+-        // A fence is a GPU job: sleep, so the vCPU goes idle -- but in steps of 100 us after a short spin, not IOSleep(1).
+-        // The device raises no interrupt (waiters poll), so the step is the latency between the host retiring the fence and
+-        // Metal's completion: IOSleep(1), timer leeway included, held each frame's commit-to-completion near 10 ms while
+-        // its GPU work took about 1 ms, the GPU sat idle most of the frame and its governor kept it at the lowest clocks.
+-        if (waited < 50) IODelay(5);
+-        else delay_for_interval(droidvm_virtgpu_fence_poll_us, NSEC_PER_USEC);
++        waitCompletion(epoch, timeoutUs - waited);
+     }
+ }
+ // The handle goes now; the pages go once the GPU cannot be using them. A submission does not name the resources it uses, so
+@@ -946,6 +952,16 @@
+     }
+     IOLockUnlock(gClientsLock);
+     return finished;
++}
++extern "C" bool droidvm_virtgpu_wait_finished(uint64_t order, uint64_t timeoutUs) {
++    const uint64_t begin = DroidVMVirtioGpu::nowUsLocal();
++    for (;;) {
++        const uint64_t epoch = DroidVMVirtioGpu::completionEpoch();
++        if (droidvm_virtgpu_finished(order)) return true;
++        const uint64_t elapsed = DroidVMVirtioGpu::nowUsLocal() - begin;
++        if (elapsed >= timeoutUs) return false;
++        DroidVMVirtioGpu::waitCompletion(epoch, timeoutUs - elapsed);
++    }
+ }
+ // The connection closed (or its process ended): its submissions finish, its resources go, its context is destroyed.
+ extern "C" void droidvm_virtgpu_close(void *connection) {
