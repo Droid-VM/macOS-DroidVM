@@ -26,6 +26,11 @@ python3 - $U/NativeBridgeMetalFrontend.mm $O/frontend.mm <<'PY'
 import sys
 s = open(sys.argv[1]).read()
 for old, new in [
+    # Only the scanout compositor needs the 8-bit framebuffer restriction. Applications
+    # such as Weather render XR10 CAMetalLayers into surfaces consumed by WindowServer.
+    # Hiding XR10 from them makes QuartzCore throw CAMetalLayerInvalid at setPixelFormat:.
+    ('if(!strcmp(name,"supportsExtendedXR10Formats") && (!strstr(getprogname(),"Poster") || !strcmp(getprogname(),"PosterBoard")))value=0;',
+     'if(!strcmp(name,"supportsExtendedXR10Formats") && !strcmp(getprogname(),"WindowServer"))value=0;'),
     (' NBHeap *heap=[NBHeap new];heap.handle=handle;',
      ' NBLOG(@"native-metal: heap %lu bytes type %ld options %lx -> %llu",(unsigned long)d.size,(long)d.type,(unsigned long)d.resourceOptions,'
      'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
