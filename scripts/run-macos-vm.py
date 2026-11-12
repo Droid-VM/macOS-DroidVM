@@ -281,6 +281,8 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
                                     # media_host pool (absolute GPA, size) their MMAP buffers live in (as the upstream tool's --media-mmio)
                                     "              *[node('virtio-media-%d' % index, [('compatible', b'droidvm,virtio-media\\0'),"
                                     " ('reg', struct.pack('<QQ', address - ARMIO_BASE, size)), ('dma-coherent', b''),"
+                                    " *[('gic-spi', struct.pack('<I', cells(props['interrupts'])[1] + 32)) for props in fdt_nodes.values()"
+                                    " if props.get('compatible', b'').startswith(b'virtio,mmio\\0') and reg_pairs(props['reg'])[0][0] == address],"
                                     " *[('media-host-pool', struct.pack('<QQ', *reg_pairs(props['reg'])[0])) for path, props in fdt_nodes.items()"
                                     " if path.startswith('/reserved-memory/media_host@')]])"
                                     " for index, (address, size) in enumerate([window for base in args.media_mmio for window in vm['virtio_mmio']"
