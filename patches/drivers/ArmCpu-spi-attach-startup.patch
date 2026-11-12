@@ -1,0 +1,41 @@
+--- a/ArmCpu.cpp
++++ b/ArmCpu.cpp
+@@ -187,6 +187,7 @@
+ struct ArmCpuSpi {uint32_t id; void (*handler) (void *); void *context; volatile uint64_t count;};
+ static ArmCpuSpi gSpi[ARMCPU_SPI_SLOTS];
+ static volatile uint32_t gSpiUsed = 0;
++static IOLock *gSpiAttachLock;
+ static uint64_t gBootAffinity = 0;
+ static uint64_t gSpiCpuAffinity[ARMCPU_SMP_SLOTS];
+ static uint32_t gSpiCpuReady[ARMCPU_SMP_SLOTS];
+@@ -377,7 +378,7 @@
+     armcpu_gic_boot[6] = static_cast<uint32_t> (ig);
+     armcpu_gic_boot[7] = static_cast<uint32_t> (sre);
+   }
+-  armcpu_gic_ready = 1;
++  __atomic_store_n(&armcpu_gic_ready, 1U, __ATOMIC_RELEASE);
+ }
+ 
+ 
+@@ -846,7 +847,21 @@
+ extern "C" IOReturn armcpu_spi_attach (uint32_t intid, bool edge, void (*handler) (void *), void *context,
+                                        uint32_t *readback, uint64_t *router)
+ {
++  // Device matching can reach MSI/media setup before the boot CPU completes GIC initialization.
++  for (unsigned waited = 0; !__atomic_load_n(&armcpu_gic_ready, __ATOMIC_ACQUIRE) && waited < 1000; ++waited) IOSleep(1);
+   if (gDist == 0 || armcpu_gic_ready == 0 || handler == nullptr) { return kIOReturnNotReady; }
++  if (!__atomic_load_n(&gSpiAttachLock, __ATOMIC_ACQUIRE)) {
++    IOLock *created = IOLockAlloc();
++    if (!created) { return kIOReturnNoMemory; }
++    IOLock *empty = nullptr;
++    if (!__atomic_compare_exchange_n(&gSpiAttachLock, &empty, created, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
++      IOLockFree(created);
++  }
++  struct AttachGuard {
++    IOLock *lock;
++    explicit AttachGuard(IOLock *l) : lock(l) { IOLockLock(lock); }
++    ~AttachGuard() { IOLockUnlock(lock); }
++  } guard(gSpiAttachLock);
+   const unsigned interrupts = ((read32 (gDist, 4) & 31) + 1) * 32;
+   if (intid < 32 || intid >= 1020 || intid >= interrupts) { return kIOReturnBadArgument; }
+   const uint32_t used = __atomic_load_n (&gSpiUsed, __ATOMIC_ACQUIRE);
