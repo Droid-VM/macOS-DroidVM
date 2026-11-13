@@ -45,25 +45,21 @@ for old, new in [
      ' if(inPlace){static std::atomic<unsigned> made;if(made++<4)NBLOG(@"native-metal: surface texture %lux%lu YCbCr format %lu read in place",'
      '(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat);}\n'
      ' if(id<MTLTexture> converted=inPlace?nil:convertedYCbCrTexture(self,d,surface,plane))return converted;\n'),
-    # Such a texture reads the video frame's own pages when the GPU runs a pass that samples it (no copy), so its surface is counted in
-    # use from the commit of each command buffer that binds it until that command buffer completes: a decoder's pool reuses a surface no
-    # one uses, and wrote the next frame into one a lock-screen pass was still reading (black bands a CTU row high). Counted for the
-    # texture's life instead, every pool surface stayed in use (WindowServer keeps a texture of each), and the decoder, out of
-    # surfaces, showed grey frames but for what moved.
+    # Cached compositor textures must not keep IOSurfaces in use for their object lifetime: CAImageQueue cannot retire its
+    # displayed slots while IOSurfaceIsInUse stays true. Count every compositor surface, and in-place video imports in other
+    # clients, from command commit until actual GPU completion (including failed submissions). Recording on the caller thread
+    # also protects queued work before the encoding thread submits it.
     ('@property(nonatomic,strong) NSMutableSet *surfaces;',
      '@property(nonatomic,strong) NSMutableSet *surfaces;\n@property(nonatomic,strong) NSMutableArray *surfacesInUse;'),
-    ('  const uint64_t flushed=flushSurfaces(_surfaces);\n',
-     '  const uint64_t flushed=flushSurfaces(_surfaces);\n'
-     '  if(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY"))for(NBTexture *texture in _surfaces)\n'
-     '   if(texture.surface && (texture.descriptor.format==500 || texture.descriptor.format==505 ||\n'
-     '    texture.descriptor.format==540 || texture.descriptor.format==543)) {\n'
-     '    if(!_surfacesInUse)_surfacesInUse=[NSMutableArray array];\n'
-     '    IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
-     '   }\n'),
+    (' surfaceTicket=surfacesync::begin(_surfaces,_writtenSurfaces);',
+     ' if(isRenderServer() || getenv("METAL2VULKAN_YCBCR_PLANES_ONLY"))for(NBTexture *texture in _surfaces)\n'
+     '  if(texture.surface) {\n'
+     '   if(!_surfacesInUse)_surfacesInUse=[NSMutableArray array];\n'
+     '   IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
+     '  }\n'
+     ' surfaceTicket=surfacesync::begin(_surfaces,_writtenSurfaces);'),
     ('- (void)countUse {if(_surface && !_counted && gCountsSurfaceUse)',
-     '- (void)countUse {if(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY") && '
-     '(_descriptor.format==500 || _descriptor.format==505 || _descriptor.format==540 || _descriptor.format==543))return;'
-     'if(_surface && !_counted && gCountsSurfaceUse)'),
+     '- (void)countUse {if(_surface && !_counted && gCountsSurfaceUse && !isRenderServer())'),
     (' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[self disown];\n',
      ' for(NBTexture *texture in _surfacesInUse)IOSurfaceDecrementUseCount(texture.surface);\n _surfacesInUse=nil;\n'
      ' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[self disown];\n'),
