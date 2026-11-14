@@ -5,12 +5,15 @@
 # Its buffers come from one contiguous allocation (DROIDVM_DEVICE_DYNAMIC: a native kext's __DATA has no room for them).
 set -eu
 K27=$(cd "$(dirname "$0")" && pwd); M=$(dirname "$K27"); D=$M/overlay/kext/DroidVMAudio
-AUDIO_REF=e29d087   # Droid-VM/UniXNU-droidvm wip/hackintosh, 2026-11-04 (audio itself from 1f57203, the iPadOS 27 board)
+# Droid-VM/UniXNU-droidvm wip/hackintosh, 2026-11-15: patches/droidvm-audio 0001-0005 are in it (0001, 0003 as
+# they were; 0002 output lead and 0005 completion interrupts merged 11-13, either interrupt property name)
+AUDIO_REF=d325d0f24195fe08701ea58f6a280231eb027211
 V=$M/out/k27/src/DroidVMAudio; rm -rf $V; mkdir -p $V
+git -C $M/sources/UniXNU-droidvm cat-file -e $AUDIO_REF^{commit} 2>/dev/null || git -C $M/sources/UniXNU-droidvm fetch -q --depth 1 origin $AUDIO_REF
 for name in DroidVMAudio.cpp DroidVMVirtioSnd.c DroidVMDmaRegion.h; do
   git -C $M/sources/UniXNU-droidvm show $AUDIO_REF:package/$name > $V/$name
 done
-for patch in $M/patches/droidvm-audio/*.patch; do patch -p1 -s --batch -d $V -i $patch || { echo "$patch does not apply"; exit 1; }; done
+for patch in $M/patches/droidvm-audio/*.patch; do [ -e "$patch" ] || continue; patch -p1 -s --batch -d $V -i $patch || { echo "$patch does not apply"; exit 1; }; done
 cd $M
 python3 scripts/build-native-kext.py DroidVMAudio $D/DroidVMAudioStarter.cpp $V/DroidVMAudio.cpp $V/DroidVMVirtioSnd.c \
   overlay/kext/NativeKextGlue.cpp -I $V -D DROIDVM_NATIVE_KEXT=1 -D DROIDVM_DEVICE_DYNAMIC=1 --obj k27-obj --c-recipe osfmk/DEVELOPMENT/startup.o.json

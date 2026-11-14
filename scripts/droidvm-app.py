@@ -141,6 +141,9 @@ REQUIRED_ARGS.append('ml-timeout-debug-ack-scale=100')
 # CoreAudio (and Swift's clocks) take the host clock as 24 MHz whatever mach_timebase_info says; the counter here runs at 19.2 MHz, so
 # without the kernel scaling it (patch 0042) the HAL writes every 80 ms instead of 64 ms and the sound stutters and falls behind the picture
 REQUIRED_ARGS.append('droidvm-timebase-hz=24000000')
+# VideoToolbox's frame thinning (the former patches/droidvm-video/0008, now UniXNU-droidvm's droidvm-vt-thin-us): a frame less than
+# 31 ms after the last one shown goes back dropped, so the lock screen's 240 fps aerials are decoded but not copied out
+REQUIRED_ARGS.append('droidvm-vt-thin-us=31000')
 # MACOS_DROP_ARGS=NAME[,NAME]: leave those of the arguments above (and of GPU_ARGS) out
 # MACOS_ROOT_UUID (docs/k27-real-disk-layout-plan.md P5): launchd's mount phases mount Preboot, VM, Update, xART and Data and APFS
 # stitches the firmlinks stored on the System volume; Preboot is its own volume, so it needs no hiding from statfs.
