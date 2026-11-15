@@ -5,9 +5,8 @@ tier 3 (nightly, -Zbuild-std), through configs/arm64e-apple-darwin.json (below).
 
     build-metal-bridge-macos.py
 
-Source: sources/UniXNU/.cache/gpu-reference/metal2vulkan at the pin of scripts/data/gpu-metal-vulkan-inputs.json; its recorded patches
-are applied here if they are not yet. Output: out/metal/bridge/libnative_metal_bridge.a"""
-import hashlib
+Source: METAL2VULKAN_SOURCE at the compatible translator pin, with patches from NATIVE_METAL_SOURCE.
+Patches are applied once to a dedicated worktree; METAL2VULKAN_PREPATCHED=1 reuses it. Output: out/metal/bridge/libnative_metal_bridge.a"""
 import json
 import os
 import shutil
@@ -16,7 +15,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIXNU = ROOT / 'sources/UniXNU'
-SOURCE = UNIXNU / '.cache/gpu-reference/metal2vulkan'
+NATIVE = Path(os.environ.get('NATIVE_METAL_SOURCE', UNIXNU / 'drivers/NativeMetal'))
+SOURCE = Path(os.environ.get('METAL2VULKAN_SOURCE', UNIXNU / '.cache/gpu-reference/metal2vulkan'))
 OUT = ROOT / 'out/metal/bridge'
 SDK = ROOT / 'toolchains/sdks/MacOSX26.1.sdk'
 LLVM = Path('/usr/lib/llvm-21/bin')
@@ -26,44 +26,26 @@ TRIPLE = 'arm64e-apple-darwin'
 # pacibsp/retab, signed static function pointers) for cfg(target_abi = "pauthtest") only, so this is the built-in target with that ABI;
 # init-fini off: dyld signs Mach-O initializers itself.
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
-# NativeMetal's own patches, then the board's (Droid-VM/UniXNU wip/droidvm patches/metal2vulkan, from the sources/UniXNU-turnip worktree at
-# the commit that pins this NativeMetal: see build-turnip-macos.py), in the order its build-adreno-metal-bridge.py applies. As there, not
-# NativeMetal's 0020-written-host-page-textures-in-place-at-any-size.patch: it needs upstream Turnip's render-mode patch, which is not
-# in the board's Mesa. Then this repository's own (patches/metal2vulkan-macos).
-BOARD = ROOT / 'sources/UniXNU-turnip'
-PATCHES = [patch for patch in sorted((UNIXNU / 'drivers/NativeMetal/bridge/patches').glob('*.patch'))
-           if patch.name != '0020-written-host-page-textures-in-place-at-any-size.patch'] + sorted((BOARD / 'patches/metal2vulkan').glob('*.patch')) \
-    + sorted((ROOT / 'patches/metal2vulkan-macos').glob('*.patch'))
+# Use AdrenoMetal's complete patch stack at its matching translator pin. Patch 0040
+# consolidates the older runtime/board patches; do not append that older stack.
+# Set METAL2VULKAN_PREPATCHED=1 when reusing the dedicated patched worktree.
+PATCHES = sorted((NATIVE / 'bridge/patches').glob('*.patch')) + [
+    ROOT / 'patches/metal2vulkan-macos/0003-rate-map-buffer-reflection.patch',
+    ROOT / 'patches/metal2vulkan-macos/0004-opaque-indirect-pointer-reflection.patch',
+    ROOT / 'patches/metal2vulkan-macos/0005-identity-texture-swizzle.patch',
+]
+pin = '555b13d57e09bff70996a88cff64f1275256d5cf'
 
-pin = json.loads((UNIXNU / 'scripts/data/gpu-metal-vulkan-inputs.json').read_text())['translator']['commit']
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:
     raise SystemExit(f'{SOURCE} is not at the pinned translator commit {pin}')
 
 
-def tree(*steps):
-    """The tree SOURCE's HEAD makes after the git commands STEPS, in a scratch index."""
-    index = OUT / 'patch-index'
-    env = dict(os.environ, GIT_INDEX_FILE=str(index))
-    try:
-        for step in [['read-tree', 'HEAD'], *steps]:
-            subprocess.run(['git', '-C', str(SOURCE), *step], env=env, check=True, stdout=subprocess.DEVNULL)
-        return subprocess.check_output(['git', '-C', str(SOURCE), 'write-tree'], env=env, text=True).strip()
-    finally:
-        index.unlink(missing_ok=True)
-
-
-# The source is the pin with every patch, or it is reset and patched again: a later patch may change what an earlier one wrote
-# (NativeMetal's 0010 to 0012), so whether each patch is in cannot be told one at a time.
+# Apply to a dedicated translator worktree; never reset the caller's source.
 OUT.mkdir(parents=True, exist_ok=True)
-if tree(['add', '-A']) != tree(*[['apply', '--cached', str(patch)] for patch in PATCHES]):
-    subprocess.run(['git', '-C', str(SOURCE), 'checkout', '--', '.'], check=True)
-    subprocess.run(['git', '-C', str(SOURCE), 'clean', '-fdq'], check=True)
+if os.environ.get('METAL2VULKAN_PREPATCHED') != '1':
     for patch in PATCHES:
         subprocess.run(['git', '-C', str(SOURCE), 'apply', str(patch)], check=True)
-OUT.mkdir(parents=True, exist_ok=True)
-# The translator source the runtime is built from (its pin and the patches applied), which keys the shader cache: NativeMetal's
-# shader priming keeps what it finished while this stays the same (nmb_runtime_build, PrimeShaders.h).
-runtime_id = hashlib.sha256((pin + '\n' + ''.join(patch.read_text() for patch in PATCHES)).encode()).hexdigest()[:32]
+runtime_id = os.environ.get('NMB_RUNTIME_ID', 'upstream-rate-map-20261113')
 # the runtime's example library and function-constant fixture, assembled to AIR for the bridge's self-tests
 air, fc_air = OUT / 'runtime_examples.air', OUT / 'function_constant.air'
 fixtures = SOURCE / 'crates/metal2vulkan-validation/fixtures/public'
@@ -71,11 +53,11 @@ subprocess.run([str(LLVM / 'llvm-as'), '-o', str(air), str(fixtures / 'examples/
 subprocess.run([str(LLVM / 'llvm-as'), '-o', str(fc_air), str(fixtures / 'kernel_function_constant_gate_fold.ll')], check=True)
 # the GPU scanout's half-float conversion kernel (NativeMetal shaders/scanout_convert.ll, GpuScanoutPresenter.h)
 scanout_air = OUT / 'scanout_convert.air'
-subprocess.run([str(LLVM / 'llvm-as'), '-o', str(scanout_air), str(UNIXNU / 'drivers/NativeMetal/shaders/scanout_convert.ll')], check=True)
+subprocess.run([str(LLVM / 'llvm-as'), '-o', str(scanout_air), str(NATIVE / 'shaders/scanout_convert.ll')], check=True)
 manifest = OUT / 'Cargo.toml'
 manifest.write_text('\n'.join([
     '[package]', 'name = "native-metal-bridge"', 'version = "0.1.0"', 'edition = "2024"', '[workspace]',
-    '[lib]', 'crate-type = ["staticlib"]', 'path = ' + json.dumps(str(UNIXNU / 'drivers/NativeMetal/bridge/NativeMetalBridge.rs')),
+    '[lib]', 'crate-type = ["staticlib"]', 'path = ' + json.dumps(str(NATIVE / 'bridge/NativeMetalBridge.rs')),
     '[dependencies]',
     'metal2vulkan = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan')) + ', features = ["ash"] }',
     'metal2vulkan-runtime = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan-runtime')) + ' }',
