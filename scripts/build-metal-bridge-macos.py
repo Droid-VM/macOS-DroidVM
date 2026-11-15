@@ -5,8 +5,9 @@ tier 3 (nightly, -Zbuild-std), through configs/arm64e-apple-darwin.json (below).
 
     build-metal-bridge-macos.py
 
-Source: METAL2VULKAN_SOURCE at the compatible translator pin, with patches from NATIVE_METAL_SOURCE.
-Patches are applied once to a dedicated worktree; METAL2VULKAN_PREPATCHED=1 reuses it. Output: out/metal/bridge/libnative_metal_bridge.a"""
+Source: METAL2VULKAN_SOURCE (default: the dedicated worktree sources/UniXNU/.cache/gpu-reference/metal2vulkan-555b13d) at the compatible
+translator pin, with patches from NATIVE_METAL_SOURCE. A clean worktree at the pin is patched; one already holding exactly the patched tree is
+reused as it is; any other state is refused. Output: out/metal/bridge/libnative_metal_bridge.a"""
 import json
 import os
 import shutil
@@ -16,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UNIXNU = ROOT / 'sources/UniXNU'
 NATIVE = Path(os.environ.get('NATIVE_METAL_SOURCE', UNIXNU / 'drivers/NativeMetal'))
-SOURCE = Path(os.environ.get('METAL2VULKAN_SOURCE', UNIXNU / '.cache/gpu-reference/metal2vulkan'))
+SOURCE = Path(os.environ.get('METAL2VULKAN_SOURCE', UNIXNU / '.cache/gpu-reference/metal2vulkan-555b13d'))
 OUT = ROOT / 'out/metal/bridge'
 SDK = ROOT / 'toolchains/sdks/MacOSX26.1.sdk'
 LLVM = Path('/usr/lib/llvm-21/bin')
@@ -28,7 +29,6 @@ TRIPLE = 'arm64e-apple-darwin'
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
 # Use AdrenoMetal's complete patch stack at its matching translator pin. Patch 0040
 # consolidates the older runtime/board patches; do not append that older stack.
-# Set METAL2VULKAN_PREPATCHED=1 when reusing the dedicated patched worktree.
 PATCHES = sorted((NATIVE / 'bridge/patches').glob('*.patch')) + [
     ROOT / 'patches/metal2vulkan-macos/0003-rate-map-buffer-reflection.patch',
     ROOT / 'patches/metal2vulkan-macos/0004-opaque-indirect-pointer-reflection.patch',
@@ -40,11 +40,28 @@ if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text
     raise SystemExit(f'{SOURCE} is not at the pinned translator commit {pin}')
 
 
+def tree_of(index, patches=(), worktree=False):
+    """The tree of the pin with `patches` applied, or of SOURCE's files (new ones too) where `worktree`, through a scratch index."""
+    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    git = ['git', '-C', str(SOURCE)]
+    subprocess.run(git + ['read-tree', pin], env=env, check=True)
+    for patch in patches:
+        subprocess.run(git + ['apply', '--cached', str(patch)], env=env, check=True)
+    if worktree:
+        subprocess.run(git + ['add', '-A', '.'], env=env, check=True)
+    return subprocess.check_output(git + ['write-tree'], env=env, text=True).strip()
+
+
 # Apply to a dedicated translator worktree; never reset the caller's source.
 OUT.mkdir(parents=True, exist_ok=True)
-if os.environ.get('METAL2VULKAN_PREPATCHED') != '1':
+patched, current = tree_of(OUT / 'index.patched', PATCHES), tree_of(OUT / 'index.current', worktree=True)
+if current == patched:
+    pass   # the patched worktree of an earlier build
+elif current == subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', pin + '^{tree}'], text=True).strip():
     for patch in PATCHES:
         subprocess.run(['git', '-C', str(SOURCE), 'apply', str(patch)], check=True)
+else:
+    raise SystemExit(f'{SOURCE} holds changes that are neither the pin nor the pin with the patch stack ({len(PATCHES)} patches)')
 runtime_id = os.environ.get('NMB_RUNTIME_ID', 'upstream-rate-map-20261113')
 # the runtime's example library and function-constant fixture, assembled to AIR for the bridge's self-tests
 air, fc_air = OUT / 'runtime_examples.air', OUT / 'function_constant.air'
