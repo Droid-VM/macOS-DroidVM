@@ -36,3 +36,9 @@ ArmDTPlatform's bus power hierarchy fix, the physical Logitech mouse enumerated.
 reads 0 for the processes named by boot-arg `vmm-hidden=NAME[,NAME...]` (default `Weather`; empty for none), 1 for all
 others. VFX makes no argument encoder under a VMM, so Weather drew no clouds. On-device (2026-11-15): sysctl reads 1, the
 same binary named Weather reads 0, and Weather opened normally shows moving clouds.
+
+`gpu-bundles-sandbox-map.patch` (`ad47716`) follows `vmm-hidden-processes.patch`. An executable map of a file under
+`/Library/GPUBundles` skips the Sandbox policy's `file_check_mmap` (AMFI still checks it against the trust cache). The
+WebKit GPU process's sandbox reads that directory but maps code only from `/System/Library/Extensions`, so it had no Metal
+device and its offscreen drawing (opacity, CSS filters, masks) came out blank: Bilibili's player icons. On-device
+(2026-11-15): the GPU process maps NativeAdrenoMetal and every row of an opacity/filter/mask test page draws.

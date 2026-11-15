@@ -1,0 +1,64 @@
+From ad47716b309f1af6fd800988181d01d35846d0fc Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sun, 15 Nov 2026 08:18:35 -0500
+Subject: [PATCH] k27: map the board's Metal plugin in sandboxed processes
+ (/Library/GPUBundles skips the Sandbox policy's file_check_mmap)
+
+The WebKit GPU process's sandbox reads /Library/GPUBundles but maps code only from
+/System/Library/Extensions, so its dlopen of NativeAdrenoMetal failed, it had no
+Metal device, and the content it draws offscreen (opacity, filters, masks) came
+out blank. An executable map of a file there skips only the Sandbox policy; AMFI
+still holds the code to its trust cache.
+---
+ security/mac_file.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/security/mac_file.c b/security/mac_file.c
+index 4019395..e8f5347 100644
+--- a/security/mac_file.c
++++ b/security/mac_file.c
+@@ -44,6 +44,9 @@
+ #include <sys/vnode_internal.h>
+ #include <sys/file.h>
+ #include <sys/file_internal.h>
++#if defined(BCM2837)
++#include <sys/mman.h>
++#endif
+ 
+ #include <security/mac_internal.h>
+ 
+@@ -178,6 +181,31 @@ mac_file_check_mmap(struct ucred *cred, struct fileglob *fg, int prot,
+ 	int maxp;
+ 
+ 	maxp = *maxprot;
++#if defined(BCM2837)
++	/* The board's Metal plugin lives in /Library/GPUBundles (a firmlink into the Data volume), where IOGPU finds it first. The
++	 * WebKit GPU process's sandbox reads that directory but maps code only from the system's (/System/Library/Extensions,
++	 * where Apple's own GPU bundles are), so its dlopen failed, it had no Metal device, and the pages it draws offscreen (opacity,
++	 * filters, masks) came out blank. An executable map of a file there skips the Sandbox policy only: AMFI still holds the
++	 * code to its trust cache. */
++	bool gpu_bundle = false;
++	if ((prot & PROT_EXEC) && FILEGLOB_DTYPE(fg) == DTYPE_VNODE) {
++		char path[256];
++		int len = sizeof(path);
++		if (vn_getpath((struct vnode *)fg_get_data(fg), path, &len) == 0) {
++			gpu_bundle = !strncmp(path, "/Library/GPUBundles/", strlen("/Library/GPUBundles/")) ||
++			    !strncmp(path, "/System/Volumes/Data/Library/GPUBundles/", strlen("/System/Volumes/Data/Library/GPUBundles/"));
++		}
++	}
++	if (gpu_bundle) {
++		error = 0;
++		MAC_POLICY_ITERATE({
++			if (mpc->mpc_ops->mpo_file_check_mmap != NULL && strcmp(mpc->mpc_name, "Sandbox") != 0) {
++			        int __step_err = mpc->mpc_ops->mpo_file_check_mmap(cred, fg, NULL, prot, flags, offset, &maxp);
++			        error = mac_error_select(__step_err, error);
++			}
++		});
++	} else
++#endif /* BCM2837 */
+ 	MAC_CHECK(file_check_mmap, cred, fg, NULL, prot, flags, offset, &maxp);
+ 	if ((maxp | *maxprot) != *maxprot) {
+ 		panic("file_check_mmap increased max protections");
+-- 
+2.53.0
+
