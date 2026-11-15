@@ -31,3 +31,8 @@ Clang's arm64e member-pointer thunks, comparing virtual callback addresses canno
 distinguish IOService defaults from overrides. Preserve power informees on that
 compiler configuration. Directed USB validation created all 16 xHCI ports; with
 ArmDTPlatform's bus power hierarchy fix, the physical Logitech mouse enumerated.
+
+`vmm-hidden-processes.patch` (`f73fe08`) follows `IOService-owner-cache-media-visibility.patch`. `kern.hv_vmm_present`
+reads 0 for the processes named by boot-arg `vmm-hidden=NAME[,NAME...]` (default `Weather`; empty for none), 1 for all
+others. VFX makes no argument encoder under a VMM, so Weather drew no clouds. On-device (2026-11-15): sysctl reads 1, the
+same binary named Weather reads 0, and Weather opened normally shows moving clouds.
