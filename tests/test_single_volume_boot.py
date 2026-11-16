@@ -1,5 +1,6 @@
 """Boot configuration boundaries after removal of the separate OS/SystemOS disks."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import runpy
@@ -44,3 +45,13 @@ class SingleVolumeBootTests(unittest.TestCase):
         with patch.dict(os.environ, {'MACOS_ROOT_UUID': ''}):
             with self.assertRaisesRegex(SystemExit, 'MACOS_ROOT_UUID must name the System volume'):
                 runpy.run_path(str(ROOT / 'scripts/run-macos-vm.py'))
+
+    def test_unset_root_uuid_follows_installed_disk(self):
+        layout = ROOT / 'artifacts/27.2/disk/disk.json'
+        if not layout.exists():
+            self.skipTest('no make-macos-disk.py output')
+        environment = {k: v for k, v in os.environ.items() if k != 'MACOS_ROOT_UUID'}
+        environment['MACOS_TAG'] = '27.2'
+        with patch.dict(os.environ, environment, clear=True):
+            module = runpy.run_path(str(ROOT / 'scripts/run-macos-vm.py'))
+        self.assertEqual(module['ROOT_UUID'], json.loads(layout.read_text())['system']['uuid'].upper())

@@ -35,8 +35,12 @@ if INSTANCE:
     FOLDER += '-' + INSTANCE
 OWNER = 'u0_a258:media_rw'                          # the owner of the DroidVM folder; the daemon opens leased disks as the app
 STORE = FOLDER + '/data-store.img'
-# The System volume of the Data store's APFS volume group; empty no longer selects a legacy layout.
-ROOT_UUID = os.environ.get('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF7FB').upper()
+# The System volume of the Data store's APFS volume group: by default the one of the new install the phone runs, made by
+# make-macos-disk.py into artifacts/TAG/disk (disk.json); empty no longer selects a legacy layout.
+DISK_LAYOUT = ROOT / f'artifacts/{TAG}/disk/disk.json'
+ROOT_UUID = os.environ['MACOS_ROOT_UUID'] if 'MACOS_ROOT_UUID' in os.environ else \
+    (json.loads(DISK_LAYOUT.read_text())['system']['uuid'] if DISK_LAYOUT.exists() else '')
+ROOT_UUID = ROOT_UUID.upper()
 if not ROOT_UUID:
     raise SystemExit('MACOS_ROOT_UUID must name the System volume (disk.json); the legacy union layout was removed')
 DATA_STORE_MMIO = 0x0a000000
@@ -233,6 +237,48 @@ def make_adt(fdt, dram_size, unique_chip_id, output, cpu_regs='0', gpu=False, vi
             marker = "('vmm-present', struct.pack('<I', 1)),"
             assert text.count(marker) == 1
             text = text.replace(marker, '')
+        # MACOS_IDENTITY (default vm): the model of Apple's own macOS VM, whose kernel collection (vma2) and kexts this guest runs:
+        # /, /product and /buttons as artifacts/TAG/DeviceTree.vma2macosap gives them (VirtualMac2,1, board VMA2MACOSAP, the "mac"
+        # idiom), not the iPad7,1 (J120) of the upstream iPadOS board's --ipad-identity, under which macOS reported an iPad model and
+        # About This Mac an unknown one. Left out of /product: the host's guest agent port and product-id. The root's compatible
+        # stays the board's, so Apple's virtual platform kexts (AppleVirtualPlatformARM) match nothing; /chosen (chip ID, the
+        # production and security modes --ipad-identity sets) is unchanged. MACOS_IDENTITY=ipad keeps the iPad model.
+        if os.environ.get('MACOS_IDENTITY', 'vm') == 'vm':
+            for old, new in (
+                    ("('model', b'iPad7,1\\0' if args.ipad_identity else b'droidvm-first-boot\\0'),",
+                     "('model', b'VirtualMac2,1\\0'),"),
+                    ("*([('target-type', b'J120\\0')] if args.ipad_identity else []),",
+                     "('target-type', b'VMA2MACOS\\0'), ('target-sub-type', b'VMA2MACOSAP\\0'),"),
+                    ("        *([node('buttons', [('compatible', b'buttons\\0'), ('device_type', b'buttons\\0'),\n"
+                     "                            ('button-names', b'hold\\0voldown\\0volup\\0'),\n"
+                     "                            ('home-button-type', struct.pack('<I', 2))])] if args.ipad_identity else []),",
+                     "        node('buttons', [('aot-power', struct.pack('<I', 1))]),"),
+                    ("('product-name', b'iPad Pro (12.9-inch) (2nd generation)\\0' if args.ipad_identity else b'DroidVM guest\\0'),",
+                     "('product-name', b'Apple Virtual Machine 1\\0'),"),
+                    ("*([('product-description', b'iPad Pro (12.9-inch) (2nd generation)\\0'),\n"
+                     "                            ('artwork-device-idiom', b'pad\\0'),\n"
+                     "                            ('artwork-device-subtype', struct.pack('<I', 2732)),\n"
+                     "                            ('artwork-scale-factor', struct.pack('<I', 2)),\n"
+                     "                            ('artwork-display-gamut', args.display_gamut.encode() + b'\\0'),\n"
+                     "                            ('compatible-device-fallback', b'iPad6,7\\0'),\n"
+                     "                            ('thin-bezel', struct.pack('<I', 1))] if args.ipad_identity else [])]),",
+                     "('product-description', b'virtual machine for ARM-v8.4 with Apple Silicon extensions\\0'),\n"
+                     "                         ('artwork-device-idiom', b'mac\\0'), ('artwork-device-subtype', struct.pack('<I', 0)),\n"
+                     "                         ('artwork-scale-factor', struct.pack('<I', 2)), ('artwork-dynamic-displaymode', b'0\\0'),\n"
+                     "                         ('artwork-display-gamut', args.display_gamut.encode() + b'\\0'),\n"
+                     "                         ('compatible-device-fallback', b'iPad8,6\\0'), ('compatible-app-variant', b'MacFamily20,1\\0'),\n"
+                     "                         ('fdr-product-type', b'VirtualMac2,1\\0'), ('sub-product-type', b'VirtualMac2,1\\0'),\n"
+                     "                         ('unique-model', b'VMA2MACOSAP\\0'), ('partition-style', b'macOS\\0'),\n"
+                     "                         ('graphics-featureset-class', b'APPLE7\\0'),\n"
+                     "                         ('graphics-featureset-fallbacks', b'APPLE6:APPLE5:APPLE4:APPLE3:APPLE3v1:APPLE2:APPLE1:GLES2,0\\0'),\n"
+                     "                         ('device-perf-memory-class', struct.pack('<I', 16)), ('app-macho-architecture', b'arm64\\0'),\n"
+                     "                         ('allow-32bit-apps', struct.pack('<I', 1)), ('ui-weather-quality', struct.pack('<I', 100)),\n"
+                     "                         ('has-virtualization', struct.pack('<I', 1)), ('udid-version', struct.pack('<I', 2)),\n"
+                     "                         ('single-stage-boot', struct.pack('<I', 1)), ('dual-iboot-support', struct.pack('<I', 1)),\n"
+                     "                         ('atomic-firmware-update-support', struct.pack('<I', 1)), ('mobiledevice-min-ver', b'1853\\0'),\n"
+                     "                         ('chrome-identifier', b'0\\0'), ('framebuffer-identifier', b'0\\0')]),")):
+                assert text.count(old) == 1, old
+                text = text.replace(old, new)
         # /bluetooth, as upstream's iPadOS 27 board (UniXNU-droidvm make-droidvm-adt.py): bluetoothd finds its controller by name
         # (IOServiceNameMatching "marconi-bt", then "bluetooth") and without one exits ("Unable to match bluetooth service in device
         # tree"), and CoreBluetooth's clients never get a state: IOBluetoothCoreBluetoothCoordinator's init waits for its central

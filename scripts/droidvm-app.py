@@ -64,8 +64,7 @@ def load(path, name):
 
 ios = load(ROOT.parent / 'ios/tools/droidvm-app.py', 'ios_droidvm_app')
 # The k27 kernel boots the single-volume layout only (docs/k27-real-disk-layout-plan.md P5): the root is the System volume DroidVMSystem
-# of the Data store's container. Set MACOS_ROOT_UUID to disk.json's System UUID for a new install.
-os.environ.setdefault('MACOS_ROOT_UUID', '4646A7E0-5598-41A2-B158-E1AF6D3CF7FB')
+# of the Data store's container; run-macos-vm.py takes its UUID from artifacts/TAG/disk/disk.json unless MACOS_ROOT_UUID names it.
 run = load(ROOT / 'scripts/run-macos-vm.py', 'run_macos_vm')
 
 FOLDER = run.FOLDER
