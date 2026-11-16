@@ -7,4 +7,4 @@ cp out/x12377/un/drivers/ArmDTPlatform/ArmDTPlatform.cpp "$platform/ArmDTPlatfor
 git apply --directory="$platform" patches/drivers/ArmDTPlatform-pl030-rtc.patch
 git apply --directory="$platform" patches/drivers/ArmDTPlatform-power-hierarchy.patch
 python3 scripts/build-native-kext.py ArmDTPlatform "$platform/ArmDTPlatform.cpp" --obj k27-obj
-llvm-ar rcs "$platform/libArmDTPlatform.a" out/x12377/native-kexts/ArmDTPlatform/ArmDTPlatform.o
+/usr/lib/llvm-21/bin/llvm-ar rcs "$platform/libArmDTPlatform.a" out/x12377/native-kexts/ArmDTPlatform/ArmDTPlatform.o

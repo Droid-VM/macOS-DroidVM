@@ -8,4 +8,4 @@ for patch in ArmCpu-arm64-assembly ArmCpu-12377-boot-interrupt ArmCpu-idle-wfi A
     git apply --directory="$platform" "patches/drivers/$patch.patch"
 done
 python3 scripts/build-native-kext.py ArmCpu "$platform/ArmCpu.cpp" --obj k27-obj
-llvm-ar rcs "$platform/libArmCpu.a" out/x12377/native-kexts/ArmCpu/ArmCpu.o
+/usr/lib/llvm-21/bin/llvm-ar rcs "$platform/libArmCpu.a" out/x12377/native-kexts/ArmCpu/ArmCpu.o

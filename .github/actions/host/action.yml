@@ -31,6 +31,8 @@ runs:
           sudo apt-get update -q
           # shellcheck disable=SC2046
           sudo apt-get install -y -q $(lock "' '.join(p for p in d['host']['apt'] if p != 'docker.io')") "linux-headers-$(uname -r)" >/dev/null
+          # unversioned clang, llvm-ar, llvm-nm, ... as on a development machine: LLVM 21's
+          echo "/usr/lib/llvm-$(lock "d['host']['llvm']['version']")/bin" >> "$GITHUB_PATH"
           clang-21 --version | head -1
         fi
         # shellcheck disable=SC2046
