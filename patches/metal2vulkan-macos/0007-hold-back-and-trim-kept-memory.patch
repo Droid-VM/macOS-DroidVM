@@ -1,0 +1,99 @@
+diff --git a/crates/metal2vulkan-runtime/src/memory.rs b/crates/metal2vulkan-runtime/src/memory.rs
+index 284a0b0e6..a03e52881 100644
+--- a/crates/metal2vulkan-runtime/src/memory.rs
++++ b/crates/metal2vulkan-runtime/src/memory.rs
+@@ -2176,6 +2176,11 @@ pub(super) struct Memory {
+     /// The device was lost and its recovery carried its objects on (`device/carry.rs`): it keeps
+     /// no empty block for placements it never makes again ([`keep_none`]).
+     keeps_none: bool,
++    /// While the system reports memory pressure ([`crate::Device::hold_back_memory`]): no room
++    /// made ahead of the placements ([`keep_room`]) and no empty block kept, each goes as it
++    /// empties. Every block here is guest memory the GPU imports, wired as it is made: a one-time
++    /// release at the pressure notification came back with the next frame's room.
++    held_back: bool,
+ }
+ 
+ /// What a making ahead is made through ([`Memory::ahead_with`]).
+@@ -2331,6 +2336,7 @@ impl Memory {
+             ahead: AheadBlocks::default(),
+             next_sweep: Instant::now() + KEPT_SWEEP_EVERY,
+             keeps_none: false,
++            held_back: false,
+             #[cfg(test)]
+             import_hold: None,
+             #[cfg(test)]
+@@ -3437,6 +3443,13 @@ impl Memory {
+                 drop(unsafe { self.let_go(device, kept, FreeCause::Teardown, None) });
+             }
+         }
++        // Held back under memory pressure ([`Memory::held_back`]): none kept either.
++        if self.held_back {
++            for kept in self.pool(holds, type_index).take_kept() {
++                // SAFETY: as above.
++                drop(unsafe { self.let_go(device, kept, FreeCause::KeptForRoom, None) });
++            }
++        }
+         match freed {
+             Some((block, dedicated)) => {
+                 let cause = match dedicated {
+@@ -5006,6 +5019,9 @@ pub(super) fn keep_room(
+     (functions, quiet): (&Arc<Functions>, &Arc<QueueQuiet>),
+     (copies, own, pages): (impl FnOnce() -> bool, Holds, bool),
+ ) {
++    if lock(memory).held_back {
++        return;
++    }
+     lock(memory).ahead_with.get_or_insert_with(|| AheadWith {
+         functions: Arc::clone(functions),
+         quiet: Arc::clone(quiet),
+@@ -5167,3 +5183,50 @@ fn take_ready<'a>(
+         }
+     }
+ }
++
++impl crate::Device {
++    /// Keeps no memory for later placements while `on` ([`Memory::held_back`]): the caller turns
++    /// it on as the system reports memory pressure and off as it reports the normal level again.
++    /// Turning it on gives back every kept block now ([`crate::Device::release_kept_memory`]):
++    /// how many blocks went. No Metal counterpart.
++    pub fn hold_back_memory(&self, on: bool) -> usize {
++        lock(&self.shared().memory).held_back = on;
++        if on { self.release_kept_memory() } else { 0 }
++    }
++
++    /// Frees the kept empty pooled blocks that have stayed empty for `idle` or longer, each pool's
++    /// last one included ([`Pool::stale`] keeps that one however long it stays empty): how many
++    /// went. The caller trims as its process idles (`Duration::ZERO`: every kept empty pooled
++    /// block). No Metal counterpart.
++    pub fn trim_kept_memory(&self, idle: std::time::Duration) -> usize {
++        let shared = self.shared();
++        let mut memory = lock(&shared.memory);
++        let now = Instant::now();
++        let blocks: Vec<Block> = (memory.pools.iter_mut())
++            .flat_map(|pool| pool.take_idle(now, idle))
++            .collect();
++        let count = blocks.len();
++        for block in blocks {
++            // SAFETY: nothing is placed in a kept empty block, and no command reads it.
++            drop(unsafe { memory.let_go(shared.vk(), block, FreeCause::KeptStale, None) });
++        }
++        count
++    }
++}
++
++impl<T> Pool<T> {
++    /// Every kept empty pooled block that has stayed empty for `idle` or longer, taken out to be
++    /// freed.
++    fn take_idle(&mut self, now: Instant, idle: std::time::Duration) -> Vec<T> {
++        let idle_blocks: Vec<usize> = (self.blocks.iter().enumerate())
++            .filter_map(|(index, block)| {
++                let block = block.as_ref().filter(|block| block.kept())?;
++                (now.saturating_duration_since(block.emptied?) >= idle).then_some(index)
++            })
++            .collect();
++        idle_blocks
++            .into_iter()
++            .filter_map(|index| self.take(index))
++            .collect()
++    }
++}

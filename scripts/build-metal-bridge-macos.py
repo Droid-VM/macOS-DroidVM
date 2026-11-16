@@ -29,11 +29,17 @@ TRIPLE = 'arm64e-apple-darwin'
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
 # Use AdrenoMetal's complete patch stack at its matching translator pin. Patch 0040
 # consolidates the older runtime/board patches; do not append that older stack.
-PATCHES = sorted((NATIVE / 'bridge/patches').glob('*.patch')) + [
+# AdrenoMetal main's 0046 (main-optimizations) is the whole of its translator from the pin: 0002-0041 and its own
+# changes in one patch, so where it is present it is the stack alone.
+_MAIN = sorted((NATIVE / 'bridge/patches').glob('*-main-optimizations-on-development-*.patch'))
+PATCHES = (_MAIN[-1:] or sorted((NATIVE / 'bridge/patches').glob('*.patch'))) + [
     ROOT / 'patches/metal2vulkan-macos/0003-rate-map-buffer-reflection.patch',
     ROOT / 'patches/metal2vulkan-macos/0004-opaque-indirect-pointer-reflection.patch',
     ROOT / 'patches/metal2vulkan-macos/0005-identity-texture-swizzle.patch',
     ROOT / 'patches/metal2vulkan-macos/0006-sixteen-mib-memory-blocks.patch',
+    # NativeMetal 935c468's bridge (nmb_device_hold_back_memory, nmb_device_trim_memory) asks the runtime for these; the board's
+    # metal2vulkan 0013 and 0020 (Droid-VM/UniXNU patches/metal2vulkan) have them on its own translator stack, not this one.
+    ROOT / 'patches/metal2vulkan-macos/0007-hold-back-and-trim-kept-memory.patch',
 ]
 pin = '555b13d57e09bff70996a88cff64f1275256d5cf'
 

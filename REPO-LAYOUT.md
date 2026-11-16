@@ -104,7 +104,7 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 | `droidvm-display/` | UniXNU-droidvm 的 virtio-gpu 源 | 0001 |
 | `droidvm-gpu/` | `NativeAdreno/`、`UniXNU-droidvm/` | DroidVMGpu（现只负责发布），由本地分支 `droidvm-macos` 的 format-patch 导出 |
 | `mesa-macos/` | Turnip（mesa-work） | 0001 日志、0002 virtgpu 后端找 AGXAccelerator；构建时 apply、结束时 reverse |
-| `metal2vulkan-macos/` | metal2vulkan（bridge，固定在 555b13d） | 0003–0005 反射与 swizzle 修正、0006 内存池块上限 16 MiB；列表在 `build-metal-bridge-macos.py` 的 `PATCHES` |
+| `metal2vulkan-macos/` | metal2vulkan（bridge，固定在 555b13d） | 打在 AdrenoMetal 累积补丁 0046 之上：0003–0005 反射与 swizzle 修正、0006 内存池块上限 16 MiB、0007 内存压力下不预留 + 按空闲清理（NativeMetal 935c468 的 bridge 要用）；列表在 `build-metal-bridge-macos.py` 的 `PATCHES` |
 | `drivers/` | UniXNU 驱动 | ArmCpu 等 |
 | `darwinboot-*.patch` | DarwinBoot | arm64e、512 MB 内核与内存回收 |
 
@@ -137,8 +137,8 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 | 目录 | 来源 | 用途 |
 |---|---|---|
 | `xnu-12377/` | apple-oss-distributions/xnu | 内核；分支 `k27`（当前）、`k27-unlayered`（旧史）、`x12377-*` |
-| `UniXNU/` | Droid-VM/UniXNU（分支 `macos-droidvm`） | UniXNU 主树；`drivers/NativeMetal` 是独立仓库（Droid-VM/NativeMetal，本地分支 `macos-hackintosh` = `f4ce342` + `a9531ab`）；`drivers/NativeAdreno`；`.cache/gpu-reference/metal2vulkan` 是 bridge 的翻译器源码 |
-| `UniXNU-turnip/` | UniXNU 的工作树，固定在 Droid-VM/UniXNU `wip/droidvm` `ef4486d` | 提供 Turnip 的 mesa（`.cache/mesa-work` = Droid-VM/mesa `cecc0e9` + 18 个补丁，手动 apply）和板级 `patches/metal2vulkan` 0011–0022 |
+| `UniXNU/` | Droid-VM/UniXNU（分支 `macos-droidvm`） | UniXNU 主树；`drivers/NativeMetal` 是独立仓库（Droid-VM/NativeMetal，本地分支 `macos-hackintosh` = `805ea2b`：Droid-VM `wip/hackintosh` 935c468 + AdrenoMetal main 9a9da56 的合并）；`drivers/NativeAdreno`；`.cache/gpu-reference/metal2vulkan` 是 bridge 的翻译器源码 |
+| `UniXNU-turnip/` | UniXNU 的工作树，固定在 Droid-VM/UniXNU `wip/droidvm` `0f7b62a` | 提供 Turnip 的 mesa（`.cache/mesa-work` = Droid-VM/mesa `cecc0e9` + `adreno-compiler-inputs.json` 记录的 33 个补丁，手动 apply）；其板级 `patches/metal2vulkan` 针对板子自己的翻译器栈，bridge 不用 |
 | `UniXNU-droidvm/` | Droid-VM/UniXNU-droidvm | 板级源：VT（`VT_REF`）、virtio-gpu（`VGPU_REF`）；本地分支 `droidvm-macos` 供 DroidVMGpu 导出补丁 |
 | `edk2/`、`GunyahBootPkg/` | edk2-gunyah、unixnu-droidvm-ci | 固件（GOP、`edk2-macos.fd`） |
 | `IONetworkingFamily/` | apple-oss-distributions | DroidVMEthernet 用的头文件 |
