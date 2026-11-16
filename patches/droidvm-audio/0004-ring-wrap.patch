@@ -1,0 +1,41 @@
+A period past the ring's end: the ring is 8192 frames and a period 240, which 8192 is not a multiple of, so one period in 34
+started 32 frames before the end and the engine read (speaker) or wrote (mic) 208 frames past the ring, into whatever page
+followed it. 11-08: the speaker's read ran into an unmapped page, a kernel data abort in droidvm_snd_play's memcpy. Such a
+period now goes through a buffer of its own, its frames past the end taken from (or put into) the ring's start.
+
+--- a/DroidVMAudio.cpp
++++ b/DroidVMAudio.cpp
+@@ -314,14 +314,28 @@
+         const uint64_t deadline = startTime + absolute(done + PeriodFrames);
+         if (mach_absolute_time() > deadline + absolute(PeriodFrames)) droidvm_audio_late = droidvm_audio_late + 1;
+         else clock_delay_until(deadline);
+-        int16_t *at = buffer + uint32_t(done % RingFrames) * ch;
++        // A period may run past the ring's end (8192 is not a multiple of 240): its frames past the end are the ring's first
++        // ones. Such a period goes through a buffer of its own, in two parts.
++        const uint32_t first = uint32_t(done % RingFrames), head = RingFrames - first < PeriodFrames ? RingFrames - first : PeriodFrames;
++        int16_t *at = buffer + first * ch;
++        int16_t period[PeriodFrames * OutputChannels];
++        int16_t *frames = head == PeriodFrames ? at : period;
+         if (isInput) {
+-            const uint32_t captured = droidvm_snd_capture(at, PeriodFrames);
+-            if (captured < PeriodFrames) bzero(at + captured * ch, (PeriodFrames - captured) * 2 * ch);
++            const uint32_t captured = droidvm_snd_capture(frames, PeriodFrames);
++            if (captured < PeriodFrames) bzero(frames + captured * ch, (PeriodFrames - captured) * 2 * ch);
++            if (frames == period) {
++                memcpy(at, period, head * 2 * ch);
++                memcpy(buffer, period + head * ch, (PeriodFrames - head) * 2 * ch);
++            }
+             droidvm_audio_captured = droidvm_audio_captured + captured;
+         } else {
+-            const uint32_t played = droidvm_snd_play(at, PeriodFrames);
+-            bzero(at, PeriodFrames * 2 * ch);
++            if (frames == period) {
++                memcpy(period, at, head * 2 * ch);
++                memcpy(period + head * ch, buffer, (PeriodFrames - head) * 2 * ch);
++            }
++            const uint32_t played = droidvm_snd_play(frames, PeriodFrames);
++            bzero(at, head * 2 * ch);
++            bzero(buffer, (PeriodFrames - head) * 2 * ch);
+             droidvm_audio_played = droidvm_audio_played + played;
+         }
+         done += PeriodFrames;
