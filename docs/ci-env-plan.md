@@ -199,3 +199,11 @@ kernel、bridge 是增量构建（make 对每个依赖都做 stat，所以依赖
     磁盘工具、IPSW 工具、引导程序）、`setup-env.py sdks`（只装 SDK，bridge 用）、`build-droidvm-gpu.py --export-only`
     （只导出补丁后的 DroidVMGpu 源码，Turnip 要它的头文件）、composite action `.github/actions/host`（宿主准备，
     导出 `MACOS_FDT`、`INPUTS_KEY`）。ccache 按 job 分键（`ccache-kernel-`、`ccache-turnip-`）。
+- 2026-11-16：首次全流程跑通（run 43858746405，第 3 次运行）：总时长 23 分钟（inputs 命中 Release 12 s，kernel 5 分钟，
+  turnip 3 分钟，bridge 10 分钟 → plugin 2 分钟，image 11 分钟）；image artifact 13.2 GB（7 块），data-store.img 48 GB 稀疏、
+  实占 20 GB。修过的问题：runner 没有不带版本号的 `llvm-ar`（开发机上指向 LLVM 21；host action 现把 `/usr/lib/llvm-21/bin`
+  放到 PATH 前面）；Ubuntu 24.04 的 AppArmor 默认禁止非特权用户命名空间（`unshare -r` 跑 mkapfs），host action 里关掉。
+  - 与开发机对比：插件主程序、Shader Cache 两个程序 CDHash 相同；Turnip 不同：开发机是 Ubuntu 26.04 的 clang 21.1.8
+    （6ubuntu1），runner 是 apt.llvm.org 的 21.1.8，版本相同但构建不同，生成代码有差别（`__const` 差 0x40 字节，之后整体错位），
+    source id 里含 `clang --version` 全文，所以 pipelineCacheUUID 也不同。要逐字节一致需在 runner 上用同一份 LLVM 构建。
+  - 待改进：bridge 的 cargo target 缓存命中但仍全量重编（新检出的源码和新装的 rust-src 比缓存的产物新，cargo 按 mtime 判过期）。
