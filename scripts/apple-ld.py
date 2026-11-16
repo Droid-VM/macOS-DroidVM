@@ -81,6 +81,8 @@ def link(arguments, raw=False):
     else:
         command = [f'{DARLING_TOOLS}/bin/ld-classic', '-arch', 'arm64e', '-platform_version', 'macos', '14.0', '26.1',
                    '-syslibroot', darling(SDK), '-F', darling(ROOT / 'overlay/metal/frameworks'), *arguments]
+    # The debug map's object paths relative to the workspace: the same binary wherever the workspace is (CI, scripts/setup-env.py)
+    command[1:1] = ['-oso_prefix', darling(ROOT) + '/']
     # Darling's shell takes one command line: quote every argument; Darling's /usr/lib lacks libcodedirectory, the CLT's has it
     script = f'cd {darling(os.getcwd())} && DYLD_LIBRARY_PATH={DARLING_TOOLS}/lib exec ' + ' '.join(
         "'" + a.replace("'", "'\\''") + "'" for a in command)

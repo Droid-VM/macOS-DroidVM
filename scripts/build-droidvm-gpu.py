@@ -60,4 +60,4 @@ includes = [adreno, SRC / 'kits/ArmSmmu4K', SRC / 'kits/AdrenoPM4', board, GRAPH
 print(f'droidvm-gpu: UniXNU-droidvm {REF}, NativeAdreno {PINS["drivers/NativeAdreno"][:7]}, '
       f'{len(list((PATCHES / "NativeAdreno").glob("*.patch")))} + {len(list((PATCHES / "UniXNU-droidvm").glob("*.patch")))} patches')
 subprocess.run(['python3', str(ROOT / 'scripts/build-native-kext.py'), 'DroidVMGpu', *map(str, sources),
-                *[f'-I{path}' for path in includes]], check=True)
+                *[f'-I{path}' for path in includes], '--obj', 'k27-obj'], check=True)   # the k27 tree's flags, as every other kext

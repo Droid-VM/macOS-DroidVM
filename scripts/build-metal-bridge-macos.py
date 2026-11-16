@@ -73,23 +73,36 @@ runtime_id = os.environ.get('NMB_RUNTIME_ID', 'upstream-rate-map-20261113')
 # the runtime's example library and function-constant fixture, assembled to AIR for the bridge's self-tests
 air, fc_air = OUT / 'runtime_examples.air', OUT / 'function_constant.air'
 fixtures = SOURCE / 'crates/metal2vulkan-validation/fixtures/public'
-subprocess.run([str(LLVM / 'llvm-as'), '-o', str(air), str(fixtures / 'examples/runtime_examples.ll')], check=True)
-subprocess.run([str(LLVM / 'llvm-as'), '-o', str(fc_air), str(fixtures / 'kernel_function_constant_gate_fold.ll')], check=True)
+# llvm-as names the module after its input as given: relative names keep the workspace's path out of the embedded AIR
+subprocess.run([str(LLVM / 'llvm-as'), '-o', str(air), 'examples/runtime_examples.ll'], cwd=fixtures, check=True)
+subprocess.run([str(LLVM / 'llvm-as'), '-o', str(fc_air), 'kernel_function_constant_gate_fold.ll'], cwd=fixtures, check=True)
 # the GPU scanout's half-float conversion kernel (NativeMetal shaders/scanout_convert.ll, GpuScanoutPresenter.h)
 scanout_air = OUT / 'scanout_convert.air'
-subprocess.run([str(LLVM / 'llvm-as'), '-o', str(scanout_air), str(NATIVE / 'shaders/scanout_convert.ll')], check=True)
+subprocess.run([str(LLVM / 'llvm-as'), '-o', str(scanout_air), 'shaders/scanout_convert.ll'], cwd=NATIVE, check=True)
 manifest = OUT / 'Cargo.toml'
+# The same library wherever the workspace is (CI, setup-env.py): the sources are reached through links inside this workspace, so cargo
+# hashes their packages by relative path (an absolute one went into every crate's metadata and symbol), and trim-paths drops the
+# workspace, registry and sysroot paths from panic locations and debug information.
+links = OUT / 'src'
+links.mkdir(parents=True, exist_ok=True)
+for name, target in (('NativeMetal', NATIVE), ('metal2vulkan', SOURCE)):
+    if (links / name).is_symlink():
+        (links / name).unlink()
+    (links / name).symlink_to(target)
 manifest.write_text('\n'.join([
-    '[package]', 'name = "native-metal-bridge"', 'version = "0.1.0"', 'edition = "2024"', '[workspace]',
-    '[lib]', 'crate-type = ["staticlib"]', 'path = ' + json.dumps(str(NATIVE / 'bridge/NativeMetalBridge.rs')),
+    'cargo-features = ["trim-paths"]',
+    '[package]', 'name = "native-metal-bridge"', 'version = "0.1.0"', 'edition = "2024"', '[workspace]', 'exclude = ["src"]',   # the translator's crates keep their own workspace
+    '[lib]', 'crate-type = ["staticlib"]', 'path = "src/NativeMetal/bridge/NativeMetalBridge.rs"',
     '[dependencies]',
-    'metal2vulkan = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan')) + ', features = ["ash"] }',
-    'metal2vulkan-runtime = { path = ' + json.dumps(str(SOURCE / 'crates/metal2vulkan-runtime')) + ' }',
+    'metal2vulkan = { path = "src/metal2vulkan/crates/metal2vulkan", features = ["ash"] }',
+    'metal2vulkan-runtime = { path = "src/metal2vulkan/crates/metal2vulkan-runtime" }',
     'libc = "0.2"',
     # WindowServer's update thread spends much of a frame in the runtime's small functions across the translator's crates: one
     # optimisation unit with link-time optimisation inlines them across crate boundaries (as build-adreno-metal-bridge.py)
-    '[profile.release]', 'panic = "unwind"', 'debug = 1', 'lto = "fat"', 'codegen-units = 1', '',
+    '[profile.release]', 'panic = "unwind"', 'debug = 1', 'lto = "fat"', 'codegen-units = 1', 'trim-paths = "all"', '',
 ]))
+# The crates.io versions are configs/metal-bridge.Cargo.lock's (cargo build --locked): a new resolution took newer ones
+shutil.copyfile(ROOT / 'configs/metal-bridge.Cargo.lock', OUT / 'Cargo.lock')
 key = TRIPLE.replace('-', '_')
 env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentication=-init-fini', NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), NMB_SCANOUT_AIR=str(scanout_air), MACOSX_DEPLOYMENT_TARGET='14.0', SDKROOT=str(SDK),
            **{f'CC_{key}': str(LLVM / 'clang'), f'CXX_{key}': str(LLVM / 'clang++'), f'AR_{key}': str(LLVM / 'llvm-ar'),
@@ -100,7 +113,8 @@ env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, RUSTFLAGS='-Zpointer-authentic
 target_dir = OUT / 'target'
 log = OUT / 'build.log'
 with log.open('w') as stream:
-    result = subprocess.run(['cargo', '+nightly', 'build', '--release', '-Zbuild-std=std,panic_unwind', '-Zjson-target-spec', '--manifest-path',
+    # MACOS_RUST_TOOLCHAIN: CI installs configs/env.lock.json's dated nightly (the dev machine's "nightly" is that one)
+    result = subprocess.run(['cargo', '+' + os.environ.get('MACOS_RUST_TOOLCHAIN', 'nightly'), 'build', '--release', '--locked', '-Zbuild-std=std,panic_unwind', '-Zjson-target-spec', '--manifest-path',
                              str(manifest), '--target', str(TARGET_SPEC), '--target-dir', str(target_dir)], env=env, stdout=stream, stderr=subprocess.STDOUT,
                             timeout=3600)
 if result.returncode:

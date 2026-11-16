@@ -59,7 +59,8 @@ link_flags = flags + ['--ld-path=' + str(linker)]
 cross = OUT.parent / 'mesa-tu-macos.cross'
 cross.write_text(
     '[binaries]\nc = %r\ncpp = %r\nobjc = %r\nar = %r\nstrip = %r\npkg-config = \'/usr/bin/false\'\n'
-    % (str(LLVM / 'clang'), str(LLVM / 'clang++'), str(LLVM / 'clang'), str(LLVM / 'llvm-ar'), str(STRIP)) +
+    % (*[[os.environ['MACOS_CCACHE'], str(LLVM / name)] if os.environ.get('MACOS_CCACHE') else str(LLVM / name)   # ccache (CI)
+         for name in ('clang', 'clang++', 'clang')], str(LLVM / 'llvm-ar'), str(STRIP)) +
     "[host_machine]\nsystem = 'darwin'\ncpu_family = 'aarch64'\ncpu = 'arm64'\nendian = 'little'\n"
     "[properties]\nneeds_exe_wrapper = true\n[built-in options]\n" +
     ''.join('%s = %r\n' % (k, flags) for k in ('c_args', 'cpp_args', 'objc_args')) +
@@ -76,9 +77,13 @@ options = ['-Dgallium-drivers=', '-Dvulkan-drivers=freedreno', '-Dfreedreno-kmds
 # compiler and the options, the pack itself left out (it would make the identity circular). A pack from any other build is refused.
 LOCAL_PATCHES = sorted((ROOT / 'patches/mesa-macos').glob('*.patch'))
 profile = dict(mesa_revision=pins['mesa']['commit'], target='macos-arm64e',
-               source_diff_sha256=hashlib.sha256(subprocess.check_output(['git', '-C', str(SOURCE), 'diff', 'HEAD', '--binary'])).hexdigest(),
+               # --full-index: abbreviated blob names grow with the object count (a shallow clone's are shorter); paths of the workspace
+               # as $ROOT: the identity is the same wherever the workspace is (scripts/setup-env.py, CI)
+               source_diff_sha256=hashlib.sha256(subprocess.check_output(['git', '-C', str(SOURCE), 'diff', 'HEAD', '--binary',
+                                                                          '--full-index'])).hexdigest(),
                local_patches=[hashlib.sha256(patch.read_bytes()).hexdigest() for patch in LOCAL_PATCHES],
-               compiler=subprocess.check_output([str(LLVM / 'clang'), '--version'], text=True), options=options)
+               compiler=subprocess.check_output([str(LLVM / 'clang'), '--version'], text=True),
+               options=[option.replace(str(ROOT), '$ROOT') for option in options])
 source_id = hashlib.sha256(json.dumps(profile, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 pack_header = ''
 if args.builtin_pack:
