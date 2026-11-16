@@ -82,6 +82,26 @@ def main():
             command += ["-fuse-ld=" + config["ld"]]
         # Newer UniXNU builders pass -Werror with -Wno-<flag> names the older Apple clang in Darling does not know.
         tail = ["-Wno-error=unknown-warning-option"] if compile_only else []
+        # MACOS_CCACHE (macos: the ccache binary) caches native compiles. ccache refuses -MJ (the compile records the kernel's
+        # kexts take their flags from), so the record is written by the driver alone (-fdriver-only: the same record, that option
+        # in it removed) and the compile goes through ccache without it.
+        ccache = os.environ.get("MACOS_CCACHE")
+        if ccache and "-c" in args and not command[0].startswith("/Volumes/"):
+            record, rest, index = None, [], 0
+            while index < len(args):
+                if args[index] == "-MJ":
+                    record, index = args[index + 1], index + 2
+                    continue
+                if args[index].startswith("-MJ"):
+                    record = args[index][3:]
+                else:
+                    rest.append(args[index])
+                index += 1
+            if record:
+                subprocess.run([*command, *args, *tail, "-fdriver-only"], check=True)
+                text = Path(record).read_text()
+                Path(record).write_text(text.replace('"-fdriver-only", ', ''))
+            execute([ccache, *command, *rest, *tail])
         execute([*command, *args, *tail])
     if name == "xcrun":
         while args and args[0] in ("-sdk", "--sdk", "-verbose", "--verbose"):

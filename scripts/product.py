@@ -12,6 +12,7 @@ configs/product-NAME.json (default k27), and each step runs the existing script 
   product.py boot [--also-trust FILE]  trust cache and boot disk, from nothing                       -> boot.output/{boot.img,manifest.json}
   product.py build                     kc, gpu, boot
   product.py full                      kernel, kexts, kc, gpu --deps, boot (the bridge beside the other steps)
+  product.py stage [DIR] [--user N:P]  a new install's Data (disk.dir): the bundles, the user, disk.stage's settings
   product.py verify [BOOT_IMG]         compare boot.output/boot.img with another boot disk (default: the phone's), payload by payload
   product.py install-plugin GUEST      put gpu.bundle into the running guest (ssh USER@HOST; MACOS_GUEST_PASSWORD) when it differs
   product.py deploy                    push boot.img and swap it in (the one before stays as boot.img.prev); the next start boots it
@@ -30,7 +31,7 @@ there instead, the kernel collection included, and touches nothing else.
 disk makes a disk for a new VM (new volume UUIDs each time); the VM in use keeps the one it was installed with, whose disk.json
 (artifacts/TAG/disk) names the root the boot disk looks for. Putting a new disk on the phone is droidvm-app.py install, then prepare.
 
-Not steps here: the source trees (prepare-sources.py) and the VM's registration (droidvm-app.py prepare). REPO-LAYOUT.md has the whole path.
+Not steps here: the build environment and source trees (setup-env.py) and the VM's registration (droidvm-app.py prepare). REPO-LAYOUT.md has the whole path.
 """
 import argparse
 import hashlib
@@ -85,7 +86,7 @@ def inputs(config, env, output):
     out = (ROOT / output).resolve() if output else ROOT / f'artifacts/{config["tag"]}'
     collection = out / 'kc27.bin' if output else ROOT / config['kc']['source']
     trust = out / 'boot/kernel.macho.trustcache'
-    ipsw = os.environ.get('IPSW', 'ipsw')
+    ipsw = os.environ.get('IPSW') or (str(ROOT / 'toolchains/ipsw/ipsw') if (ROOT / 'toolchains/ipsw/ipsw').exists() else 'ipsw')
     out.mkdir(parents=True, exist_ok=True)
     times_path = out / 'inputs-times.json'
     times = json.loads(times_path.read_text()) if times_path.exists() else {}
@@ -405,6 +406,9 @@ def main():
     sub.add_parser('boot').add_argument('--also-trust', action='append', default=[], metavar='FILE')
     sub.add_parser('verify').add_argument('image', nargs='?', type=Path)
     sub.add_parser('install-plugin').add_argument('guest')
+    stage = sub.add_parser('stage')
+    stage.add_argument('dir', nargs='?')
+    stage.add_argument('--user', default=os.environ.get('MACOS_USER'), metavar='NAME:PASSWORD')
     args = parser.parse_args()
     config, env = load_config(args.product)
     if args.cmd == 'env':
@@ -416,6 +420,13 @@ def main():
         run(f'python3 scripts/make-macos-disk.py {shlex.quote(args.dir)}', env,
             **({'MACOS_ARTIFACTS': str((ROOT / args.inputs).resolve())} if args.inputs else {}))
         print(f'{time.monotonic() - start:.0f} s')
+    elif args.cmd == 'stage':
+        # a new install's Data volume (product.py disk DIR): the bundles the boot disk trusts, the user, the configured settings
+        disk = ROOT / (args.dir or config['disk']['dir'])
+        command = ['python3', 'scripts/stage-gpu-plugin.py', '--base', str(disk / 'scratch-data.img'), '--disk', str(disk / 'data-store.img'),
+                   *config['disk']['stage'], '--user', args.user or config['disk']['user'],
+                   *[str(bundle) for bundle, _, _ in bundles(config)]]
+        run(' '.join(shlex.quote(part) for part in command), env)
     elif args.cmd == 'kernel':
         run('bash k27/build-kernel27.sh', env)
     elif args.cmd == 'kexts':

@@ -66,6 +66,22 @@
   "output": "out/k27/kc-k27.bin",
   "keep": "configs/kc-keep.txt"
  },
+ "disk": {
+  "dir": "artifacts/27.2/disk",
+  "comment": "a new install (product.py disk DIR, then stage DIR): the Data volume gets the plugin and apps, the user (MACOS_USER or --user over \"user\") and the \"stage\" settings",
+  "stage": [
+   "--setup-done",
+   "--disable-job",
+   "com.apple.apsd",
+   "--disable-job",
+   "com.apple.AppSSODaemon",
+   "--disable-job",
+   "com.apple.filesystems.fskitd",
+   "--disable-job",
+   "com.apple.fairplayd"
+  ],
+  "user": "droid:droid"
+ },
  "env": {
   "MACOS_TAG": "27.2",
   "MACOS_PCIE": "1",
