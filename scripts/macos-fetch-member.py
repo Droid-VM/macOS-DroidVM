@@ -53,14 +53,46 @@ def fetch(url, etag, start, end, total):
     raise SystemExit(f'range {start}-{end} failed')
 
 
+CRC_POLY = 0xedb88320
+
+
+def crc_multiply(a, b):
+    """a * b modulo the CRC-32 polynomial (reflected), as zlib's multmodp."""
+    m, p = 1 << 31, 0
+    while True:
+        if a & m:
+            p ^= b
+            if not a & (m - 1):
+                return p
+        m >>= 1
+        b = (b >> 1) ^ CRC_POLY if b & 1 else b >> 1
+
+
+def crc32_combine(crc1, crc2, length2):
+    """The CRC-32 of A+B from those of A and B (zlib's crc32_combine): crc1 times x^(8 * length2), plus crc2."""
+    power, square, n = 1 << 31, 1 << 30, length2 * 8   # x^0, x^1
+    while n:
+        if n & 1:
+            power = crc_multiply(square, power)
+        square = crc_multiply(square, square)
+        n >>= 1
+    return crc_multiply(power, crc1) ^ crc2
+
+
 def parallel_fill(spec_ipsw, etag, start, size, part, jobs):
-    """Fetch the chunks of a stored member concurrently into PART (preallocated); PART.chunks lists the finished chunk indices.
-    A contiguous prefix left by an earlier sequential run counts as finished. The sequential pass that follows verifies everything."""
+    """Fetch the chunks of a stored member concurrently into PART (preallocated); PART.chunks lists the finished chunk indices, each
+    with the CRC-32 of its bytes. A contiguous prefix left by an earlier sequential run counts as finished (its CRCs unknown).
+    Returns the member's CRC-32, combined from the chunks', or None when a chunk's is unknown (the sequential pass computes it)."""
     chunks = (size + CHUNK - 1) // CHUNK
     marks = part.with_name(part.name + '.chunks')
-    done = set()
+    done, crcs = set(), {}
     if marks.exists():
-        done = {int(line) for line in marks.read_text().split()}
+        for line in marks.read_text().splitlines():
+            fields = line.split()
+            if fields:
+                done.add(int(fields[0]))
+                if len(fields) > 1:
+                    crcs[int(fields[0])] = int(fields[1], 16)
     elif part.exists():
         done = set(range(min(part.stat().st_size, size) // CHUNK))
     if not part.exists() or part.stat().st_size != size:
@@ -73,10 +105,12 @@ def parallel_fill(spec_ipsw, etag, start, size, part, jobs):
         begin = index * CHUNK
         end = min(begin + CHUNK, size) - 1
         data = fetch(spec_ipsw['url'], etag, start + begin, start + end, spec_ipsw['filesize'])
+        crc = zlib.crc32(data)
+        os.pwrite(handle_fd, data, begin)
         with lock:
-            os.pwrite(handle_fd, data, begin)
+            crcs[index] = crc
             with marks.open('a') as record:
-                record.write(f'{index}\n')
+                record.write(f'{index} {crc:08x}\n')
             counter[0] += 1
             print(f'{counter[0] / chunks:6.1%}', end='\r', flush=True)
 
@@ -86,6 +120,12 @@ def parallel_fill(spec_ipsw, etag, start, size, part, jobs):
             list(pool.map(one, [index for index in range(chunks) if index not in done]))
         os.fsync(handle_fd)
     marks.unlink(missing_ok=True)
+    if len(crcs) != chunks:
+        return None
+    crc = 0
+    for index in range(chunks):
+        crc = crc32_combine(crc, crcs[index], min(CHUNK, size - index * CHUNK))
+    return crc
 
 
 def main():
@@ -128,9 +168,14 @@ def main():
     part = final.with_name(final.name + '.part')
     crc, digest, written = 0, hashlib.new(algorithm), 0
     stored = entry.compress_type == 0
+    combined = None
     if stored and args.jobs > 1:
-        parallel_fill(spec_ipsw, etag, start, entry.compress_size, part, args.jobs)
-    if part.exists() and stored:
+        combined = parallel_fill(spec_ipsw, etag, start, entry.compress_size, part, args.jobs)
+    # An AEA member is checked by its CRC only (below), which the chunks' CRCs give without reading the 10 GB again
+    unread = combined is not None and final.name.endswith('.aea')
+    if unread:
+        crc, written, digest = combined, entry.file_size, None
+    elif part.exists() and stored:
         with part.open('rb') as old:
             while block := old.read(1 << 24):
                 crc = zlib.crc32(block, crc)
@@ -143,7 +188,7 @@ def main():
     inflater = zlib.decompressobj(-15)
     position = written if stored else 0
     with part.open('ab' if stored else 'wb') as handle:
-        while position < entry.compress_size:
+        while position < entry.compress_size and not unread:
             end = min(position + CHUNK, entry.compress_size) - 1
             data = fetch(spec_ipsw['url'], etag, start + position, start + end, spec_ipsw['filesize'])
             position = end + 1
@@ -164,14 +209,14 @@ def main():
         os.fsync(handle.fileno())
     if written != entry.file_size or crc != entry.CRC:
         raise SystemExit(f'size/CRC mismatch: {written} {crc:#x} vs {entry.file_size} {entry.CRC:#x}')
-    matches = digest.hexdigest() == digest_hex
+    matches = digest is not None and digest.hexdigest() == digest_hex
     if not matches and not final.name.endswith('.aea'):
         raise SystemExit(f'{algorithm} differs from the Apple manifest digest: {digest.hexdigest()}')
     # An AEA archive's manifest digest is not the hash of the encrypted file (observed on macOS 27: the ZIP CRC32 matched and the
     # sha384 did not); its integrity is checked by the AEA decryption and the digest of the decrypted DMG.
     part.rename(final)
     print(json.dumps({'file': str(final.relative_to(ROOT)), 'size': written, 'crc32': f'{crc:#010x}',
-                      algorithm: digest.hexdigest(), 'matches_apple_manifest_digest': matches}, indent=2))
+                      algorithm: digest.hexdigest() if digest else 'not computed (AEA)', 'matches_apple_manifest_digest': matches}, indent=2))
 
 
 if __name__ == '__main__':
