@@ -1,0 +1,63 @@
+From f73fe08dbf8610823553b88daa5e91580b33eb9d Mon Sep 17 00:00:00 2001
+From: lateautumn233 <lateautumn233@foxmail.com>
+Date: Sun, 15 Nov 2026 06:33:54 -0500
+Subject: [PATCH] k27: hide the VMM from named processes
+ (vmm-hidden=NAME[,NAME...], default Weather)
+
+VFX reads kern.hv_vmm_present and, under a VMM, makes no argument encoder: Weather's materials then bind no sampler or texture and its sky draws no cloud. As VMHide's process filter does, the named processes read 0; every other process, the render server among them, still reads 1. Global 0 is not an option: about 65 shared-cache images read the sysctl, QuartzCore alone branches on IsVirtualDevice in 39 functions.
+
+Verified on the App VM: sysctl reads 1, the same binary named Weather reads 0, and Weather opened normally (no NATIVE_METAL_* environment) shows moving clouds.
+---
+ bsd/kern/hvg_sysctl.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/bsd/kern/hvg_sysctl.c b/bsd/kern/hvg_sysctl.c
+index fb0b67c..7259c8c 100644
+--- a/bsd/kern/hvg_sysctl.c
++++ b/bsd/kern/hvg_sysctl.c
+@@ -30,6 +30,10 @@
+ #include <libkern/libkern.h>
+ #include <kern/hvg_hypercall.h>
+ #include <stdbool.h>
++#if defined(BCM2837)
++#include <sys/proc.h>
++#include <pexpert/pexpert.h>
++#endif
+ 
+ /* Translate hypercall error code to syscall error code */
+ static int
+@@ -147,6 +151,34 @@ sysctl_vmm_present(__unused struct sysctl_oid *oidp,
+ #endif
+ 
+ 	vmm_present = !!vmm_present;
++#if defined(BCM2837)
++	/*
++	 * The board's processes that read no VMM (boot-arg vmm-hidden=NAME[,NAME...], default Weather; empty for none), as VMHide's
++	 * filter answers them: under kern.hv_vmm_present VFX makes no argument encoder, so Weather's materials bind no sampler or
++	 * texture and its sky draws no cloud. Every other process, the render server among them, still reads 1.
++	 */
++	if (vmm_present) {
++		static char hidden[128];
++		static int hidden_read;
++		if (!hidden_read) {
++			if (!PE_parse_boot_argn("vmm-hidden", hidden, sizeof(hidden))) {
++				strlcpy(hidden, "Weather", sizeof(hidden));
++			}
++			hidden_read = 1;
++		}
++		const char *name = proc_best_name(current_proc());
++		size_t name_len = strlen(name);
++		for (const char *at = hidden; *at;) {
++			const char *comma = strchr(at, ',');
++			size_t len = comma ? (size_t)(comma - at) : strlen(at);
++			if (len == name_len && !strncmp(at, name, name_len)) {
++				vmm_present = 0;
++				break;
++			}
++			at += len + (comma != NULL);
++		}
++	}
++#endif /* BCM2837 */
+ 	return SYSCTL_OUT(req, &vmm_present, sizeof(vmm_present));
+ }
+ 

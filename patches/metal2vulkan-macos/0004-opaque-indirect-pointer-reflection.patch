@@ -1,0 +1,27 @@
+Preserve opaque indirect pointers using Metal reflection semantics.
+
+--- a/crates/metal2vulkan/src/reflection/derive.rs
++++ b/crates/metal2vulkan/src/reflection/derive.rs
+@@ -598,8 +598,20 @@
+                     ParamRole::Sampler { .. } => (DataType::Sampler, TypeDetail::Plain),
+                     ParamRole::Buffer(b) | ParamRole::ArgumentBuffer(b) => {
+                         let nested = matches!(ia.role, ParamRole::ArgumentBuffer(_));
+-                        let (size, align) = self.size_align(arg, &ia.ty)?;
+-                        let (pointee, detail) = self.pointee(arg, &ia.ty, b.layout, nested)?;
++                        // AIR may retain an indirect pointer without any pointee metadata.
++                        // Metal reflects it as None with zero size/alignment and no struct,
++                        // while preserving the other argument-buffer members.
++                        let (size, align, pointee, detail) = if !nested
++                            && b.layout.is_none()
++                            && ia.ty.size.is_none()
++                            && ia.ty.align.is_none()
++                        {
++                            (0, 0, DataType::None, TypeDetail::Plain)
++                        } else {
++                            let (size, align) = self.size_align(arg, &ia.ty)?;
++                            let (pointee, detail) = self.pointee(arg, &ia.ty, b.layout, nested)?;
++                            (size, align, pointee, detail)
++                        };
+                         let pointer = PointerType::new(
+                             pointee,
+                             binding_access(b.access),

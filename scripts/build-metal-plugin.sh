@@ -10,9 +10,8 @@ if [ "${1:-}" != --no-deps ]; then
   python3 scripts/build-turnip-macos.py
   python3 scripts/build-metal-bridge-macos.py
 fi
-# NativeMetal: local branch macos-hackintosh, Droid-VM/NativeMetal wip/hackintosh 0e7550a (2026-11-08) with a9531ab (two-plane YCbCr
-# surface textures converted once per contents) and its refresh by the surface's seed and luma sum rebased on top
-U=sources/UniXNU/drivers/NativeMetal
+# NATIVE_METAL_SOURCE selects the integrated frontend and the matching bridge sources.
+U=${NATIVE_METAL_SOURCE:-sources/UniXNU/drivers/NativeMetal}
 O=out/metal/plugin
 B=$O/NativeAdrenoMetal.bundle/Contents
 rm -rf $O/NativeAdrenoMetal.bundle
@@ -26,16 +25,11 @@ python3 - $U/NativeBridgeMetalFrontend.mm $O/frontend.mm <<'PY'
 import sys
 s = open(sys.argv[1]).read()
 for old, new in [
-    (' NBHeap *heap=[NBHeap new];heap.handle=handle;',
-     ' NBLOG(@"native-metal: heap %lu bytes type %ld options %lx -> %llu",(unsigned long)d.size,(long)d.type,(unsigned long)d.resourceOptions,'
-     'nmb_heap_size(handle));\n NBHeap *heap=[NBHeap new];heap.handle=handle;'),
-    # The encoding thread (NativeMetal fd9fbe1: the runtime's half of each encoder call on a thread of its own, fed in batches) in
-    # WindowServer as in backboardd, the render server it was made for; /private/var/ngpu/debug/no-encode-thread turns it off.
-    # (By name: NativeMetal b0d6a07 makes the render server a role the host states, native_bridge_metal_set_render_server, which
-    # would also give WindowServer the render server's other policies -- round-robin 54, display hold, ending after a GPU loss.)
-    ('                      (isRenderServer() || access("/private/var/ngpu/debug/encode-thread",F_OK)==0);',
-     '                      (isRenderServer() || !strcmp(getprogname(),"WindowServer") ||\n'
-     '                       access("/private/var/ngpu/debug/encode-thread",F_OK)==0);'),
+    # Only the scanout compositor needs the 8-bit framebuffer restriction. Applications
+    # such as Weather render XR10 CAMetalLayers into surfaces consumed by WindowServer.
+    # Hiding XR10 from them makes QuartzCore throw CAMetalLayerInvalid at setPixelFormat:.
+    ('if(!strcmp(name,"supportsExtendedXR10Formats") && (!strstr(getprogname(),"Poster") || !strcmp(getprogname(),"PosterBoard")))value=0;',
+     'if(!strcmp(name,"supportsExtendedXR10Formats") && !strcmp(getprogname(),"WindowServer"))value=0;'),
     # The runtime converts a two-plane YCbCr texture on the CPU at every encoder that uses it (planes copied to staging, then a
     # dispatch): WindowServer's 4096x2160 wallpaper frames (YCBCR8_444_2P) took the 4 GiB guest into jetsam. Above 1 Mpx it is
     # refused here; the server has no other way to draw the wallpaper (refused, the desktop is never repainted where windows moved
@@ -51,25 +45,24 @@ for old, new in [
      ' if(inPlace){static std::atomic<unsigned> made;if(made++<4)NBLOG(@"native-metal: surface texture %lux%lu YCbCr format %lu read in place",'
      '(unsigned long)d.width,(unsigned long)d.height,(unsigned long)d.pixelFormat);}\n'
      ' if(id<MTLTexture> converted=inPlace?nil:convertedYCbCrTexture(self,d,surface,plane))return converted;\n'),
-    # Such a texture reads the video frame's own pages when the GPU runs a pass that samples it (no copy), so its surface is counted in
-    # use from the commit of each command buffer that binds it until that command buffer completes: a decoder's pool reuses a surface no
-    # one uses, and wrote the next frame into one a lock-screen pass was still reading (black bands a CTU row high). Counted for the
-    # texture's life instead, every pool surface stayed in use (WindowServer keeps a texture of each), and the decoder, out of
-    # surfaces, showed grey frames but for what moved.
+    # Cached compositor textures must not keep IOSurfaces in use for their object lifetime: CAImageQueue cannot retire its
+    # displayed slots while IOSurfaceIsInUse stays true. Count every compositor surface, and in-place video imports in other
+    # clients, from command commit until actual GPU completion (including failed submissions). Recording on the caller thread
+    # also protects queued work before the encoding thread submits it.
     ('@property(nonatomic,strong) NSMutableSet *surfaces;',
      '@property(nonatomic,strong) NSMutableSet *surfaces;\n@property(nonatomic,strong) NSMutableArray *surfacesInUse;'),
-    ('  flushSurfaces(_surfaces);\n  if(gLogTextures)dumpSurfacesOnce(_surfaces,_resourceOwners);\n',
-     '  flushSurfaces(_surfaces);\n'
-     '  if(getenv("METAL2VULKAN_YCBCR_PLANES_ONLY"))for(NBTexture *texture in _surfaces)\n'
-     '   if(texture.surface && (texture.descriptor.format==500 || texture.descriptor.format==505 ||\n'
-     '    texture.descriptor.format==540 || texture.descriptor.format==543)) {\n'
-     '    if(!_surfacesInUse)_surfacesInUse=[NSMutableArray array];\n'
-     '    IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
-     '   }\n'
-     '  if(gLogTextures)dumpSurfacesOnce(_surfaces,_resourceOwners);\n'),
-    (' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[_resourceOwners removeAllObjects];\n',
+    (' surfaceTicket=surfacesync::begin(_surfaces,_writtenSurfaces);',
+     ' if(isRenderServer() || getenv("METAL2VULKAN_YCBCR_PLANES_ONLY"))for(NBTexture *texture in _surfaces)\n'
+     '  if(texture.surface) {\n'
+     '   if(!_surfacesInUse)_surfacesInUse=[NSMutableArray array];\n'
+     '   IOSurfaceIncrementUseCount(texture.surface);[_surfacesInUse addObject:texture];\n'
+     '  }\n'
+     ' surfaceTicket=surfacesync::begin(_surfaces,_writtenSurfaces);'),
+    ('- (void)countUse {if(_surface && !_counted && gCountsSurfaceUse)',
+     '- (void)countUse {if(_surface && !_counted && gCountsSurfaceUse && !isRenderServer())'),
+    (' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[self disown];\n',
      ' for(NBTexture *texture in _surfacesInUse)IOSurfaceDecrementUseCount(texture.surface);\n _surfacesInUse=nil;\n'
-     ' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[_resourceOwners removeAllObjects];\n'),
+     ' [_surfaces removeAllObjects];[_writtenSurfaces removeAllObjects];[self disown];\n'),
     (' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n const uint64_t base=(uintptr_t)IOSurfaceGetBaseAddress(surface),',
      ' NmbTextureDescriptor descriptor;if(!buffer || !textureDescriptor(d,&descriptor))return nil;\n'
      ' if(d.pixelFormat>=500 && d.pixelFormat<600 && (uint64_t)d.width*d.height>1024*1024 &&\n'

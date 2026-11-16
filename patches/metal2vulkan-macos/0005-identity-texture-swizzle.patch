@@ -1,0 +1,25 @@
+Avoid rederiving texel classes and border values for identity texture swizzles.
+
+diff --git a/crates/metal2vulkan/src/metal/texel_format.rs b/crates/metal2vulkan/src/metal/texel_format.rs
+index 602a771e3..d1958be2b 100644
+--- a/crates/metal2vulkan/src/metal/texel_format.rs
++++ b/crates/metal2vulkan/src/metal/texel_format.rs
+@@ -650,7 +650,7 @@ fn two_plane_family(pf: PixelFormat, field: Option<PackedTexels>) -> u32 {
+ /// specialization).
+ pub fn with_border(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> TexelFormat {
+     match texel_format(pf) {
+-        class if !class.has_channels() => class,
++        class if !class.has_channels() || swizzle.is_default() => class,
+         class => TexelFormat(BicubicTexels(class.0).with_border(pf, swizzle).0),
+     }
+ }
+@@ -673,6 +673,9 @@ pub fn heap_class(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> TexelForm
+ /// format's), which keeps the format's class: its field and family.
+ pub fn reads_unswizzled(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> bool {
+     use crate::metal::TextureSwizzle as S;
++    if swizzle.is_default() {
++        return true;
++    }
+     // The class's channels where it states them (a two-plane format's, whatever this crate
+     // holds of it), else the format's.
+     let class = BicubicTexels(texel_format(pf).0);
