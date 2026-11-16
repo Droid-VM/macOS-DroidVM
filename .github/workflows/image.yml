@@ -1,20 +1,28 @@
 name: image
 
-# The k27 product from nothing on a hosted runner: the build environment from public sources (scripts/setup-env.py,
-# configs/env.lock.json), Apple's files from the IPSWs (product.py inputs), a new install (product.py disk, stage) and the boot disk
-# (product.py full). docs/ci-env-plan.md has the design.
+# The k27 product from nothing on hosted runners: the build environment from public sources (scripts/setup-env.py,
+# configs/env.lock.json), Apple's files from the IPSWs (product.py inputs), a new install (product.py disk, stage) and the boot disk.
+# docs/ci-env-plan.md has the design. Six jobs, the builds side by side:
 #
-# Everything holding Apple's files is stored encrypted with the ARTIFACT_KEY secret (scripts/ci-blob.sh: tar | zstd | AES-256 |
-# parts of 1900 MB):
-# - the IPSW inputs (artifacts/TAG without disk/, out/kc/kc27.bin: about 16 GB, too much for the 10 GB of actions/cache) as the
-#   assets of the release inputs-TAG-KEY, KEY a hash of the product's "inputs" and the two IPSW profiles: made once, then downloaded;
-# - the image (boot.img, the new install's data-store.img, scratch-data.img and disk.json, manifests) as the run's artifact
-#   image-TAG-RUN, and with release=true also as the assets of a release.
+#   inputs ──────────────────────────────┬──────────────┐
+#   kernel (kernel, kexts, KC) ──────────│──────────────┤
+#   bridge ──┬── plugin (plugin, apps) ──│──────────────┤
+#   turnip ──┘                           │              ▼
+#                                        └──> image (disk, boot, stage, pack)
+#
+# Everything holding Apple's files is stored encrypted with the ARTIFACT_KEY secret (scripts/ci-blob.sh: tar keeping holes | zstd |
+# AES-256 | parts of 1900 MB):
+# - the IPSW inputs as the release inputs-TAG-KEY (KEY: the product's "inputs" and the two IPSW profiles), made once: small
+#   (out/kc/kc27.bin and artifacts/TAG but the big members, all the kernel job needs) and large (os.raw, dec/, app-cryptex/);
+# - the kernel collection between the jobs, and the image (boot.img, the new install's data-store.img, scratch-data.img, disk.json,
+#   manifests) as the run's artifact image-TAG-RUN, with release=true also as the assets of a release.
 # Unpack: ARTIFACT_KEY=... scripts/ci-blob.sh unpack DIR image.tar.zst.enc.[0-9][0-9][0-9]
-# Logs, hashes and the manifest are plain.
+# The bridge, Turnip and the plugin bundles (our code), logs, hashes and the manifest are plain.
 #
-# Caches (actions/cache): toolchains/ (keyed on the lock and the setup scripts), ccache (the kernel and Turnip; MACOS_CCACHE), the
-# bridge's cargo target directory. The new install's user is the MACOS_USER secret (NAME:PASSWORD) or the product's (disk.user).
+# Caches (actions/cache): toolchains/ (keyed on the lock and the setup scripts), ccache per job (the kernel and Turnip:
+# MACOS_CCACHE), the bridge's cargo target directory. The new install's user is the MACOS_USER secret (NAME:PASSWORD) or the
+# product's (disk.user). Each job's workspace is on the runner's second disk (/mnt) through a bind mount at ws, so its path stays
+# inside the job's workspace (the Darling container mounts it by that path).
 
 on:
   workflow_dispatch:
@@ -34,132 +42,283 @@ permissions:
 concurrency:
   group: image-${{ github.ref }}
 
+env:
+  ARTIFACT_KEY: ${{ secrets.ARTIFACT_KEY }}
+  GH_TOKEN: ${{ github.token }}
+  MACOS_CCACHE: /usr/bin/ccache
+  CCACHE_MAXSIZE: 2G
+  TAG: '27.2'
+
 jobs:
-  image:
+  inputs:
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
-    env:
-      ARTIFACT_KEY: ${{ secrets.ARTIFACT_KEY }}
-      MACOS_USER: ${{ secrets.MACOS_USER }}
-      GH_TOKEN: ${{ github.token }}
-      MACOS_CCACHE: /usr/bin/ccache
-      CCACHE_MAXSIZE: 3G
-      TAG: '27.2'
+    timeout-minutes: 120
     steps:
-      - name: Disk space
-        # The workspace lives on the runner's second disk (/mnt) through a bind mount, so its path stays inside the job's
-        # workspace (the Darling container mounts it by that path); / keeps the packed parts.
+      - name: Workspace
         run: |
           [ -n "$ARTIFACT_KEY" ] || { echo "::error::the ARTIFACT_KEY secret is not set"; exit 1; }
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          docker image prune -af >/dev/null
-          sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws
-          mkdir -p ws && sudo mount --bind /mnt/ws ws
-          echo "CCACHE_DIR=$GITHUB_WORKSPACE/ws/.ccache" >> "$GITHUB_ENV"
-          df -h / /mnt
-
+          sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
       - uses: actions/checkout@v4
         with:
           path: ws
-
-      - uses: actions/setup-python@v5
+      - uses: ./ws/.github/actions/host
         with:
-          python-version: '3.14'
-
-      - name: Host packages
-        working-directory: ws
-        run: |
-          lock() { python3 -c "import json,sys; d=json.load(open('configs/env.lock.json')); print(eval(sys.argv[1]))" "$1"; }
-          wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
-          sudo bash "$RUNNER_TEMP/llvm.sh" "$(lock "d['host']['llvm']['version']")"
-          # docker.io: the runner has Docker already
-          sudo apt-get update -q
-          sudo apt-get install -y -q $(lock "' '.join(p for p in d['host']['apt'] if p != 'docker.io')") "linux-headers-$(uname -r)"
-          python3 -m pip install -q $(lock "' '.join(d['host']['python']['pip'])")
-          rust=$(lock "d['host']['rust']['toolchain']")
-          rustup toolchain install "$rust" --profile minimal --component $(lock "','.join(d['host']['rust']['components'])")
-          echo "MACOS_RUST_TOOLCHAIN=$rust" >> "$GITHUB_ENV"
-          echo "MACOS_FDT=$PWD/configs/k27-generated.dtb" >> "$GITHUB_ENV"
-          echo "INPUTS_KEY=$(python3 -c "
-          import hashlib, json
-          c = json.load(open('configs/product-k27.json'))
-          h = hashlib.sha256(json.dumps(c['inputs'], sort_keys=True).encode())
-          for s in c['inputs']['ipsws']:
-              h.update(open(s['profile'], 'rb').read())
-          print(h.hexdigest()[:16])")" >> "$GITHUB_ENV"
-          meson --version; clang-21 --version | head -1; cargo "+$rust" --version
-
-      - name: Cache toolchains
-        uses: actions/cache@v4
-        with:
-          path: ws/toolchains
-          key: toolchains-${{ hashFiles('ws/configs/env.lock.json', 'ws/scripts/setup-env.py', 'ws/compat/xnu-linux/**', 'ws/scripts/apple-ld.py') }}
-
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ws/.ccache
-          key: ccache-${{ github.run_id }}
-          restore-keys: ccache-
-
-      - name: Cache bridge
-        uses: actions/cache@v4
-        with:
-          path: |
-            ws/out/metal/bridge/target
-            ~/.cargo/registry
-          key: bridge-${{ hashFiles('ws/configs/metal-bridge.Cargo.lock', 'ws/configs/env.lock.json', 'ws/patches/metal2vulkan-macos/**') }}
-          restore-keys: bridge-
-
-      - name: Build environment
-        working-directory: ws
-        run: |
-          python3 scripts/setup-env.py toolchain
-          python3 scripts/setup-env.py x12377
-          python3 scripts/setup-env.py sources
-          df -h /mnt
-
-      - name: IPSW inputs
+          packages: 'false'
+      - name: The inputs' release
+        id: have
         working-directory: ws
         env:
           REFRESH: ${{ inputs.refresh_inputs }}
         run: |
           release="inputs-$TAG-$INPUTS_KEY"
-          parts="$RUNNER_TEMP/inputs"
-          if [ "$REFRESH" != true ] && gh release view "$release" >/dev/null 2>&1; then
-            gh release download "$release" --dir "$parts"
-            (cd "$parts" && sha256sum -c inputs.tar.zst.enc.sha256)
-            scripts/ci-blob.sh unpack . "$parts"/inputs.tar.zst.enc.[0-9][0-9][0-9]
-            rm -rf "$parts"
-            echo "inputs from the release $release"
+          assets=$(gh release view "$release" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if [ "$REFRESH" != true ] && grep -qx small.tar.zst.enc.sha256 <<<"$assets" && grep -qx large.tar.zst.enc.sha256 <<<"$assets"; then
+            echo "have=true" >> "$GITHUB_OUTPUT"; echo "$release is there"
           else
-            python3 scripts/product.py inputs
-            scripts/ci-blob.sh pack "$parts/inputs.tar.zst.enc" . "artifacts/$TAG" out/kc/kc27.bin
-            gh release delete "$release" --yes --cleanup-tag >/dev/null 2>&1 || true
-            gh release create "$release" --prerelease --title "IPSW inputs $TAG ($INPUTS_KEY, encrypted)" \
-              --notes "product.py inputs of configs/product-k27.json (key $INPUTS_KEY): artifacts/$TAG and out/kc/kc27.bin, ARTIFACT_KEY encrypted (scripts/ci-blob.sh)."
-            gh release upload "$release" "$parts"/inputs.tar.zst.enc.*
-            rm -rf "$parts"
+            echo "have=false" >> "$GITHUB_OUTPUT"
           fi
-          du -sh "artifacts/$TAG"
-          df -h /mnt
+      - name: Fetch, decrypt and publish the inputs
+        if: steps.have.outputs.have != 'true'
+        working-directory: ws
+        run: |
+          python3 scripts/setup-env.py sources --part inputs
+          python3 scripts/product.py inputs
+          release="inputs-$TAG-$INPUTS_KEY"
+          parts="$RUNNER_TEMP/inputs"
+          big="artifacts/$TAG/os.raw artifacts/$TAG/dec artifacts/$TAG/app-cryptex"
+          small=$(find "artifacts/$TAG" -mindepth 1 -maxdepth 1 ! -name os.raw ! -name dec ! -name app-cryptex ! -name disk | sort)
+          # shellcheck disable=SC2086
+          scripts/ci-blob.sh pack "$parts/small.tar.zst.enc" . out/kc/kc27.bin $small
+          # shellcheck disable=SC2086
+          scripts/ci-blob.sh pack "$parts/large.tar.zst.enc" . $big
+          gh release delete "$release" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$release" --prerelease --title "IPSW inputs $TAG ($INPUTS_KEY, encrypted)" \
+            --notes "product.py inputs of configs/product-k27.json (key $INPUTS_KEY), ARTIFACT_KEY encrypted (scripts/ci-blob.sh): small (out/kc/kc27.bin and artifacts/$TAG but os.raw, dec/, app-cryptex/), large (those)."
+          gh release upload "$release" "$parts"/*
+          cat "artifacts/$TAG/inputs-times.json"
 
+  bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Workspace
+        run: sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
+      - uses: actions/checkout@v4
+        with:
+          path: ws
+      - uses: ./ws/.github/actions/host
+        with:
+          rust: 'true'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ws/out/metal/bridge/target
+            ~/.cargo/registry
+          key: bridge-${{ hashFiles('ws/configs/metal-bridge.Cargo.lock', 'ws/configs/env.lock.json', 'ws/patches/metal2vulkan-macos/**', 'ws/scripts/build-metal-bridge-macos.py') }}
+          restore-keys: bridge-
+      - name: Bridge
+        working-directory: ws
+        run: |
+          python3 scripts/setup-env.py sdks
+          python3 scripts/setup-env.py sources --part bridge
+          python3 scripts/build-metal-bridge-macos.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge
+          path: ws/out/metal/bridge/libnative_metal_bridge.a
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-bridge
+          path: ws/out/metal/bridge/build.log
+          if-no-files-found: ignore
+
+  turnip:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ws/.ccache
+    steps:
+      - name: Workspace
+        run: sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
+      - uses: actions/checkout@v4
+        with:
+          path: ws
+      - uses: ./ws/.github/actions/host
+      - uses: actions/cache@v4
+        with:
+          path: ws/toolchains
+          key: toolchains-${{ hashFiles('ws/configs/env.lock.json', 'ws/scripts/setup-env.py', 'ws/compat/xnu-linux/**', 'ws/scripts/apple-ld.py') }}
+      - uses: actions/cache@v4
+        with:
+          path: ws/.ccache
+          key: ccache-turnip-${{ github.run_id }}
+          restore-keys: ccache-turnip-
+      - name: Turnip
+        working-directory: ws
+        run: |
+          python3 scripts/setup-env.py toolchain
+          python3 scripts/setup-env.py sources --part turnip
+          python3 scripts/build-droidvm-gpu.py --export-only
+          python3 scripts/build-turnip-macos.py
+          tar -cf "$RUNNER_TEMP/turnip.tar" out/metal/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib
+          ccache -s
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip
+          path: ${{ runner.temp }}/turnip.tar
+          retention-days: 1
+
+  kernel:
+    needs: inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/ws/.ccache
+    steps:
+      - name: Workspace
+        run: sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
+      - uses: actions/checkout@v4
+        with:
+          path: ws
+      - uses: ./ws/.github/actions/host
+      - uses: actions/cache@v4
+        with:
+          path: ws/toolchains
+          key: toolchains-${{ hashFiles('ws/configs/env.lock.json', 'ws/scripts/setup-env.py', 'ws/compat/xnu-linux/**', 'ws/scripts/apple-ld.py') }}
+      - uses: actions/cache@v4
+        with:
+          path: ws/.ccache
+          key: ccache-kernel-${{ github.run_id }}
+          restore-keys: ccache-kernel-
+      - name: Build environment
+        working-directory: ws
+        run: |
+          python3 scripts/setup-env.py toolchain
+          python3 scripts/setup-env.py x12377
+          python3 scripts/setup-env.py sources --part kernel
+      - name: The inputs' small part
+        working-directory: ws
+        run: |
+          gh release download "inputs-$TAG-$INPUTS_KEY" --pattern 'small.tar.zst.enc.*' --dir "$RUNNER_TEMP/small"
+          (cd "$RUNNER_TEMP/small" && sha256sum -c small.tar.zst.enc.sha256)
+          scripts/ci-blob.sh unpack . "$RUNNER_TEMP"/small/small.tar.zst.enc.[0-9][0-9][0-9]
+      - name: Kernel, kexts, collection
+        working-directory: ws
+        run: |
+          python3 scripts/product.py kernel
+          python3 scripts/product.py kexts
+          python3 scripts/product.py kc
+          scripts/ci-blob.sh pack "$RUNNER_TEMP/kc/kc.tar.zst.enc" . out/k27/kc-k27.bin
+          ccache -s
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kc
+          path: ${{ runner.temp }}/kc/kc.tar.zst.enc.*
+          compression-level: 0
+          retention-days: 1
+      - name: Collect logs
+        if: always()
+        working-directory: ws
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          for f in out/k27/build-raw.log out/k27/build-bootstrap.log out/k27/kc-build.log out/x12377/build/fakeroot-logs toolchains/linux/logs; do
+            if [ -e "$f" ]; then cp -r "$f" "$RUNNER_TEMP/logs/"; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-kernel
+          path: ${{ runner.temp }}/logs
+          if-no-files-found: ignore
+
+  plugin:
+    needs: [bridge, turnip]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Workspace
+        run: sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
+      - uses: actions/checkout@v4
+        with:
+          path: ws
+      - uses: ./ws/.github/actions/host
+      - uses: actions/cache@v4
+        with:
+          path: ws/toolchains
+          key: toolchains-${{ hashFiles('ws/configs/env.lock.json', 'ws/scripts/setup-env.py', 'ws/compat/xnu-linux/**', 'ws/scripts/apple-ld.py') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridge
+          path: ws/out/metal/bridge
+      - uses: actions/download-artifact@v4
+        with:
+          name: turnip
+          path: ${{ runner.temp }}
+      - name: Plugin and apps
+        working-directory: ws
+        run: |
+          tar -xf "$RUNNER_TEMP/turnip.tar"
+          python3 scripts/setup-env.py toolchain
+          python3 scripts/setup-env.py sources --part plugin
+          python3 scripts/product.py gpu
+          tar -cf "$RUNNER_TEMP/bundles.tar" out/metal/plugin/NativeAdrenoMetal.bundle "out/metal/shader-cache/Shader Cache.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles
+          path: ${{ runner.temp }}/bundles.tar
+          retention-days: 1
+
+  image:
+    needs: [inputs, kernel, plugin]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      MACOS_USER: ${{ secrets.MACOS_USER }}
+    steps:
+      - name: Workspace
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
+          df -h / /mnt
+      - uses: actions/checkout@v4
+        with:
+          path: ws
+      - uses: ./ws/.github/actions/host
+      - name: Sources and boot loaders
+        working-directory: ws
+        run: python3 scripts/setup-env.py sources --part image
+      - name: The inputs
+        working-directory: ws
+        run: |
+          for part in small large; do
+            gh release download "inputs-$TAG-$INPUTS_KEY" --pattern "$part.tar.zst.enc.*" --dir "$RUNNER_TEMP/$part"
+            (cd "$RUNNER_TEMP/$part" && sha256sum -c "$part.tar.zst.enc.sha256")
+            scripts/ci-blob.sh unpack . "$RUNNER_TEMP/$part/$part".tar.zst.enc.[0-9][0-9][0-9]
+            rm -rf "${RUNNER_TEMP:?}/$part"
+          done
+          du -sh "artifacts/$TAG"
       - name: New install
         working-directory: ws
         run: |
           python3 scripts/product.py disk "artifacts/$TAG/disk"
           df -h /mnt
-
-      - name: Kernel, kexts, collection, GPU, boot disk
+      - uses: actions/download-artifact@v4
+        with:
+          name: kc
+          path: ${{ runner.temp }}/kc
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundles
+          path: ${{ runner.temp }}
+      - name: Boot disk and the install's Data
         working-directory: ws
         run: |
-          python3 scripts/product.py full
-          ccache -s
-
-      - name: Stage the new install
-        working-directory: ws
-        run: python3 scripts/product.py stage
-
+          scripts/ci-blob.sh unpack . "$RUNNER_TEMP"/kc/kc.tar.zst.enc.[0-9][0-9][0-9]
+          tar -xf "$RUNNER_TEMP/bundles.tar"
+          python3 scripts/product.py boot
+          python3 scripts/product.py stage
       - name: Pack the image
         working-directory: ws
         run: |
@@ -178,15 +337,18 @@ jobs:
           cp "$image/image.tar.zst.enc.sha256" "$image/plain/"
           rm -rf "$stage"
           cat "$image/plain/sha256.txt"
-
-      - name: Upload the image (encrypted parts)
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: image-${{ env.TAG }}-${{ github.run_number }}
           path: ${{ runner.temp }}/image/image.tar.zst.enc.*
           compression-level: 0
           retention-days: 14
-
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-${{ env.TAG }}-${{ github.run_number }}-plain
+          path: ${{ runner.temp }}/image/plain
+          if-no-files-found: ignore
       - name: Release
         if: inputs.release
         run: |
@@ -194,25 +356,3 @@ jobs:
           gh release create "$release" --repo "$GITHUB_REPOSITORY" --prerelease --title "k27 $TAG image ${{ github.run_number }} (encrypted)" \
             --notes "boot.img and a new install (data-store.img), ARTIFACT_KEY encrypted: scripts/ci-blob.sh unpack DIR image.tar.zst.enc.[0-9][0-9][0-9]"
           gh release upload "$release" --repo "$GITHUB_REPOSITORY" "$RUNNER_TEMP"/image/image.tar.zst.enc.* "$RUNNER_TEMP"/image/plain/*
-
-      - name: Collect logs
-        if: always()
-        working-directory: ws
-        run: |
-          logs="$RUNNER_TEMP/logs"
-          mkdir -p "$logs"
-          cp -r "$RUNNER_TEMP/image/plain" "$logs/" 2>/dev/null || true
-          for f in out/k27/build-raw.log out/k27/build-bootstrap.log out/metal/bridge/build.log out/x12377/build/fakeroot-logs \
-                   "artifacts/$TAG/inputs-times.json" toolchains/linux/logs; do
-            [ -e "$f" ] && cp -r "$f" "$logs/" || true
-          done
-          df -h / /mnt > "$logs/df.txt"
-          ccache -s > "$logs/ccache.txt" 2>&1 || true
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-${{ env.TAG }}-${{ github.run_number }}
-          path: ${{ runner.temp }}/logs
-          if-no-files-found: ignore

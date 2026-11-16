@@ -1,0 +1,53 @@
+name: host
+description: >-
+  The host side of a job of image.yml, from configs/env.lock.json: Python with meson and its modules, and (packages) LLVM from
+  apt.llvm.org, the apt packages and the running kernel's headers, and (rust) the dated nightly. Exports MACOS_RUST_TOOLCHAIN,
+  MACOS_FDT and INPUTS_KEY (the IPSW inputs' release key). The repository is checked out at ws.
+inputs:
+  packages:
+    description: LLVM and the apt packages
+    default: 'true'
+  rust:
+    description: the lock's rust nightly
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.14'
+
+    - shell: bash
+      working-directory: ws
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        RUST: ${{ inputs.rust }}
+      run: |
+        lock() { python3 -c "import json,sys; d=json.load(open('configs/env.lock.json')); print(eval(sys.argv[1]))" "$1"; }
+        if [ "$PACKAGES" = true ]; then
+          wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
+          sudo bash "$RUNNER_TEMP/llvm.sh" "$(lock "d['host']['llvm']['version']")" >/dev/null
+          # docker.io: the runner has Docker already
+          sudo apt-get update -q
+          # shellcheck disable=SC2046
+          sudo apt-get install -y -q $(lock "' '.join(p for p in d['host']['apt'] if p != 'docker.io')") "linux-headers-$(uname -r)" >/dev/null
+          clang-21 --version | head -1
+        fi
+        # shellcheck disable=SC2046
+        python3 -m pip install -q $(lock "' '.join(d['host']['python']['pip'])")
+        if [ "$RUST" = true ]; then
+          rust=$(lock "d['host']['rust']['toolchain']")
+          rustup toolchain install "$rust" --profile minimal --component "$(lock "','.join(d['host']['rust']['components'])")"
+          echo "MACOS_RUST_TOOLCHAIN=$rust" >> "$GITHUB_ENV"
+        fi
+        {
+          echo "MACOS_FDT=$PWD/configs/k27-generated.dtb"
+          echo "INPUTS_KEY=$(python3 -c "
+        import hashlib, json
+        c = json.load(open('configs/product-k27.json'))
+        h = hashlib.sha256(json.dumps(c['inputs'], sort_keys=True).encode())
+        for s in c['inputs']['ipsws']:
+            h.update(open(s['profile'], 'rb').read())
+        print(h.hexdigest()[:16])")"
+        } >> "$GITHUB_ENV"
+        meson --version

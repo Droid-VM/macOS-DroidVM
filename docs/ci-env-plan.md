@@ -187,3 +187,15 @@ kernel、bridge 是增量构建（make 对每个依赖都做 stat，所以依赖
     - 不能设 `CCACHE_BASEDIR`：它会把路径改写成相对路径，内核的 `__FILE__` 字符串随之改变，生成的代码也变了。
     - 实测（20 核）：内核冷编 68 s、热编 20 s，命中 1182/1183；Turnip 66→38 s。与不走 ccache 的产物相比，内核符号表相同、
       编译记录逐字节相同，Turnip 逐字节相同。
+- 2026-11-16：P6 拆成六个并行 job（`.github/workflows/image.yml` 顶部有依赖图）：
+  - `inputs`：Release `inputs-27.2-KEY` 缺资产（或勾选 refresh）时才跑 `product.py inputs`。输入分两包：small（`out/kc/kc27.bin`
+    和 `artifacts/27.2` 中除 `os.raw`、`dec/`、`app-cryptex/`、`disk/` 外的全部，内核 job 只要这些）、large（那三项）。
+  - `bridge`、`turnip` 不依赖输入，一开始就并行跑；`kernel`（内核、kext、KC）只等 inputs，下载 small 包；
+    `plugin` 等 bridge 和 turnip（`product.py gpu` 不带 deps，直接用前两个 job 的产物）。
+  - `image` 等 inputs、kernel、plugin：下载 small+large 两包 → `product.py disk` → 解包 KC 和插件 → `boot` → `stage` → 打包。
+    disk/boot/stage 不需要工具链。
+  - job 之间传递：KC 加密（`kc.tar.zst.enc.*`），bridge/Turnip/插件 bundle 明文（我们自己的代码）；保留 1 天。
+  - 为此新增：`setup-env.py sources --part kernel|turnip|bridge|plugin|inputs|image|all`（每个 job 只取自己要的源码、
+    磁盘工具、IPSW 工具、引导程序）、`setup-env.py sdks`（只装 SDK，bridge 用）、`build-droidvm-gpu.py --export-only`
+    （只导出补丁后的 DroidVMGpu 源码，Turnip 要它的头文件）、composite action `.github/actions/host`（宿主准备，
+    导出 `MACOS_FDT`、`INPUTS_KEY`）。ccache 按 job 分键（`ccache-kernel-`、`ccache-turnip-`）。

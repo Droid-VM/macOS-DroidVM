@@ -8,7 +8,9 @@
                                       git am), gunyah-linux.mk, the headers-only SDK root fakeroot (AvailabilityVersions, libplatform,
                                       libdispatch, the tree's installhdrs, libfirehose_kernel.a), the KDK headers, ArmCpu/ArmDTPlatform,
                                       inc-hid (needs toolchain)
-    setup-env.py sources [--jobs N]   sources/: UniXNU (and the drivers, kits and metal2vulkan the product builds), Turnip's UniXNU and
+    setup-env.py sdks                 only the SDKs of toolchain (the bridge needs no more)
+    setup-env.py sources [--jobs N] [--part kernel|turnip|bridge|plugin|inputs|image|all]
+                                      sources/: UniXNU (and the drivers, kits and metal2vulkan the product builds), Turnip's UniXNU and
                                       patched Mesa, UniXNU-droidvm, edk2, linux-apfs-rw, apfsprogs; mkapfs/apfsck, apfs.ko (for the
                                       running kernel), ipsw; artifacts/boot-inputs (UniXNU.efi and DarwinBoot.efi built from source)
 
@@ -302,9 +304,33 @@ def unixnu_efi(args):
     provenance.write_text(json.dumps(record, indent=2) + '\n')
 
 
+# What each job of the CI (.github/workflows/image.yml) needs: (source trees, tools). all: everything.
+PARTS = {
+    'kernel': (('UniXNU', 'NativeAES', 'NativeAdreno', 'AdrenoPM4', 'ArmSmmu4K', 'UniXNU-droidvm'), ()),
+    'turnip': (('UniXNU', 'NativeAdreno', 'AdrenoPM4', 'ArmSmmu4K', 'UniXNU-droidvm', 'UniXNU-turnip', 'mesa'), ()),
+    'bridge': (('UniXNU', 'NativeMetal', 'metal2vulkan'), ()),
+    'plugin': (('UniXNU', 'NativeMetal'), ()),
+    'inputs': ((), ('ipsw',)),
+    'image': (('UniXNU', 'DarwinBoot', 'NativeRamBlock', 'UniXNU-droidvm', 'edk2', 'linux-apfs-rw', 'apfsprogs'), ('disk', 'boot')),
+    'all': (SOURCES, ('disk', 'ipsw', 'boot')),
+}
+
+
 def sources(args):
+    names, tools = PARTS[args.part]
     for name in SOURCES:
-        mesa() if name == 'mesa' else git_pinned(LOCK['git'][name])
+        if name in names:
+            mesa() if name == 'mesa' else git_pinned(LOCK['git'][name])
+    if 'disk' in tools:
+        disk_tools(args)
+    if 'ipsw' in tools:
+        ipsw()
+    if 'boot' in tools:
+        boot_loaders(args)
+    print(f'sources ready ({args.part})')
+
+
+def disk_tools(args):
     # The disk tools: mkapfs and apfsck, and apfs.ko for the running kernel (its headers: linux-headers-$(uname -r))
     run('make', '-C', ROOT / 'sources/apfsprogs/mkapfs', f'-j{args.jobs}', stdout=subprocess.DEVNULL)
     run('make', '-C', ROOT / 'sources/apfsprogs/apfsck', f'-j{args.jobs}', stdout=subprocess.DEVNULL)
@@ -313,17 +339,22 @@ def sources(args):
         clang = 'clang' in Path('/proc/version').read_text()
         run('make', '-C', ROOT / 'sources/linux-apfs-rw', f'-j{args.jobs}', *(['LLVM=1'] if clang else []), stdout=subprocess.DEVNULL,
             env=dict(os.environ, PATH=LOCK['host']['llvm']['bin'] + os.pathsep + os.environ['PATH']))
+
+
+def ipsw():
     # ipsw (blacktop/ipsw): AEA keys and decryption, IM4P (product.py inputs)
     archive = download(LOCK['downloads']['ipsw'])
     if not (ROOT / LOCK['downloads']['ipsw']['extract'] / 'ipsw').exists():
         run('tar', '-C', ROOT / LOCK['downloads']['ipsw']['extract'], '-xzf', archive, 'ipsw')
+
+
+def boot_loaders(args):
     # The boot loaders from source: UniXNU.efi (UniXNU's package/build.sh, here on the locked edk2 and LLVM 21 instead of its
     # default Mu_Basecore checkout; the strings of the binary match the published one's) and DarwinBoot.efi (edk2's BaseTools first)
     unixnu_efi(args)
     if not (ROOT / 'sources/edk2/BaseTools/Source/C/bin/GenFw').exists():
         run('make', '-C', ROOT / 'sources/edk2/BaseTools', f'-j{args.jobs}', stdout=subprocess.DEVNULL)
     run(sys.executable, ROOT / 'scripts/build-darwinboot.py', stdout=subprocess.DEVNULL)
-    print('sources ready')
 
 
 def main():
@@ -333,8 +364,10 @@ def main():
     step = sub.add_parser('toolchain')
     step.add_argument('--jobs', type=int, default=os.cpu_count())
     step.set_defaults(func=toolchain)
+    sub.add_parser('sdks').set_defaults(func=lambda _args: sdks())
     step = sub.add_parser('sources')
     step.add_argument('--jobs', type=int, default=os.cpu_count())
+    step.add_argument('--part', choices=sorted(PARTS), default='all')
     step.set_defaults(func=sources)
     step = sub.add_parser('x12377')
     step.add_argument('--jobs', type=int, default=os.cpu_count())
