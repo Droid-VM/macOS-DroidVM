@@ -33,6 +33,7 @@ PATCHES = sorted((NATIVE / 'bridge/patches').glob('*.patch')) + [
     ROOT / 'patches/metal2vulkan-macos/0003-rate-map-buffer-reflection.patch',
     ROOT / 'patches/metal2vulkan-macos/0004-opaque-indirect-pointer-reflection.patch',
     ROOT / 'patches/metal2vulkan-macos/0005-identity-texture-swizzle.patch',
+    ROOT / 'patches/metal2vulkan-macos/0006-sixteen-mib-memory-blocks.patch',
 ]
 pin = '555b13d57e09bff70996a88cff64f1275256d5cf'
 
