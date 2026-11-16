@@ -214,3 +214,11 @@ kernel、bridge 是增量构建（make 对每个依赖都做 stat，所以依赖
     相同则跳过构建，不再缓存 target。
   - artifact 不再二次压缩：已是 zstd/加密的产物用 upload-artifact v7 `archive: false` 原样上传（一个 artifact 一个文件、名字即
     文件名，download-artifact v8 按名下载）；bridge/Turnip/bundles 先打成 `.zst`，KC 单块，镜像每块一个上传步骤（上限 12 块）。
+- 2026-11-16：新装盘与 KDK 头文件复用：
+  - 新增 `install` job（只等 inputs，与 kernel、bridge 并行）：新装盘（`product.py disk` 的 `artifacts/27.2/disk`）存为加密分块的
+    Release `install-27.2-KEY`，KEY 由 INPUTS_KEY、`make-macos-disk.py`/`apfs-add-volumes.py`/`data_store.py` 和 DarwinBoot、
+    linux-apfs-rw、apfsprogs 的提交算出（host action 导出 `INSTALL_KEY`）；有就跳过，没有才下载 small+large、建盘、上传。
+    `setup-env.py sources --part install` 只取建盘要的源码和磁盘工具。
+  - image job 改为只下载 small 包和新装盘，不再下载 12.7 GB 的 large 包、不再建盘（之前 99 s 下载 + 158 s 建盘）。
+  - KDK：`setup-env.py` 在 `out/x12377/kdk/.lock` 记下 lock 里 KDK 与提取脚本的 sha256，相同就连 dmg 都不下载；kernel job
+    用 actions/cache 按 `KDK_KEY` 缓存该目录（之前每次解包 66 s）。

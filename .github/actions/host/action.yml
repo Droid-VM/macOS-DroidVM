@@ -2,7 +2,7 @@ name: host
 description: >-
   The host side of a job of image.yml, from configs/env.lock.json: Python with meson and its modules, and (packages) LLVM from
   apt.llvm.org, the apt packages and the running kernel's headers, and (rust) the dated nightly. Exports MACOS_RUST_TOOLCHAIN,
-  MACOS_FDT and INPUTS_KEY (the IPSW inputs' release key). The repository is checked out at ws.
+  MACOS_FDT, INPUTS_KEY, INSTALL_KEY and KDK_KEY (release and cache keys). The repository is checked out at ws.
 inputs:
   packages:
     description: LLVM and the apt packages
@@ -46,12 +46,21 @@ runs:
         fi
         {
           echo "MACOS_FDT=$PWD/configs/k27-generated.dtb"
-          echo "INPUTS_KEY=$(python3 -c "
+          # INPUTS_KEY: the IPSW inputs' release (the product's "inputs", the two IPSW profiles); INSTALL_KEY: the new install's
+          # (those, the scripts that make it, DarwinBoot's packed_ramdisk, the APFS tools); KDK_KEY: out/x12377/kdk's cache
+          python3 -c "
         import hashlib, json
         c = json.load(open('configs/product-k27.json'))
+        lock = json.load(open('configs/env.lock.json'))
         h = hashlib.sha256(json.dumps(c['inputs'], sort_keys=True).encode())
         for s in c['inputs']['ipsws']:
             h.update(open(s['profile'], 'rb').read())
-        print(h.hexdigest()[:16])")"
+        inputs = h.hexdigest()[:16]
+        h = hashlib.sha256(inputs.encode())
+        for f in ('scripts/make-macos-disk.py', 'scripts/apfs-add-volumes.py', 'scripts/data_store.py'):
+            h.update(open(f, 'rb').read())
+        h.update(json.dumps([lock['git'][n]['commit'] for n in ('DarwinBoot', 'linux-apfs-rw', 'apfsprogs')]).encode())
+        kdk = hashlib.sha256(json.dumps([lock['downloads'][n]['sha256'] for n in ('kdk', 'kdk-headers.py')]).encode())
+        print(f'INPUTS_KEY={inputs}\nINSTALL_KEY={h.hexdigest()[:16]}\nKDK_KEY={kdk.hexdigest()[:16]}')"
         } >> "$GITHUB_ENV"
         meson --version

@@ -2,18 +2,21 @@ name: image
 
 # The k27 product from nothing on hosted runners: the build environment from public sources (scripts/setup-env.py,
 # configs/env.lock.json), Apple's files from the IPSWs (product.py inputs), a new install (product.py disk, stage) and the boot disk.
-# docs/ci-env-plan.md has the design. Six jobs, the builds side by side:
+# docs/ci-env-plan.md has the design. Seven jobs, the builds side by side:
 #
-#   inputs ──────────────────────────────┬──────────────┐
-#   kernel (kernel, kexts, KC) ──────────│──────────────┤
-#   bridge ──┬── plugin (plugin, apps) ──│──────────────┤
-#   turnip ──┘                           │              ▼
-#                                        └──> image (disk, boot, stage, pack)
+#   inputs ──┬── install (new install) ──────────┐
+#            └── kernel (kernel, kexts, KC) ─────┤
+#   bridge ──┬── plugin (plugin, apps) ──────────┤
+#   turnip ──┘                                   ▼
+#                                     image (boot, stage, pack)
 #
 # Everything holding Apple's files is stored encrypted with the ARTIFACT_KEY secret (scripts/ci-blob.sh: tar keeping holes | zstd |
 # AES-256 | parts of 1900 MB):
 # - the IPSW inputs as the release inputs-TAG-KEY (KEY: the product's "inputs" and the two IPSW profiles), made once: small
-#   (out/kc/kc27.bin and artifacts/TAG but the big members, all the kernel job needs) and large (os.raw, dec/, app-cryptex/);
+#   (out/kc/kc27.bin and artifacts/TAG but the big members, all the kernel and image jobs need) and large (os.raw, dec/,
+#   app-cryptex/, only for the new install);
+# - the new install (product.py disk: artifacts/TAG/disk) as the release install-TAG-KEY (KEY: the inputs', the scripts that
+#   make it, DarwinBoot's packed_ramdisk and the APFS tools' commits), made once;
 # - the kernel collection between the jobs, and the image (boot.img, the new install's data-store.img, scratch-data.img, disk.json,
 #   manifests) as the run's artifacts image.tar.zst.enc.000, .001, ..., with release=true also as the assets of a release.
 # Unpack: ARTIFACT_KEY=... scripts/ci-blob.sh unpack DIR image.tar.zst.enc.[0-9][0-9][0-9]
@@ -22,7 +25,7 @@ name: image
 # the file; download-artifact v8 takes them by that name), not zipped a second time.
 #
 # Caches (actions/cache): toolchains/ (keyed on the lock and the setup scripts), ccache per job (the kernel and Turnip:
-# MACOS_CCACHE), the bridge's library by the hash of all its inputs (no build when they are the same; a cargo target directory
+# MACOS_CCACHE), the KDK's headers (out/x12377/kdk), the bridge's library by the hash of all its inputs (no build when they are the same; a cargo target directory
 # would not help: std and the crates.io crates take seconds, the translator's crates and the fat-LTO bridge are the 7 minutes). The new install's user is the MACOS_USER secret (NAME:PASSWORD) or the
 # product's (disk.user). Each job's workspace is on the runner's second disk (/mnt) through a bind mount at ws, so its path stays
 # inside the job's workspace (the Darling container mounts it by that path).
@@ -205,6 +208,10 @@ jobs:
           path: ws/.ccache
           key: ccache-kernel-${{ github.run_id }}
           restore-keys: ccache-kernel-
+      - uses: actions/cache@v4
+        with:
+          path: ws/out/x12377/kdk
+          key: kdk-${{ env.KDK_KEY }}
       - name: Build environment
         working-directory: ws
         run: |
@@ -285,8 +292,53 @@ jobs:
           archive: false
           retention-days: 1
 
+  install:
+    needs: inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Workspace
+        run: sudo mkdir -p /mnt/ws && sudo chown "$(id -u):$(id -g)" /mnt/ws && mkdir -p ws && sudo mount --bind /mnt/ws ws
+      - uses: actions/checkout@v4
+        with:
+          path: ws
+      - uses: ./ws/.github/actions/host
+      - name: The new install's release
+        id: have
+        working-directory: ws
+        env:
+          REFRESH: ${{ inputs.refresh_inputs }}
+        run: |
+          release="install-$TAG-$INSTALL_KEY"
+          assets=$(gh release view "$release" --json assets -q '.assets[].name' 2>/dev/null || true)
+          if [ "$REFRESH" != true ] && grep -qx install.tar.zst.enc.sha256 <<<"$assets"; then
+            echo "have=true" >> "$GITHUB_OUTPUT"; echo "$release is there"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Make and publish the new install
+        if: steps.have.outputs.have != 'true'
+        working-directory: ws
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          python3 scripts/setup-env.py sources --part install
+          for part in small large; do
+            gh release download "inputs-$TAG-$INPUTS_KEY" --pattern "$part.tar.zst.enc.*" --dir "$RUNNER_TEMP/$part"
+            (cd "$RUNNER_TEMP/$part" && sha256sum -c "$part.tar.zst.enc.sha256")
+            scripts/ci-blob.sh unpack . "$RUNNER_TEMP/$part/$part".tar.zst.enc.[0-9][0-9][0-9]
+            rm -rf "${RUNNER_TEMP:?}/$part"
+          done
+          python3 scripts/product.py disk "artifacts/$TAG/disk"
+          release="install-$TAG-$INSTALL_KEY"
+          scripts/ci-blob.sh pack "$RUNNER_TEMP/install/install.tar.zst.enc" . "artifacts/$TAG/disk"
+          gh release delete "$release" --yes --cleanup-tag >/dev/null 2>&1 || true
+          gh release create "$release" --prerelease --title "New install $TAG ($INSTALL_KEY, encrypted)" \
+            --notes "product.py disk artifacts/$TAG/disk from the inputs inputs-$TAG-$INPUTS_KEY (key $INSTALL_KEY), ARTIFACT_KEY encrypted (scripts/ci-blob.sh)."
+          gh release upload "$release" "$RUNNER_TEMP"/install/*
+          df -h /mnt
+
   image:
-    needs: [inputs, kernel, plugin]
+    needs: [inputs, install, kernel, plugin]
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
@@ -304,20 +356,19 @@ jobs:
       - name: Sources and boot loaders
         working-directory: ws
         run: python3 scripts/setup-env.py sources --part image
-      - name: The inputs
+      - name: The inputs' small part and the new install
         working-directory: ws
         run: |
-          for part in small large; do
-            gh release download "inputs-$TAG-$INPUTS_KEY" --pattern "$part.tar.zst.enc.*" --dir "$RUNNER_TEMP/$part"
+          while read -r release part; do
+            gh release download "$release" --pattern "$part.tar.zst.enc.*" --dir "$RUNNER_TEMP/$part"
             (cd "$RUNNER_TEMP/$part" && sha256sum -c "$part.tar.zst.enc.sha256")
             scripts/ci-blob.sh unpack . "$RUNNER_TEMP/$part/$part".tar.zst.enc.[0-9][0-9][0-9]
             rm -rf "${RUNNER_TEMP:?}/$part"
-          done
+          done <<EOF
+          inputs-$TAG-$INPUTS_KEY small
+          install-$TAG-$INSTALL_KEY install
+          EOF
           du -sh "artifacts/$TAG"
-      - name: New install
-        working-directory: ws
-        run: |
-          python3 scripts/product.py disk "artifacts/$TAG/disk"
           df -h /mnt
       - uses: actions/download-artifact@v8
         with:

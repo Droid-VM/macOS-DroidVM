@@ -233,13 +233,19 @@ def fakeroot(output, jobs):
 
 
 def kdk():
-    """out/x12377/kdk: CoreEntitlements, TrustCache, CodeSignature and TrustedExecutionMonitor headers of the KDK (nothing else)."""
+    """out/x12377/kdk: CoreEntitlements, TrustCache, CodeSignature and TrustedExecutionMonitor headers of the KDK (nothing else).
+    out/x12377/kdk/.lock names the lock's KDK and script they came from: the same ones, nothing to do (CI keeps the directory)."""
+    stamp = X / 'kdk/.lock'
+    record = json.dumps({name: LOCK['downloads'][name]['sha256'] for name in ('kdk', 'kdk-headers.py')}, sort_keys=True)
+    if stamp.exists() and stamp.read_text() == record:
+        return
     script = download(LOCK['downloads']['kdk-headers.py'])
     dmg = download(LOCK['downloads']['kdk'])
     temporary = X / 'build/tmp'   # the pkg is 1 GB, more than a small /tmp holds
     temporary.mkdir(parents=True, exist_ok=True)
     run(sys.executable, script, '--dmg', dmg, '--sha256', LOCK['downloads']['kdk']['sha256'], X / 'kdk',
         env=dict(os.environ, TMPDIR=str(temporary)))
+    stamp.write_text(record)
 
 
 def inc_hid():
@@ -311,6 +317,7 @@ PARTS = {
     'bridge': (('UniXNU', 'NativeMetal', 'metal2vulkan'), ()),
     'plugin': (('UniXNU', 'NativeMetal'), ()),
     'inputs': ((), ('ipsw',)),
+    'install': (('UniXNU', 'DarwinBoot', 'linux-apfs-rw', 'apfsprogs'), ('disk',)),
     'image': (('UniXNU', 'DarwinBoot', 'NativeRamBlock', 'UniXNU-droidvm', 'edk2', 'linux-apfs-rw', 'apfsprogs'), ('disk', 'boot')),
     'all': (SOURCES, ('disk', 'ipsw', 'boot')),
 }
