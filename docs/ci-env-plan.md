@@ -222,3 +222,13 @@ kernel、bridge 是增量构建（make 对每个依赖都做 stat，所以依赖
   - image job 改为只下载 small 包和新装盘，不再下载 12.7 GB 的 large 包、不再建盘（之前 99 s 下载 + 158 s 建盘）。
   - KDK：`setup-env.py` 在 `out/x12377/kdk/.lock` 记下 lock 里 KDK 与提取脚本的 sha256，相同就连 dmg 都不下载；kernel job
     用 actions/cache 按 `KDK_KEY` 缓存该目录（之前每次解包 66 s）。
+  - 首跑（run 43890949028，全部成功）：bridge 库缓存命中 1 分钟；新装盘加密后也有 13.2 GB，image 的"下载+解开"219 s 对原来
+    下载 large+建盘 257 s，只省约 40 s。发现两处倒退：镜像 7 块逐个 `archive: false` 上传共 187 s，而单个 zip
+    （`compression-level: 0`，只存不压，本就没有二次压缩）是 58 s；toolchains 缓存键含整个 `setup-env.py`，改了 KDK 就让
+    kernel/turnip/plugin 全部重建工具链。
+- 2026-11-16：随后的三处修正：
+  - 镜像改回一个 artifact（zip 只存不压，`compression-level: 0`）；kc、bridge、Turnip、bundles 这些单文件仍是 `archive: false`。
+  - toolchains 缓存键改为 `TOOLCHAIN_KEY`：lock 的 `toolchain`、`host`、`macosx-sdk`、`ios-sdks`，`setup-env.py` 里
+    `toolchain`/`sdks`/`download`/`git_pinned` 的源码，`compat/xnu-linux`，`apple-ld.py`；改 setup-env 别处或源码提交不再失效。
+  - `ci-blob.sh fetch RELEASE PREFIX DEST`：按 `.sha256` 列出的分块逐个 `gh release download --output -` 直接接解密、解压、
+    解包，下载与解包重叠、不落盘；坏块由 zstd 帧校验和发现。kernel、install、image 都改用它。

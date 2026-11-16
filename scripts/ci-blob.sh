@@ -6,6 +6,9 @@
 #                                          PREFIX.000, PREFIX.001, ... of CI_BLOB_CHUNK (default 1900m: a release asset is at most
 #                                          2 GiB); PREFIX.sha256 lists the parts
 #   ci-blob.sh unpack DEST PART...         the parts in order (a glob sorts them) | decrypt | unzstd | untar into DEST
+#   ci-blob.sh fetch RELEASE PREFIX DEST   a release's parts (PREFIX.sha256 lists them) downloaded one after another straight
+#                                          into unpack: no copy on disk, the download and the unpacking overlap; a damaged
+#                                          part fails zstd's frame checksum
 #
 # The key is $ARTIFACT_KEY. To unpack a downloaded image by hand:
 #   ARTIFACT_KEY=... scripts/ci-blob.sh unpack out/ci-image image.tar.zst.enc.[0-9][0-9][0-9]
@@ -26,8 +29,15 @@ case "${1:-}" in
     mkdir -p "$dest"
     cat "$@" | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY | zstd -d -q -c | tar --sparse -C "$dest" -xf -
     ;;
+  fetch)
+    release=$2 prefix=$3 dest=$4
+    mkdir -p "$dest"
+    gh release download "$release" --pattern "$prefix.sha256" --output - | while read -r _ name; do
+      gh release download "$release" --pattern "$name" --output - </dev/null
+    done | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY | zstd -d -q -c | tar --sparse -C "$dest" -xf -
+    ;;
   *)
-    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
     exit 2
     ;;
 esac

@@ -2,7 +2,7 @@ name: host
 description: >-
   The host side of a job of image.yml, from configs/env.lock.json: Python with meson and its modules, and (packages) LLVM from
   apt.llvm.org, the apt packages and the running kernel's headers, and (rust) the dated nightly. Exports MACOS_RUST_TOOLCHAIN,
-  MACOS_FDT, INPUTS_KEY, INSTALL_KEY and KDK_KEY (release and cache keys). The repository is checked out at ws.
+  MACOS_FDT, INPUTS_KEY, INSTALL_KEY, KDK_KEY and TOOLCHAIN_KEY (release and cache keys). The repository is checked out at ws.
 inputs:
   packages:
     description: LLVM and the apt packages
@@ -61,6 +61,17 @@ runs:
             h.update(open(f, 'rb').read())
         h.update(json.dumps([lock['git'][n]['commit'] for n in ('DarwinBoot', 'linux-apfs-rw', 'apfsprogs')]).encode())
         kdk = hashlib.sha256(json.dumps([lock['downloads'][n]['sha256'] for n in ('kdk', 'kdk-headers.py')]).encode())
-        print(f'INPUTS_KEY={inputs}\nINSTALL_KEY={h.hexdigest()[:16]}\nKDK_KEY={kdk.hexdigest()[:16]}')"
+        # toolchains/: the lock's parts and the setup-env.py functions that make it, compat/xnu-linux, apple-ld.py
+        import importlib.util, inspect, pathlib
+        spec = importlib.util.spec_from_file_location('setup_env', 'scripts/setup-env.py')
+        setup = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(setup)
+        t = hashlib.sha256(json.dumps([lock['toolchain'], lock['host'], lock['downloads']['macosx-sdk'], lock['git']['ios-sdks']],
+                                      sort_keys=True).encode())
+        for function in (setup.toolchain, setup.sdks, setup.download, setup.git_pinned):
+            t.update(inspect.getsource(function).encode())
+        for f in sorted(p for p in pathlib.Path('compat/xnu-linux').rglob('*') if p.is_file()) + [pathlib.Path('scripts/apple-ld.py')]:
+            t.update(str(f).encode() + f.read_bytes())
+        print(f'INPUTS_KEY={inputs}\nINSTALL_KEY={h.hexdigest()[:16]}\nKDK_KEY={kdk.hexdigest()[:16]}\nTOOLCHAIN_KEY={t.hexdigest()[:16]}')"
         } >> "$GITHUB_ENV"
         meson --version
