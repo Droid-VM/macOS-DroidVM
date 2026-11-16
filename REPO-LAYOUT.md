@@ -80,7 +80,7 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 ## scripts/（主要的）
 
 - **KC / 内核**：`kc-build.py`、`kc_native.py`（native kext 静态链接）、`kc_reloc.py`、`fileset_kc.py`、`kc-disasm.py`、`kc-vtable.py`、`vtable-abi-diff.py`、`kext-kernel-imports.py`、`gen-iomfb-abi.py`、`build-native-kext.py`、`build-native-ram-block.py`、`build-droidvm-gpu.py`、`build-darwinboot.py`、`ptrauth_disc.py`。
-- **Metal / GPU 用户态**：`build-turnip-macos.py`（Turnip，源在 `sources/UniXNU-turnip`）、`build-metal-bridge-macos.py`（metal2vulkan bridge）、`build-metal-plugin.sh`（插件包 `out/metal/plugin/NativeAdrenoMetal.bundle`）、`build-metal-probe.sh`、`apple-ld.py`（Darling 里的 ld-classic）。
+- **Metal / GPU 用户态**：`build-turnip-macos.py`（Turnip，源在 `sources/UniXNU-turnip`）、`build-metal-bridge-macos.py`（metal2vulkan bridge）、`build-metal-plugin.sh`（插件包 `out/metal/plugin/NativeAdrenoMetal.bundle`）、`build-shader-cache-app.py`（上游 Shader Cache App → guest `/Applications/Shader Cache.app`，root worker 把系统 Metal 库编进 `/Library/GPUBundles/NativeAdrenoMetal.cache`，其他进程只读这一层；两个可执行文件随插件进信任缓存）、`build-metal-probe.sh`、`apple-ld.py`（Darling 里的 ld-classic）。
 - **产品入口**：`product.py`（见上）。
 - **系统盘与部署**：
   - `make-macos-disk.py`：生成单 APFS 容器新装盘与空种子；`grow-data-store.py` 扩容；`make-trust-bundle.py`：从 IPSW 生成苹果信任缓存。
@@ -105,6 +105,7 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 | `droidvm-gpu/` | `NativeAdreno/`、`UniXNU-droidvm/` | DroidVMGpu（现只负责发布），由本地分支 `droidvm-macos` 的 format-patch 导出 |
 | `mesa-macos/` | Turnip（mesa-work） | 0001 日志、0002 virtgpu 后端找 AGXAccelerator；构建时 apply、结束时 reverse |
 | `metal2vulkan-macos/` | metal2vulkan（bridge，固定在 555b13d） | 打在 AdrenoMetal 累积补丁 0046 之上：0003–0005 反射与 swizzle 修正、0006 内存池块上限 16 MiB、0007 内存压力下不预留 + 按空闲清理（NativeMetal 935c468 的 bridge 要用）；列表在 `build-metal-bridge-macos.py` 的 `PATCHES` |
+| `shader-cache/` | Shader Cache App 的 worker（复制出的 `PrimeShaders.h`） | 0001 函数级多线程编译、去掉每管线 20 ms 停顿、QoS 改 UTILITY；`build-shader-cache-app.py` 打 |
 | `drivers/` | UniXNU 驱动 | ArmCpu 等 |
 | `darwinboot-*.patch` | DarwinBoot | arm64e、512 MB 内核与内存回收 |
 

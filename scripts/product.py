@@ -155,13 +155,24 @@ def gpu(config, env, deps):
         run(config['gpu']['turnip'], env)
         run(config['gpu']['bridge'], env)
     run(config['gpu']['plugin'], env)
+    for app in config['gpu'].get('apps', []):
+        run(app['build'], env)
+
+
+def bundles(config):
+    """(built bundle, its path in the guest, its name in the manifest's trusted list): the plugin, then the apps beside it."""
+    gpu = config['gpu']
+    return [(ROOT / gpu['bundle'], gpu['guest_path'], ''),
+            *[(ROOT / app['bundle'], app['guest_path'], Path(app['bundle']).name + '/') for app in gpu.get('apps', [])]]
 
 
 def bundle_hashes(config, stage):
-    bundle = ROOT / config['gpu']['bundle']
-    hashes = {str(f.relative_to(bundle)): h.hex() for f in sorted(bundle.rglob('*')) if f.is_file() and (h := stage.cdhash(f))}
-    if not hashes:
-        raise SystemExit(f'{bundle}: no signed Mach-O (product.py gpu)')
+    hashes = {}
+    for bundle, _, prefix in bundles(config):
+        found = {prefix + str(f.relative_to(bundle)): h.hex() for f in sorted(bundle.rglob('*')) if f.is_file() and (h := stage.cdhash(f))}
+        if not found:
+            raise SystemExit(f'{bundle}: no signed Mach-O (product.py gpu)')
+        hashes.update(found)
     return hashes
 
 
@@ -342,10 +353,14 @@ def status(config, env):
 
 
 def install_plugin(config, guest):
-    """The bundle as built, into the running guest, unless it is there already. The files are replaced by renaming, so a process
+    """The plugin and the apps as built, into the running guest, each unless it is there already."""
+    for bundle, target, _ in bundles(config):
+        install_bundle(bundle, target, guest)
+
+
+def install_bundle(bundle, target, guest):
+    """A bundle as built, into the running guest, unless it is there already. The files are replaced by renaming, so a process
     that has the old plugin mapped keeps it until it restarts; the boot disk must trust the new one (boot, deploy) before a restart."""
-    bundle = ROOT / config['gpu']['bundle']
-    target = config['gpu']['guest_path']
     password = os.environ.get('MACOS_GUEST_PASSWORD')
     if password is None:
         raise SystemExit('MACOS_GUEST_PASSWORD: the guest user\'s password (sudo)')
@@ -354,7 +369,7 @@ def install_plugin(config, guest):
     environment = dict(os.environ, SSHPASS=password)
     files = [f for f in sorted(bundle.rglob('*')) if f.is_file()]
     local = {str(f.relative_to(bundle)): sha256(f) for f in files}
-    listing = subprocess.run(ssh + [f'cd {shlex.quote(target)} 2>/dev/null && find . -type f -exec shasum -a 256 {{}} +'],
+    listing = subprocess.run(ssh + [f'if cd {shlex.quote(target)} 2>/dev/null; then find . -type f -exec shasum -a 256 {{}} +; fi'],
                              capture_output=True, text=True, env=environment, check=True).stdout
     remote = {line.split(None, 1)[1].strip()[2:]: line.split()[0] for line in listing.splitlines() if line.strip()}
     if remote == local:
@@ -365,8 +380,9 @@ def install_plugin(config, guest):
     archive = subprocess.run(['tar', '-C', str(bundle.parent), '-cf', '-', bundle.name], capture_output=True, check=True).stdout
     subprocess.run(ssh + [f'tar -C {staging} -xf -'], input=archive, env=environment, check=True)
     name = shlex.quote(bundle.name)
+    prev_name = shlex.quote(bundle.name.replace(' ', '') + '.prev')
     sudo = f'echo {shlex.quote(password)} | sudo -S -p ""'
-    previous = f'/private/var/tmp/{name}.prev'   # the same volume (a rename), outside the directory Metal searches
+    previous = f'/private/var/tmp/{prev_name}'   # the same volume (a rename), outside the directory Metal searches
     for step in (f'chown -R 0:0 {staging}/{name} && chmod -R go-w,a+rX {staging}/{name}',
                  f'rm -rf {previous}',
                  f'sh -c "if [ -e {shlex.quote(target)} ]; then mv {shlex.quote(target)} {previous}; fi; '
@@ -436,6 +452,8 @@ def main():
             raise SystemExit(f'the bridge failed ({bridge.returncode}): {config["boot"]["output"]}/bridge.out')
         print(f'  bridge done at {time.monotonic() - start:.1f} s', flush=True)
         run(config['gpu']['plugin'], env)
+        for app in config['gpu'].get('apps', []):
+            run(app['build'], env)
         boot(config, env, [])
     elif args.cmd == 'verify':
         raise SystemExit(1 if verify(config, env, args.image) else 0)

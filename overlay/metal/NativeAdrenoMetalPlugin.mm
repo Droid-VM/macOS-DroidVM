@@ -347,6 +347,29 @@ static id deviceForPort(io_service_t port)
         setenv("CA_DISABLE_FRAMEBUFFER_COMPRESSION", "1", 1);
         CFPreferencesSetAppValue(CFSTR("CAEnableFramebufferCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
         CFPreferencesSetAppValue(CFSTR("CAEnableIOSurfaceCompression"), kCFBooleanFalse, kCFPreferencesCurrentApplication);
+        // The system shader cache (NativeMetal SharedShaderCache.h): /Library/GPUBundles/NativeAdrenoMetal.cache, which every sandbox that
+        // may use graphics reads. Upstream's kernel makes a directory for the render server and shows it read-only there; this guest's
+        // does not, so only the superuser writes it: the Shader Cache app's worker (scripts/build-shader-cache-app.py), as root with
+        // NATIVE_METAL_PRIMER=1, opens its device in it and compiles the OS's Metal libraries there. Every other process reads it as a
+        // layer after its own cache (owner root, nothing on the way writable by group or others, no link followed: the runtime's
+        // system layer). /private/var/ngpu/debug/no-system-cache turns the layer off.
+        static const char kSystemCache[] = "/Library/GPUBundles/NativeAdrenoMetal.cache";
+        static const uint32_t kSystemCacheOwners[] = {0};
+        if (geteuid() == 0 && getenv("NATIVE_METAL_PRIMER")) {
+            struct stat st = {};
+            if (lstat(kSystemCache, &st) || !S_ISDIR(st.st_mode) || st.st_uid != 0 || (st.st_mode & 0022)) {
+                fprintf(stderr, "NativeAdrenoMetal: %s: %s is not a directory of the superuser's only\n", getprogname(), kSystemCache);
+                return nil;
+            }
+            native_bridge_metal_system_cache(nullptr, nullptr, 0, true);
+            @try {
+                device = native_bridge_metal_open(turnip, kSystemCache, registryID, missingSelector);
+            } @catch (NSException *exception) {
+                fprintf(stderr, "NativeAdrenoMetal: %s: %s\n", getprogname(), exception.reason.UTF8String);
+                device = nil;
+            }
+        } else if (access("/private/var/ngpu/debug/no-system-cache", F_OK) != 0)
+            native_bridge_metal_system_cache(kSystemCache, kSystemCacheOwners, 1, false);
         // The runtime needs a writable shader-cache directory: the user cache directory, the process's own folder in it (a platform
         // sandbox lets a service write only there), the temp directory, else /private/var/tmp.
         char candidates[4][512] = {};

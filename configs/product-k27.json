@@ -105,7 +105,14 @@
   "bridge": "python3 scripts/build-metal-bridge-macos.py",
   "plugin": "bash scripts/build-metal-plugin.sh --no-deps",
   "bundle": "out/metal/plugin/NativeAdrenoMetal.bundle",
-  "guest_path": "/Library/GPUBundles/NativeAdrenoMetal.bundle"
+  "guest_path": "/Library/GPUBundles/NativeAdrenoMetal.bundle",
+  "apps": [
+   {
+    "build": "python3 scripts/build-shader-cache-app.py",
+    "bundle": "out/metal/shader-cache/Shader Cache.app",
+    "guest_path": "/Applications/Shader Cache.app"
+   }
+  ]
  },
  "boot": {
   "base_trustcache": "artifacts/27.2/boot/kernel.macho.trustcache",

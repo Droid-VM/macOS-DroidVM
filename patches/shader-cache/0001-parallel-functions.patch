@@ -1,0 +1,252 @@
+--- a/PrimeShaders.h
++++ b/PrimeShaders.h
+@@ -20,6 +20,10 @@
+ #include <string>
+ #include <vector>
+ #include <functional>
++#include <algorithm>
++#include <atomic>
++#include <mutex>
++#include <thread>
+ 
+ extern "C" unsigned native_bridge_metal_recent_commits(uint64_t windowUs);
+ 
+@@ -345,115 +349,148 @@
+     return descriptor;
+ }
+ 
+-// One library: every function it names, in its order; returns the log line.
++// One library: every function it names; returns the log line.
++// The Shader Cache worker's build (scripts/build-shader-cache-app.py, patches/shader-cache): the functions are compiled by
++// threads() threads at once, each taking the next one, as the runtime compiles a pipeline on the thread that asks for it
++// (bridge 0041). One thread compiled mlx.metallib's thousands of kernels one after another, 20 ms apart.
++static unsigned threads() {
++    if (const char *text = getenv("NATIVE_METAL_PRIME_THREADS")) {
++        const int value = atoi(text);
++        if (value > 0) return (unsigned)value;
++    }
++    int cpus = 0;
++    size_t size = sizeof cpus;
++    if (sysctlbyname("hw.activecpu", &cpus, &size, nullptr, 0) != 0 || cpus < 2) return 1;
++    return (unsigned)cpus - 1;   // one CPU left to the desktop
++}
+ static std::string library(id<MTLDevice> device, const std::string &path, const std::string &current, const std::set<std::string> &bad,
+                            const std::string &functionsPath, const std::set<std::string> &functionsDone,
+                            const std::string &refusedPath, const std::set<std::string> &refusedDone,
+                            const std::string &build, bool &complete) {
+     complete = false;
+-    unsigned kernels = 0, renders = 0, made = 0, refused = 0, skipped = 0, zeroed = 0, linkedMade = 0, halfMade = 0;
++    std::atomic<unsigned> kernels{0}, renders{0}, made{0}, refused{0}, skipped{0}, zeroed{0}, linkedMade{0}, halfMade{0};
+     const unsigned earlierRefusals = native_prime_functions_refused;
+     uint64_t waited = 0;
+     std::string firstRefusal;   // the first refused function and why, so the log tells translator gaps from unspecialized constants
++    std::mutex lock;            // firstRefusal, the progress files and report()
+     const uint64_t began = nowMs();
+     @autoreleasepool {
+         NSError *error = nil;
+-        // Reading and parsing a library is work too: not during an animation either.
+-        waited += waitForQuiet();
+         native_prime_compiling = 3;
+         id<MTLLibrary> lib = [device newLibraryWithURL:[NSURL fileURLWithPath:@(path.c_str())] error:&error];
+         native_prime_compiling = 0;
+         if (!lib) return path + " library refused: " + (error ? error.localizedDescription.UTF8String : "no error");
+         NSArray<NSString *> *names = lib.functionNames;
+         NSArray<NSString *> *entries = [lib respondsToSelector:@selector(nb_primeFunctionNames)] ? [(NSObject *)lib nb_primeFunctionNames] : names;
+-        for (NSString *name in entries) {
+-            @autoreleasepool {
+-                if (stopping()) break;
++        auto one = [&](NSString *name) {
++            const std::string key = path + "\t" + name.UTF8String;
++            const std::string doneKey = key + "\t" + build;
++            if (bad.count(doneKey)) {++skipped; return;}
++            const std::string attemptKey = doneKey + "-inputs3";
++            if (refusedDone.count(attemptKey)) {++refused; return;}
++            if (functionsDone.count(doneKey)) {++made; native_prime_functions_resumed = native_prime_functions_resumed + 1; return;}
++            unsigned zero = 0;
++            id<MTLFunction> function = defaultFunction(lib, name, zero);
++            if (!function) {
++                ++refused;
++                std::lock_guard<std::mutex> hold(lock);
+                 native_prime_functions_refused = earlierRefusals + refused;
+-                report(path, name.UTF8String);
+-                const std::string key = path + "\t" + name.UTF8String;
+-                const std::string doneKey = key + "\t" + build;
+-                native_prime_compiling = 3;
+-                if (bad.count(doneKey)) {++skipped; continue;}
+-                const std::string attemptKey = doneKey + "-inputs3";
+-                if (refusedDone.count(attemptKey)) {++refused; continue;}
+-                if (functionsDone.count(doneKey)) {++made; native_prime_functions_resumed = native_prime_functions_resumed + 1; continue;}
+-                id<MTLFunction> function = defaultFunction(lib, name, zeroed);
+-                if (!function) {++refused; native_prime_functions_refused = earlierRefusals + refused; appendLine(refusedPath, attemptKey); report(path, name.UTF8String); continue;}
+-                const MTLFunctionType type = function.functionType;
+-                if (type != MTLFunctionTypeKernel && type != MTLFunctionTypeVertex) continue;
+-                waited += waitForQuiet();
++                appendLine(refusedPath, attemptKey);
++                return;
++            }
++            const MTLFunctionType type = function.functionType;
++            if (type != MTLFunctionTypeKernel && type != MTLFunctionTypeVertex) return;
++            {
++                std::lock_guard<std::mutex> hold(lock);
+                 writeCurrent(current, doneKey);
+-                native_prime_compiling = 1;
+-                bool ok = false;
+-                @try {
+-                    if (type == MTLFunctionTypeKernel) {
+-                        ++kernels;
+-                        ok = [device newComputePipelineStateWithFunction:function error:&error] != nil;
+-                        if (!ok && [error.localizedDescription containsString:@"LinkedFunction"]) {
+-                            ok = linkedKernel(device, lib, function, &error);
+-                            if (ok) ++linkedMade;
+-                        }
+-                    } else {
+-                        ++renders;
+-                        MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+-                        d.vertexFunction = function;
+-                        d.vertexDescriptor = vertexInputs(function);
+-                        d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+-                        // The fragment function of the same stem under the libraries' usual spellings; without one the pipeline still
+-                        // rasterizes (Metal refuses an unrasterized pipeline whose vertex function returns a position, int-245: 732 refusals).
+-                        static NSString *const kPairs[][2] = {{@"_vert_", @"_frag_"}, {@"_vertex", @"_fragment"}, {@"Vertex", @"Fragment"},
+-                                                              {@"vertex", @"fragment"}, {@"_vs", @"_fs"}, {@"_vert", @"_frag"}, {@"VS", @"PS"}};
+-                        for (const auto &pair : kPairs) {
+-                            NSString *fragment = [name stringByReplacingOccurrencesOfString:pair[0] withString:pair[1]];
+-                            if (![fragment isEqualToString:name] && [names containsObject:fragment]) {
+-                                d.fragmentFunction = defaultFunction(lib, fragment, zeroed);
+-                                if (d.fragmentFunction) break;
+-                            }
+-                        }
+-                        ok = [device newRenderPipelineStateWithDescriptor:d error:&error] != nil;
+-                        if (!ok && [error.localizedDescription containsString:@"RasterizedVoidVertex"]) {
+-                            d.rasterizationEnabled = NO;
+-                            error = nil;
+-                            ok = [device newRenderPipelineStateWithDescriptor:d error:&error] != nil;
+-                        }
+-                        // The render server's framebuffer is half-float (RGhA) on this board: its pipelines draw into RGBA16Float, a state
+-                        // of its own to Turnip, so the same pair is made for it too.
+-                        if (ok) {
+-                            d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
+-                            NSError *half = nil;
+-                            if ([device newRenderPipelineStateWithDescriptor:d error:&half]) ++halfMade;
+-                            else {ok = false; error = half;}
++                report(path, name.UTF8String);
++            }
++            native_prime_compiling = 1;
++            NSError *failure = nil;
++            bool ok = false;
++            @try {
++                if (type == MTLFunctionTypeKernel) {
++                    ++kernels;
++                    ok = [device newComputePipelineStateWithFunction:function error:&failure] != nil;
++                    if (!ok && [failure.localizedDescription containsString:@"LinkedFunction"]) {
++                        ok = linkedKernel(device, lib, function, &failure);
++                        if (ok) ++linkedMade;
++                    }
++                } else {
++                    ++renders;
++                    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
++                    d.vertexFunction = function;
++                    d.vertexDescriptor = vertexInputs(function);
++                    d.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
++                    static NSString *const kPairs[][2] = {{@"_vert_", @"_frag_"}, {@"_vertex", @"_fragment"}, {@"Vertex", @"Fragment"},
++                                                          {@"vertex", @"fragment"}, {@"_vs", @"_fs"}, {@"_vert", @"_frag"}, {@"VS", @"PS"}};
++                    for (const auto &pair : kPairs) {
++                        NSString *fragment = [name stringByReplacingOccurrencesOfString:pair[0] withString:pair[1]];
++                        if (![fragment isEqualToString:name] && [names containsObject:fragment]) {
++                            d.fragmentFunction = defaultFunction(lib, fragment, zero);
++                            if (d.fragmentFunction) break;
+                         }
+                     }
+-                } @catch (NSException *exception) {
+-                    ok = false;
++                    ok = [device newRenderPipelineStateWithDescriptor:d error:&failure] != nil;
++                    if (!ok && [failure.localizedDescription containsString:@"RasterizedVoidVertex"]) {
++                        d.rasterizationEnabled = NO;
++                        failure = nil;
++                        ok = [device newRenderPipelineStateWithDescriptor:d error:&failure] != nil;
++                    }
++                    if (ok) {
++                        d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA16Float;
++                        NSError *half = nil;
++                        if ([device newRenderPipelineStateWithDescriptor:d error:&half]) ++halfMade;
++                        else {ok = false; failure = half;}
++                    }
+                 }
+-                native_prime_compiling = 0;
+-                appendLine(ok ? functionsPath : refusedPath, ok ? doneKey : attemptKey);
+-                ok ? ++made : ++refused;
+-                if (ok) native_prime_made = native_prime_made + 1;
+-                if (!ok && firstRefusal.empty()) {
+-                    NSString *why = error.localizedDescription ?: @"no error";
+-                    firstRefusal = std::string(" first-refused=") + name.UTF8String + ": " + why.UTF8String;
+-                    if (firstRefusal.size() > 220) firstRefusal.resize(220);
+-                    for (char &c : firstRefusal) if (c == '\n' || c == '\t') c = ' ';
++            } @catch (NSException *exception) {
++                ok = false;
++            }
++            zeroed += zero;
++            ok ? ++made : ++refused;
++            std::lock_guard<std::mutex> hold(lock);
++            appendLine(ok ? functionsPath : refusedPath, ok ? doneKey : attemptKey);
++            if (ok) native_prime_made = native_prime_made + 1;
++            if (!ok && firstRefusal.empty()) {
++                NSString *why = failure.localizedDescription ?: @"no error";
++                firstRefusal = std::string(" first-refused=") + name.UTF8String + ": " + why.UTF8String;
++                if (firstRefusal.size() > 220) firstRefusal.resize(220);
++                for (char &c : firstRefusal) if (c == '\n' || c == '\t') c = ' ';
++            }
++            native_prime_functions_refused = earlierRefusals + refused;
++            report(path, name.UTF8String);
++        };
++        const NSUInteger count = entries.count;
++        std::atomic<NSUInteger> next{0};
++        auto work = [&] {
++            for (;;) {
++                @autoreleasepool {
++                    if (stopping()) return;
++                    const NSUInteger at = next++;
++                    if (at >= count) return;
++                    one(entries[at]);
+                 }
+-                native_prime_functions_refused = earlierRefusals + refused;
+-                report(path, name.UTF8String);
+-                error = nil;
+-                // Low priority already; a short pause between pipelines keeps the render server's own work ahead.
+-                usleep(20000);
+             }
+-        }
++        };
++        const unsigned width = (unsigned)std::min<NSUInteger>(threads(), std::max<NSUInteger>(count, 1));
++        std::vector<std::thread> helpers;
++        for (unsigned i = 1; i < width; i++) helpers.emplace_back([&] {
++            pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
++            work();
++        });
++        work();
++        for (std::thread &helper : helpers) helper.join();
++        native_prime_compiling = 0;
+     }
+     unlink(current.c_str());
+     native_prime_functions_refused = earlierRefusals + refused;
+     native_prime_functions_skipped = native_prime_functions_skipped + skipped;
+     complete = refused == 0 && skipped == 0;
+     char line[200];
+-    snprintf(line, sizeof line, " kernels=%u renders=%u made=%u half=%u zeroed=%u linked=%u refused=%u skipped=%u ms=%llu waited=%llu", kernels, renders,
+-             made, halfMade, zeroed, linkedMade, refused, skipped, (unsigned long long)(nowMs() - began), (unsigned long long)waited);
++    snprintf(line, sizeof line, " kernels=%u renders=%u made=%u half=%u zeroed=%u linked=%u refused=%u skipped=%u ms=%llu waited=%llu",
++             kernels.load(), renders.load(), made.load(), halfMade.load(), zeroed.load(), linkedMade.load(), refused.load(), skipped.load(),
++             (unsigned long long)(nowMs() - began), (unsigned long long)waited);
+     return path + line + firstRefusal;
+ }
+ 
+@@ -462,7 +499,9 @@
+ // library of the list is primed but those of other GPUs' driver bundles; without it only the libraries of bundles loaded here are,
+ // since the cache then serves this process alone.
+ static void run(id<MTLDevice> device, std::string root, unsigned delaySeconds, const std::string &listPath, bool wholeSystem) {
+-    pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
++    // The worker is asked for by the user and waits for nothing else: utility, not background (background runs on the efficiency
++    // cores alone).
++    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+     native_bridge_metal_quiet_problems(true);
+     while (root.size() > 1 && root.back() == '/') root.pop_back();
+     const std::string donePath = root + "/prime-done", badPath = root + "/prime-bad", current = root + "/prime-current",

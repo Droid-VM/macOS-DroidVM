@@ -72,6 +72,18 @@ open(sys.argv[1], 'wb').write(plistlib.dumps(dict(
     CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='NativeAdrenoMetalDevice',
     CFBundleSupportedPlatforms=['MacOSX'], LSMinimumSystemVersion='14.0'), fmt=plistlib.FMT_XML))
 EOF
+# The build the Shader Cache app (scripts/build-shader-cache-app.py) compares its last run with: a plugin or Turnip built otherwise
+# shows the system shader cache as needing an update.
+mkdir -p "$B/Resources"
+python3 - "$B" <<'EOF'
+import hashlib, json, sys
+from pathlib import Path
+contents = Path(sys.argv[1])
+digest = hashlib.sha256()
+for name in ('NativeAdrenoMetal', 'libvulkan_freedreno.dylib'):
+    digest.update((contents / 'MacOS' / name).read_bytes())
+(contents / 'Resources/gpu-build.json').write_text(json.dumps({'metal_source_sha256': digest.hexdigest()}) + '\n')
+EOF
 # The bundle only: scripts/product.py makes the trust cache and boot disk from it and puts it into the guest (install-plugin).
 # STAGE=1 (the seed-and-overlay Data model, before the single-container disk): also stage it into a Data seed with metal-probe.
 # Without STAGE_ARGS=--base/--store that makes a new seed, which resets such a VM's Data.
