@@ -23,6 +23,8 @@ runs:
         PACKAGES: ${{ inputs.packages }}
         RUST: ${{ inputs.rust }}
       run: |
+        # Ubuntu 24.04 lets AppArmor refuse unprivileged user namespaces (unshare -r: mkapfs in apfs-add-volumes.py)
+        sudo sysctl -qw kernel.apparmor_restrict_unprivileged_userns=0 || true
         lock() { python3 -c "import json,sys; d=json.load(open('configs/env.lock.json')); print(eval(sys.argv[1]))" "$1"; }
         if [ "$PACKAGES" = true ]; then
           wget -qO "$RUNNER_TEMP/llvm.sh" https://apt.llvm.org/llvm.sh
