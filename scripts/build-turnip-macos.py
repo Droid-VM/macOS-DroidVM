@@ -99,6 +99,9 @@ env.update(CC=str(LLVM / 'clang'), CXX=str(LLVM / 'clang++'), CFLAGS='', CXXFLAG
 # the compiler driver's temporary objects must be where the Darling container sees them (it mounts the workspace only)
 (OUT.parent / 'tmp').mkdir(exist_ok=True)
 env['TMPDIR'] = str(OUT.parent / 'tmp')
+# Mesa's generators (isaspec's encode.py among them) walk Python sets: with a random hash seed each build orders the generated code
+# differently and the library (and its CDHash in the boot disk's trust cache) changes from build to build.
+env['PYTHONHASHSEED'] = '0'
 log = OUT.parent / 'mesa-tu-configure.log'
 if (OUT / 'build.ninja').exists():
     command = ['meson', 'configure', str(OUT), *options]
