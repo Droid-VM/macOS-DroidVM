@@ -1,0 +1,115 @@
+{
+ "name": "k27",
+ "tag": "27.2",
+ "ipsw": "configs/macos-27.2-26B8125.json",
+ "inputs": {
+  "ipsws": [
+   {
+    "profile": "configs/macos-27.2-26B8125.json",
+    "inventory": "inventory",
+    "identity": "k114sap",
+    "members": [
+     {
+      "component": "StaticTrustCache",
+      "to": "141-64992-076.dmg.aea.trustcache"
+     },
+     {
+      "component": "Cryptex1,SystemTrustCache",
+      "to": "141-64957-077.dmg.aea.trustcache"
+     },
+     {
+      "component": "Cryptex1,AppTrustCache",
+      "to": "app-cryptex/141-64745-077.dmg.trustcache"
+     },
+     {
+      "component": "Cryptex1,AppOS",
+      "to": "app-cryptex/141-64745-077.dmg"
+     },
+     {
+      "component": "Cryptex1,SystemOS",
+      "to": "dec/141-64957-077.dmg",
+      "aea": true
+     },
+     {
+      "component": "OS",
+      "to": "os.raw",
+      "aea": true
+     }
+    ]
+   },
+   {
+    "profile": "configs/macos-27.2-26B123.json",
+    "inventory": "inventory-26B123",
+    "identity": "vma2macosap",
+    "members": [
+     {
+      "component": "KernelCache",
+      "to": "kernelcache.release.vma2"
+     },
+     {
+      "component": "DeviceTree",
+      "to": "DeviceTree.vma2macosap.im4p"
+     }
+    ]
+   }
+  ],
+  "kernel_collection": "kernelcache.release.vma2",
+  "trust_bundle": [
+   "141-64992-076.dmg.aea.trustcache",
+   "141-64957-077.dmg.aea.trustcache",
+   "app-cryptex/141-64745-077.dmg.trustcache"
+  ]
+ },
+ "kc": {
+  "source": "out/kc/kc27.bin",
+  "kernel": "out/k27/kernel-k27.macho",
+  "output": "out/k27/kc-k27.bin",
+  "keep": "configs/kc-keep.txt"
+ },
+ "env": {
+  "MACOS_TAG": "27.2",
+  "MACOS_PCIE": "1",
+  "MACOS_DATA_PCI": "1",
+  "MACOS_NET_PCI": "1",
+  "MACOS_USB_PCI": "1",
+  "MACOS_DISPLAY": "1",
+  "MACOS_GPU": "1",
+  "MACOS_VIDEO": "1",
+  "MACOS_AUDIO": "1",
+  "MACOS_VIRTIO_GPU": "1",
+  "MACOS_SND": "1",
+  "MACOS_MEDIA": "1",
+  "MACOS_MEDIA_VIDC": "1",
+  "MACOS_LP_SIP0": "0x2",
+  "MACOS_BOOT_MANIFEST_HASH": "1"
+ },
+ "kernel_args": [
+  "vm_compression_limit=1572864",
+  "rootauth=0"
+ ],
+ "kexts": [
+  "bash k27/build-platform-cpu.sh",
+  "bash k27/build-platform-rtc.sh",
+  "python3 scripts/build-native-kext.py ARMPlatformStandIn overlay/kext/ARMPlatformStandIn.cpp overlay/kext/NativeKextGlue.cpp --obj k27-obj",
+  "python3 scripts/build-native-kext.py DroidVMAPFSVisibility overlay/kext/DroidVMAPFSVisibility.cpp overlay/kext/NativeKextGlue.cpp --obj k27-obj",
+  "python3 scripts/build-native-kext.py DroidVMGicMsi overlay/kext/DroidVMGicMsi.cpp overlay/kext/NativeKextGlue.cpp --obj k27-obj",
+  "python3 scripts/build-native-kext.py DroidVMInput overlay/kext/DroidVMInput/DroidVMInput.cpp overlay/kext/NativeKextGlue.cpp --obj k27-obj -I $PWD/out/x12377/inc-hid -I $PWD/overlay/droidvm/drivers/NativeVirtioInputPci -I $PWD/toolchains/sdks/MacOSX26.1.sdk/System/Library/Frameworks/Kernel.framework/Headers",
+  "bash k27/build-native-aes.sh",
+  "python3 scripts/build-droidvm-gpu.py",
+  "bash k27/build-native-display.sh",
+  "bash k27/build-native-video.sh",
+  "bash k27/build-native-audio.sh"
+ ],
+ "gpu": {
+  "turnip": "python3 scripts/build-turnip-macos.py",
+  "bridge": "python3 scripts/build-metal-bridge-macos.py",
+  "plugin": "bash scripts/build-metal-plugin.sh --no-deps",
+  "bundle": "out/metal/plugin/NativeAdrenoMetal.bundle",
+  "guest_path": "/Library/GPUBundles/NativeAdrenoMetal.bundle"
+ },
+ "boot": {
+  "base_trustcache": "artifacts/27.2/boot/kernel.macho.trustcache",
+  "seed": "artifacts/27.2/disk/scratch-data.img",
+  "output": "out/product/k27"
+ }
+}

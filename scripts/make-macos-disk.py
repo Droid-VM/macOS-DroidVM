@@ -44,7 +44,7 @@ volumes = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(volumes)
 grow = volumes.grow
 TAG = os.environ.get('MACOS_TAG', '27.2')
-ARTIFACTS = ROOT / f'artifacts/{TAG}'
+ARTIFACTS = Path(os.environ.get('MACOS_ARTIFACTS') or ROOT / f'artifacts/{TAG}').resolve()   # MACOS_ARTIFACTS: product.py inputs --output's
 APFS_KO = ROOT / 'sources/linux-apfs-rw/apfs.ko'
 LABEL = b'DroidVMDataStore\x01\x00\x00\x00'
 # as on the live disk (docs/k27-real-disk-layout-plan.md P5): Data in the System volume's group; Update, VM, Hardware, xART beside

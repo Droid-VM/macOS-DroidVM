@@ -256,8 +256,9 @@ def push_images(args):
         fix_owner(BOOT)
 
 
-def boot_disk(args):
-    """Build the boot disk from the FDT the daemon's crosvm dumped for this very VM and push it."""
+def build_boot(args, local=None):
+    """Build the boot disk, from nothing, from the FDT the daemon's crosvm dumped for this very VM: (image, kernel arguments).
+    local: the directory it is built in (scripts/product.py's; removed first)."""
     OUT.mkdir(parents=True, exist_ok=True)
     fdt = OUT / 'generated.dtb'
     # The VM stopped just before (xnu12377-smoke.sh) may still be going down while the daemon rewrites the FDT: the pull fails then
@@ -277,14 +278,19 @@ def boot_disk(args):
     artifacts = ROOT / f'artifacts/{TAG}'
     line = run.kernel_args(REQUIRED_ARGS + ([a for a in GPU_ARGS if a.split('=')[0] not in os.environ.get('MACOS_DROP_ARGS', '').split(',')] if GPU else []) +
                            ['exec-env=' + ';'.join(EXEC_ENV + (GPU_EXEC_ENV if GPU else []))] + args.kernel_arg)
-    local = OUT / 'boot'
+    local = local or OUT / 'boot'
     if local.exists():
         subprocess.run(['rm', '-rf', str(local)], check=True)
     local.mkdir()
     # MACOS_TRUSTCACHE / MACOS_DATA_SEED: replacements staged by scripts/stage-gpu-plugin.py (the Metal plugin and its CDHashes)
     trust = Path(os.environ.get('MACOS_TRUSTCACHE') or artifacts / 'boot/kernel.macho.trustcache')
     seed = Path(os.environ.get('MACOS_DATA_SEED') or artifacts / 'disk/scratch-data.img')
-    disk = run.build_boot_disk(local, trust, seed, adt, line)
+    return run.build_boot_disk(local, trust, seed, adt, line), line
+
+
+def boot_disk(args):
+    """Build the boot disk and push it."""
+    disk, line = build_boot(args)
     adb('push', str(disk), BOOT, timeout=900)
     fix_owner(BOOT)
     print('boot disk pushed:', BOOT, '\nkernel args:', line)

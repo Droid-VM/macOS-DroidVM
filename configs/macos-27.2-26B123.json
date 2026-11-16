@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "macos-27.2-26B123-universal",
+  "status": "kernel-collection-source-only",
+  "ipsw": {
+    "identifier": "VirtualMac2,1",
+    "version": "27.2",
+    "buildid": "26B123",
+    "url": "https://updates.cdn-apple.com/2026FallFCS/c9671975-52db-4fb5-9af2-00217169ba8d/UniversalMac_27.2_26B123_Restore.ipsw",
+    "filesize": 25595669503,
+    "manifest_sha256": "0fbfae04175cde81ef36d273aa280d39ffe5a54eacba8494b45a59daca462510"
+  }
+}

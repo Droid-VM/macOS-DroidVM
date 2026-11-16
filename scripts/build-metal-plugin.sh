@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Build the macOS Metal plugin, out/metal/plugin/NativeAdrenoMetal.bundle: overlay/metal/NativeAdrenoMetalPlugin.mm, UniXNU's native Metal frontend
-# and bridge (scripts/build-metal-bridge-macos.py) and Turnip beside it (scripts/build-turnip-macos.py), then stage it with metal-probe
-# (scripts/build-metal-probe.sh builds that) for a boot: MACOS_DATA_SEED=out/metal/stage/scratch-data.img
-# MACOS_TRUSTCACHE=out/metal/stage/kernel.macho.trustcache, stderr-log=1.
+# and bridge (scripts/build-metal-bridge-macos.py) and Turnip beside it (scripts/build-turnip-macos.py). scripts/product.py takes it from there.
 #   build-metal-plugin.sh [--no-deps]     --no-deps: reuse the built Turnip and bridge
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -127,7 +125,9 @@ open(sys.argv[1], 'wb').write(plistlib.dumps(dict(
     CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='NativeAdrenoMetalDevice',
     CFBundleSupportedPlatforms=['MacOSX'], LSMinimumSystemVersion='14.0'), fmt=plistlib.FMT_XML))
 EOF
-# NO_STAGE=1: the bundle only. Staging without STAGE_ARGS=--base/--store makes a new Data seed, which resets the phone's Data.
-[ -n "${NO_STAGE:-}" ] && exit 0
+# The bundle only: scripts/product.py makes the trust cache and boot disk from it and puts it into the guest (install-plugin).
+# STAGE=1 (the seed-and-overlay Data model, before the single-container disk): also stage it into a Data seed with metal-probe.
+# Without STAGE_ARGS=--base/--store that makes a new seed, which resets such a VM's Data.
+[ "${STAGE:-}" = 1 ] || exit 0
 [ -x out/metal/probe/metal-probe ] || bash scripts/build-metal-probe.sh
 python3 scripts/stage-gpu-plugin.py --probe out/metal/probe/metal-probe ${STAGE_ARGS:-} $O/NativeAdrenoMetal.bundle

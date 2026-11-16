@@ -1,7 +1,40 @@
-# macOS-DroidVM 仓库结构（2026-11-04）
+# macOS-DroidVM 仓库结构（2026-11-16）
 
-本仓库（`~/crosvm/macos`，远端 `Droid-VM/macOS-DroidVM`，分支 `main`）在手机上的 DroidVM（crosvm + Gunyah）里跑 macOS 27.0.1（26A434）：
+本仓库（`~/crosvm/macos`，远端 `Droid-VM/macOS-DroidVM`，分支 `main`）在手机上的 DroidVM（crosvm + Gunyah）里跑 macOS 27.2（26B8125，触屏 MacBook Pro 的版本）：
 源码编译的 xnu-12377 内核 + 27 的内核缓存 kext、自己的板级 kext、Metal 插件（Turnip/metal2vulkan），以及配套的构建、部署、诊断脚本。
+
+## 从 IPSW 到手机上的启动盘
+
+产品的全部开关、内核参数和步骤在 `configs/product-k27.json`，入口是 `scripts/product.py`（每步调用已有脚本，环境变量由配置给出）。
+
+| 阶段 | 多久做一次 | 命令 | 产物 |
+|---|---|---|---|
+| 1. IPSW 输入 | 换 macOS 版本 | `product.py inputs`（配置的 `inputs`：只按 HTTP 范围下载用到的成员并按苹果清单校验，解密 AEA，打信任缓存包，解出内核缓存；已有的跳过；需要 `ipsw` 工具，可用 `$IPSW` 指定） | `artifacts/27.2/`（`os.raw`、`dec/`、`app-cryptex/`、`kernelcache.release.vma2`、`boot/kernel.macho.trustcache`）、`out/kc/kc27.bin` |
+| 2. 源码树 | 换固定提交 | `prepare-sources.py`（`configs/sources.lock.json`） | `sources/` |
+| 3. 系统盘 | 新装一台 VM | `product.py disk DIR`（要 sudo），再 `droidvm-app.py install DIR`、`droidvm-app.py prepare` | 手机上的 Data 存储（单 APFS 容器：System/Data/Preboot/VM/Update/Hardware/xART）、`artifacts/27.2/disk/disk.json` |
+| 4. 内核 | 改内核补丁 | `product.py kernel` | `out/k27/kernel-k27.macho` |
+| 5. 板级 kext | 改 kext 源 | `product.py kexts`（配置里的 `kexts` 列表） | `out/x12377/native-kexts/` |
+| 6. 内核缓存 | 4、5 或 `kc-keep.txt` 变了 | `product.py kc` | `out/k27/kc-k27.bin`（逐字节可复现） |
+| 7. Metal 插件 | 改 GPU 用户态 | `product.py gpu [--deps]`（`--deps` 先编 Turnip 和 bridge） | `out/metal/plugin/NativeAdrenoMetal.bundle` |
+| 8. 启动盘 | 6、7 或内核参数变了 | `product.py boot` | `out/product/k27/boot.img`、`manifest.json` |
+| 9. 部署 | 每次 | `product.py install-plugin 用户@guest`（7 变了才需要）、`product.py deploy`，然后重启 VM | 手机 `boot.img`（上一份留作 `boot.img.prev`） |
+
+日常只用 `product.py build`（6+7+8）加第 9 步；`product.py full` 是 4–8。`product.py status` 看手机上的启动盘是不是清单里那份，
+`product.py verify [镜像]` 逐个载荷对比两份启动盘，`product.py env` 输出配置的环境变量（手动跑单个脚本前 `eval`）。
+
+实测（2026-11-16，20 核开发机、家用宽带）：从空目录跑 `inputs` 约 5 分钟（OS 成员 10 GB 下载 205 s 占大头，网速波动时可到 500 s），
+`disk` 1 分钟，`full` 8 分钟（bridge 7–8 分钟与内核 51 s、kext 77 s、KC 6 s、Turnip 62 s 并行，之后插件 11 s、启动盘数秒），合计约 14 分钟。
+bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这是有意的优化设置；`-Zthreads` 只快 16 s，关调试信息会改变生成的代码。
+除内核（版本串带编译时间）外各产物逐字节可复现；Turnip 靠 `PYTHONHASHSEED=0`（Mesa 生成器遍历集合）。
+
+输入来自两个 IPSW：系统、cryptex 和信任缓存来自触屏 MacBook Pro 的 27.2（`configs/macos-27.2-26B8125.json`），
+内核缓存和设备树来自通用 27.2（`configs/macos-27.2-26B123.json`，触屏版没有 vma2 虚拟机的内核缓存）。
+
+规则：
+- **启动盘和信任缓存每次从头生成**，不在旧镜像上打补丁。信任缓存 = 苹果原件 + 一个模块（插件包里各 Mach-O 构建出来时的 CDHash，
+  链接器签名，不在 guest 里重签）。guest 里的插件必须就是构建出的那个包，所以换插件要先 `install-plugin` 再 `deploy`。
+- 新开关、新内核参数写进 `configs/product-k27.json`，不要只在命令行上带；实验用的环境变量仍然可以临时覆盖。
+- 上机调试（`k27/try.sh` 不带 `K27_NO_BOOT`、`xnu12377-smoke.sh`）是另一条路，不产出产品镜像。
 
 约定：
 - **入库**：脚本、补丁、kext/插件源码、配置。
@@ -19,12 +52,12 @@
 | `scripts/` | 是 | 通用脚本：KC 链接、Metal/Turnip 构建、Data 盘、App 部署、guest 内存读取（见下） |
 | `patches/` | 是 | 对各上游的补丁（见下） |
 | `overlay/` | 是 | 自己写的源码：板级 kext、Metal 插件与探针、旧 DroidVM 板驱动 |
-| `configs/` | 是 | 构建配置与固定版本 |
+| `configs/` | 是 | 构建配置与固定版本；`product-k27.json` 是产品配置 |
 | `compat/` | 是 | 在 Linux 上跑 UniXNU/xnu 构建的兼容层 |
 | `tests/` | 是 | `test_range_layout.py` |
 | `docs/` | 否 | 方案与进展文档（见下） |
 | `sources/` | 否 | 上游源码树（见下） |
-| `artifacts/` | 否 | 从 IPSW 取出的苹果原始件（23G93、27.0.1）与启动输入 |
+| `artifacts/` | 否 | 从 IPSW 取出的苹果原始件（`27.2/` 是当前的）、新装盘（`27.2/disk/`）与启动输入（`boot-inputs/`） |
 | `toolchains/` | 否 | Linux 上的苹果工具链：`linux/`（Darling 镜像、appleclang、cctools、apple-iig）、`sdks/`（MacOSX26.1.sdk、iOS SDK） |
 | `out/` | 否 | 全部构建产物与临时文件（见下） |
 | `research/` | 否 | 诊断代码、探针、测试框架（见下） |
@@ -36,23 +69,27 @@
 |---|---|
 | `build-kernel27.sh` | 编 k27 内核（`out/k27/xnu`，`XNU_KC=1 XNU_KEXT_CRYPTO=1`），补丁来自 `patches/xnu-12377` |
 | `kc-build27.py`、`kc27-layout.py` | 用 27 的内核缓存 + 源码内核 + 自己的 native kext 链接 KC（`out/k27/kc-k27.bin`） |
-| `try.sh` | 组 KC 并上机一次；`K27_NO_BOOT=1` 只编不启动 |
+| `try.sh` | 组 KC 并上机一次；`K27_NO_BOOT=1` 只编不启动（`product.py kc` 就是这样调它） |
 | `build-native-display.sh` | DroidVMDisplay（显示 + virtio-gpu 传输，上游源 `VGPU_REF=59ec0a8`） |
 | `build-native-video.sh` | DroidVMVideo（VideoToolbox 半虚拟化，上游源 `VT_REF=706338e` + `patches/droidvm-video`） |
-| `build-native-aes.sh` | NativeAES |
+| `build-native-aes.sh`、`build-native-audio.sh` | NativeAES、DroidVMAudio（virtio-snd） |
+| `build-platform-cpu.sh`、`build-platform-rtc.sh` | ArmCpu（SMP/SPI/MSI 亲和）、ArmDTPlatform（PL030 RTC） |
 | `panic.sh`、`dbg-state.sh`、`cpu-stacks.py`、`sym.py`、`segaddrs.*` | 运行中/卡死的 VM：panic 文本、调试器状态、各 CPU 栈、符号化 |
 | `TODO.md` | k27 的进度与待办（只在本地） |
 
 ## scripts/（主要的）
 
 - **KC / 内核**：`kc-build.py`、`kc_native.py`（native kext 静态链接）、`kc_reloc.py`、`fileset_kc.py`、`kc-disasm.py`、`kc-vtable.py`、`vtable-abi-diff.py`、`kext-kernel-imports.py`、`gen-iomfb-abi.py`、`build-native-kext.py`、`build-native-ram-block.py`、`build-droidvm-gpu.py`、`build-darwinboot.py`、`ptrauth_disc.py`。
-- **Metal / GPU 用户态**：`build-turnip-macos.py`（Turnip，源在 `sources/UniXNU-turnip`）、`build-metal-bridge-macos.py`（metal2vulkan bridge）、`build-metal-plugin.sh`（插件包 `out/metal/plugin/NativeAdrenoMetal.bundle`；`NO_STAGE=1` 只出包）、`build-metal-probe.sh`、`apple-ld.py`（Darling 里的 ld-classic）。
-- **Data 盘与部署**：
-  - `stage-gpu-plugin.py`：把插件装进 Data 卷，可选 `--log-stream`、`--top`、`--run`、`--probe`、`--file`。改已有 Data 必须用 `--base 种子 --store 存储`，**不能重新生成种子**。
-  - `data_store.py`、`fold-overlay.py`：手机 Data 存储格式（种子 + SHNGDATA 覆盖层）。
-  - `droidvm-app.py`：写 App 的 VM 配置、重建启动盘（`boot`）、`start`/`stop`、`store-patch`（把补丁块写回手机，自动备份 undo）。
-  - `run-macos-vm.py`：生成 ADT/启动盘。
-  - `make-macos-disk.py`：生成单 APFS 容器新装盘与空种子；`make-trust-bundle.py`：生成信任缓存。
+- **Metal / GPU 用户态**：`build-turnip-macos.py`（Turnip，源在 `sources/UniXNU-turnip`）、`build-metal-bridge-macos.py`（metal2vulkan bridge）、`build-metal-plugin.sh`（插件包 `out/metal/plugin/NativeAdrenoMetal.bundle`）、`build-metal-probe.sh`、`apple-ld.py`（Darling 里的 ld-classic）。
+- **产品入口**：`product.py`（见上）。
+- **系统盘与部署**：
+  - `make-macos-disk.py`：生成单 APFS 容器新装盘与空种子；`grow-data-store.py` 扩容；`make-trust-bundle.py`：从 IPSW 生成苹果信任缓存。
+  - `droidvm-app.py`：写 App 的 VM 配置（`register`/`net`/`pcie`/`usb`/`snd`/`media`/`disks`）、装新盘（`install`）、`start`/`stop`/`status`；
+    `build_boot` 从头生成启动盘（`product.py boot` 用它；`droidvm-app.py boot` 是生成后直接推送的调试用法）。
+  - `run-macos-vm.py`：生成 ADT、内核参数行和启动盘的函数库。
+  - `stage-gpu-plugin.py`：`cdhash`/`trust_bundle` 供 `product.py` 用；它自己的 `main`（把插件和诊断任务写进 Data 种子，`--store`/`--disk`）
+    和 `droidvm-app.py store-patch`、`data_store.py`、`fold-overlay.py` 属于旧的“种子 + SHNGDATA 覆盖层”Data 模型，新装盘不用。
+    `build-metal-plugin.sh` 默认只出包，`STAGE=1` 才走旧的 stage。
 - **guest 观察**：`rig-dmesg.py`（从宿主读 guest msgbuf，`--peek` 读内核变量）、`crash-symbolize.py`、`stackshot-*.py`、`xnu12377-smoke.sh`、`boot-cycle.sh`。
 - **IPSW / APFS**：`ipsw-member.py`、`macos-fetch-member.py`、`macos-inputs.py`、`apfs-*.py`、`udif-expand.py`、`dsc-disasm.py`、`dsc-xref.py`。
 - **构建环境**：`prepare-sources.py`、`import-linux-toolchain.py`、`start-linux-runtime.py`、`unixnu-linux.py`，以及 owner policy / 信任根相关的 `*-policy*.py`、`macos-root-*.py`。
@@ -67,7 +104,7 @@
 | `droidvm-display/` | UniXNU-droidvm 的 virtio-gpu 源 | 0001 |
 | `droidvm-gpu/` | `NativeAdreno/`、`UniXNU-droidvm/` | DroidVMGpu（现只负责发布），由本地分支 `droidvm-macos` 的 format-patch 导出 |
 | `mesa-macos/` | Turnip（mesa-work） | 0001 日志、0002 virtgpu 后端找 AGXAccelerator；构建时 apply、结束时 reverse |
-| `metal2vulkan-macos/` | metal2vulkan（bridge） | 0001 WindowServer 原地读 YCbCr 平面 |
+| `metal2vulkan-macos/` | metal2vulkan（bridge，固定在 555b13d） | 0003–0005 反射与 swizzle 修正、0006 内存池块上限 16 MiB；列表在 `build-metal-bridge-macos.py` 的 `PATCHES` |
 | `drivers/` | UniXNU 驱动 | ArmCpu 等 |
 | `darwinboot-*.patch` | DarwinBoot | arm64e、512 MB 内核与内存回收 |
 
@@ -79,7 +116,7 @@
 
 ## configs/
 
-`macos-27.0.1-26A434.json`、`macos-23G93.json`（IPSW 与成员固定版本）、`sources.lock.json`（`sources/` 的固定提交）、`kc-keep.txt`（KC 保留的苹果 kext）、`arm64e-apple-darwin.json`（Rust arm64e pauth target）、`linux-imports.json`。
+`product-k27.json`（产品配置：开关、内核参数、kext 构建列表、GPU 与启动盘路径）、`macos-27.2-26B8125.json`、`macos-27.2-26B123.json`（当前的两个 IPSW）、`macos-27.0.1-26A434.json`、`macos-23G93.json`（IPSW 与成员固定版本）、`sources.lock.json`（`sources/` 的固定提交）、`kc-keep.txt`（KC 保留的苹果 kext）、`arm64e-apple-darwin.json`（Rust arm64e pauth target）、`linux-imports.json`。
 
 ## docs/（只在本地）
 
@@ -114,8 +151,9 @@
 |---|---|
 | `k27/` | `kc-k27.bin`（上机用的 KC）、`kernel-k27.macho`、`kc-k27.nm`/`natives.json`（符号）、`src/`（导出并打好补丁的 kext 源，如 `src/DroidVMVideo`）、`obj/`、日志 |
 | `x12377/` | 内核构建树与 native kext 目标文件（`native-kexts/`） |
-| `metal/` | `mesa-tu/`（Turnip dylib）、`bridge/`（`libnative_metal_bridge.a`）、`plugin/`（插件包）、`probe/`、`stage/`（**`scratch-data.img` = Data 种子**、`kernel.macho.trustcache`、`store-patch.*`） |
+| `metal/` | `mesa-tu/`（Turnip dylib）、`bridge/`（`libnative_metal_bridge.a`）、`plugin/`（插件包）、`probe/`；`stage/` 是旧 Data 模型的产物，已不用 |
 | `rig/` | 符号表等调试用产物 |
+| `product/k27/` | `product.py boot` 的产物：`boot.img`、`kernel.macho.trustcache`、`manifest.json`（提交号、KC/启动盘哈希、信任的 CDHash、内核参数） |
 | `tmp/` | 临时文件（本机 `/tmp` 配额小，统一用 `TMPDIR=$PWD/out/tmp`）；`data-store.img` 是最近一次拉回的手机 Data 存储副本 |
 | 其他 | 23G93/早期路线的产物（`app`、`darwinboot`、`kc`、`osfiles` 等） |
 
@@ -135,4 +173,4 @@
 | `~/crosvm/external/virtio-media`、`external/rust/crates/v4l2r` | 分支 `droidvm-hackintosh`（跟 Droid-VM `wip/hackintosh`） |
 | `~/crosvm/build_crosvm.sh` | 编 crosvm；产物在 `out/soong/.intermediates/external/crosvm/crosvm_device_only/...` |
 | 手机 `/data/data/cn.classfun.droidvm/` | App 数据：`usr/bin/crosvm`（换文件要 chown + chcon）、`cache/`（`daemon.log`、`console_<VM>_{serial1,stderr}.log`） |
-| 手机 `/data/media/0/DroidVM/MacOS/` | `boot.img`（启动盘）、`data-store.img`（Data 存储，17 GiB 稀疏）、`data-store.undo.*`、`edk2-macos.fd` |
+| 手机 `/data/media/0/DroidVM/MacOS/` | `boot.img`（启动盘，`boot.img.prev` 是上一份）、`data-pcie.img`（系统盘，GPT/APFS，virtio-blk PCI）、`edk2-macos.fd`、`generated.dtb`（crosvm 导出的 FDT，生成 ADT 用）；`data-store.img` 是转换前的旧存储，留作回退 |
