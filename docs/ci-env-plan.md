@@ -206,4 +206,11 @@ kernel、bridge 是增量构建（make 对每个依赖都做 stat，所以依赖
   - 与开发机对比：插件主程序、Shader Cache 两个程序 CDHash 相同；Turnip 不同：开发机是 Ubuntu 26.04 的 clang 21.1.8
     （6ubuntu1），runner 是 apt.llvm.org 的 21.1.8，版本相同但构建不同，生成代码有差别（`__const` 差 0x40 字节，之后整体错位），
     source id 里含 `clang --version` 全文，所以 pipelineCacheUUID 也不同。要逐字节一致需在 runner 上用同一份 LLVM 构建。
-  - 待改进：bridge 的 cargo target 缓存命中但仍全量重编（新检出的源码和新装的 rust-src 比缓存的产物新，cargo 按 mtime 判过期）。
+  - bridge 缓存（已改）：cargo target 缓存命中也全量重编——新检出的源码和 rustup 新写的 rust-src 比缓存产物新，按 mtime 判过期；
+    `-Zchecksum-freshness` 管不到 `-Zbuild-std` 的 std 和 `build.rs`（仍按 mtime）。把 rust-src 改成旧 mtime 后只重编
+    metal2vulkan 三个 crate 和根 crate，但耗时 416 s 对全量 414 s：时间全在翻译器 crate 和 fat LTO 的根 crate。另外 cargo 1.100
+    新 build-dir 布局下根 crate 的中间 `.a`（`build/native-metal-bridge/<hash>/out/`）构建后消失，根 crate 每次都判过期
+    （开发机无改动也要约 190 s）。所以只按全部输入（lock、Cargo.lock、target、构建脚本与补丁、clang 版本）的哈希缓存最终库，
+    相同则跳过构建，不再缓存 target。
+  - artifact 不再二次压缩：已是 zstd/加密的产物用 upload-artifact v7 `archive: false` 原样上传（一个 artifact 一个文件、名字即
+    文件名，download-artifact v8 按名下载）；bridge/Turnip/bundles 先打成 `.zst`，KC 单块，镜像每块一个上传步骤（上限 12 块）。

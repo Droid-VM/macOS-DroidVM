@@ -15,12 +15,15 @@ name: image
 # - the IPSW inputs as the release inputs-TAG-KEY (KEY: the product's "inputs" and the two IPSW profiles), made once: small
 #   (out/kc/kc27.bin and artifacts/TAG but the big members, all the kernel job needs) and large (os.raw, dec/, app-cryptex/);
 # - the kernel collection between the jobs, and the image (boot.img, the new install's data-store.img, scratch-data.img, disk.json,
-#   manifests) as the run's artifact image-TAG-RUN, with release=true also as the assets of a release.
+#   manifests) as the run's artifacts image.tar.zst.enc.000, .001, ..., with release=true also as the assets of a release.
 # Unpack: ARTIFACT_KEY=... scripts/ci-blob.sh unpack DIR image.tar.zst.enc.[0-9][0-9][0-9]
 # The bridge, Turnip and the plugin bundles (our code), logs, hashes and the manifest are plain.
+# Artifacts that are compressed already (zstd) go up as they are (upload-artifact v7 archive: false, one file each, named after
+# the file; download-artifact v8 takes them by that name), not zipped a second time.
 #
 # Caches (actions/cache): toolchains/ (keyed on the lock and the setup scripts), ccache per job (the kernel and Turnip:
-# MACOS_CCACHE), the bridge's cargo target directory. The new install's user is the MACOS_USER secret (NAME:PASSWORD) or the
+# MACOS_CCACHE), the bridge's library by the hash of all its inputs (no build when they are the same; a cargo target directory
+# would not help: std and the crates.io crates take seconds, the translator's crates and the fat-LTO bridge are the 7 minutes). The new install's user is the MACOS_USER secret (NAME:PASSWORD) or the
 # product's (disk.user). Each job's workspace is on the runner's second disk (/mnt) through a bind mount at ws, so its path stays
 # inside the job's workspace (the Darling container mounts it by that path).
 
@@ -109,25 +112,35 @@ jobs:
       - uses: ./ws/.github/actions/host
         with:
           rust: 'true'
+      - name: The bridge's inputs
+        id: key
+        working-directory: ws
+        # the lock (source commits, SDK, rust nightly), the crates.io versions, the target, the build and its patches, the C compiler
+        run: |
+          inputs=$( (cat configs/env.lock.json configs/metal-bridge.Cargo.lock configs/arm64e-apple-darwin.json \
+                         scripts/build-metal-bridge-macos.py patches/metal2vulkan-macos/*; clang --version) | sha256sum | cut -c1-40)
+          echo "key=$inputs" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
+        id: library
         with:
-          path: |
-            ws/out/metal/bridge/target
-            ~/.cargo/registry
-          key: bridge-${{ hashFiles('ws/configs/metal-bridge.Cargo.lock', 'ws/configs/env.lock.json', 'ws/patches/metal2vulkan-macos/**', 'ws/scripts/build-metal-bridge-macos.py') }}
-          restore-keys: bridge-
+          path: ws/out/metal/bridge/libnative_metal_bridge.a
+          key: bridge-library-${{ steps.key.outputs.key }}
       - name: Bridge
+        if: steps.library.outputs.cache-hit != 'true'
         working-directory: ws
         run: |
           python3 scripts/setup-env.py sdks
           python3 scripts/setup-env.py sources --part bridge
           python3 scripts/build-metal-bridge-macos.py
-      - uses: actions/upload-artifact@v4
+      - name: Compress
+        working-directory: ws
+        run: zstd -T0 -q -f out/metal/bridge/libnative_metal_bridge.a -o "$RUNNER_TEMP/libnative_metal_bridge.a.zst"
+      - uses: actions/upload-artifact@v7
         with:
-          name: bridge
-          path: ws/out/metal/bridge/libnative_metal_bridge.a
+          path: ${{ runner.temp }}/libnative_metal_bridge.a.zst
+          archive: false
           retention-days: 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: logs-bridge
@@ -162,12 +175,12 @@ jobs:
           python3 scripts/setup-env.py sources --part turnip
           python3 scripts/build-droidvm-gpu.py --export-only
           python3 scripts/build-turnip-macos.py
-          tar -cf "$RUNNER_TEMP/turnip.tar" out/metal/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib
+          tar -cf - out/metal/mesa-tu/src/freedreno/vulkan/libvulkan_freedreno.dylib | zstd -T0 -q -o "$RUNNER_TEMP/turnip.tar.zst"
           ccache -s
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: turnip
-          path: ${{ runner.temp }}/turnip.tar
+          path: ${{ runner.temp }}/turnip.tar.zst
+          archive: false
           retention-days: 1
 
   kernel:
@@ -210,13 +223,13 @@ jobs:
           python3 scripts/product.py kernel
           python3 scripts/product.py kexts
           python3 scripts/product.py kc
-          scripts/ci-blob.sh pack "$RUNNER_TEMP/kc/kc.tar.zst.enc" . out/k27/kc-k27.bin
+          # one part: an artifact uploaded as it is is one file
+          CI_BLOB_CHUNK=100g scripts/ci-blob.sh pack "$RUNNER_TEMP/kc/kc.tar.zst.enc" . out/k27/kc-k27.bin
           ccache -s
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: kc
-          path: ${{ runner.temp }}/kc/kc.tar.zst.enc.*
-          compression-level: 0
+          path: ${{ runner.temp }}/kc/kc.tar.zst.enc.000
+          archive: false
           retention-days: 1
       - name: Collect logs
         if: always()
@@ -226,7 +239,7 @@ jobs:
           for f in out/k27/build-raw.log out/k27/build-bootstrap.log out/k27/kc-build.log out/x12377/build/fakeroot-logs toolchains/linux/logs; do
             if [ -e "$f" ]; then cp -r "$f" "$RUNNER_TEMP/logs/"; fi
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: logs-kernel
@@ -248,26 +261,28 @@ jobs:
         with:
           path: ws/toolchains
           key: toolchains-${{ hashFiles('ws/configs/env.lock.json', 'ws/scripts/setup-env.py', 'ws/compat/xnu-linux/**', 'ws/scripts/apple-ld.py') }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: bridge
-          path: ws/out/metal/bridge
-      - uses: actions/download-artifact@v4
+          name: libnative_metal_bridge.a.zst
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
         with:
-          name: turnip
+          name: turnip.tar.zst
           path: ${{ runner.temp }}
       - name: Plugin and apps
         working-directory: ws
         run: |
-          tar -xf "$RUNNER_TEMP/turnip.tar"
+          mkdir -p out/metal/bridge
+          zstd -d -q -f "$RUNNER_TEMP/libnative_metal_bridge.a.zst" -o out/metal/bridge/libnative_metal_bridge.a
+          zstd -d -q -c "$RUNNER_TEMP/turnip.tar.zst" | tar -xf -
           python3 scripts/setup-env.py toolchain
           python3 scripts/setup-env.py sources --part plugin
           python3 scripts/product.py gpu
-          tar -cf "$RUNNER_TEMP/bundles.tar" out/metal/plugin/NativeAdrenoMetal.bundle "out/metal/shader-cache/Shader Cache.app"
-      - uses: actions/upload-artifact@v4
+          tar -cf - out/metal/plugin/NativeAdrenoMetal.bundle "out/metal/shader-cache/Shader Cache.app" | zstd -T0 -q -o "$RUNNER_TEMP/bundles.tar.zst"
+      - uses: actions/upload-artifact@v7
         with:
-          name: bundles
-          path: ${{ runner.temp }}/bundles.tar
+          path: ${{ runner.temp }}/bundles.tar.zst
+          archive: false
           retention-days: 1
 
   image:
@@ -304,22 +319,23 @@ jobs:
         run: |
           python3 scripts/product.py disk "artifacts/$TAG/disk"
           df -h /mnt
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: kc
-          path: ${{ runner.temp }}/kc
-      - uses: actions/download-artifact@v4
+          name: kc.tar.zst.enc.000
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v8
         with:
-          name: bundles
+          name: bundles.tar.zst
           path: ${{ runner.temp }}
       - name: Boot disk and the install's Data
         working-directory: ws
         run: |
-          scripts/ci-blob.sh unpack . "$RUNNER_TEMP"/kc/kc.tar.zst.enc.[0-9][0-9][0-9]
-          tar -xf "$RUNNER_TEMP/bundles.tar"
+          scripts/ci-blob.sh unpack . "$RUNNER_TEMP/kc.tar.zst.enc.000"
+          zstd -d -q -c "$RUNNER_TEMP/bundles.tar.zst" | tar -xf -
           python3 scripts/product.py boot
           python3 scripts/product.py stage
       - name: Pack the image
+        id: pack
         working-directory: ws
         run: |
           image="$RUNNER_TEMP/image"
@@ -336,14 +352,50 @@ jobs:
             data-store.img scratch-data.img disk.json
           cp "$image/image.tar.zst.enc.sha256" "$image/plain/"
           rm -rf "$stage"
+          set -- "$image"/image.tar.zst.enc.[0-9][0-9][0-9]
+          parts=$#
+          # one upload step per part below
+          [ "$parts" -le 12 ] || { echo "::error::$parts parts, the workflow uploads 12"; exit 1; }
+          echo "parts=$parts" >> "$GITHUB_OUTPUT"
           cat "$image/plain/sha256.txt"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: image-${{ env.TAG }}-${{ github.run_number }}
-          path: ${{ runner.temp }}/image/image.tar.zst.enc.*
-          compression-level: 0
-          retention-days: 14
-      - uses: actions/upload-artifact@v4
+      # the encrypted parts, each as it is (an artifact named after the file)
+      - if: steps.pack.outputs.parts > 0
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.000', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 1
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.001', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 2
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.002', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 3
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.003', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 4
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.004', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 5
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.005', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 6
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.006', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 7
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.007', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 8
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.008', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 9
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.009', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 10
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.010', archive: false, retention-days: 14}
+      - if: steps.pack.outputs.parts > 11
+        uses: actions/upload-artifact@v7
+        with: {path: '${{ runner.temp }}/image/image.tar.zst.enc.011', archive: false, retention-days: 14}
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: image-${{ env.TAG }}-${{ github.run_number }}-plain
