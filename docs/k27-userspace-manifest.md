@@ -30,7 +30,7 @@ k27 = xnu-12377 内核（patches/xnu-12377，40 个补丁，树 e4caa8c）+ macO
 | /Library/GPUBundles/NativeAdrenoMetal.bundle | 必选 | IOGPU 查找 Metal 插件的第一个目录 |
 | /var/db/.AppleSetupDone + 受管 SkipSetupItems + DroidVMInput 键盘类型 | --setup-done | 跳过语言选择（等 bluetoothd 卡死）、Setup Assistant、键盘助理 |
 | /var/db/dslocal 本地管理员 uid 501 + 首登前建 home + .skipbuddy | --user | 不经 Setup Assistant 建用户；无 MiniBuddy 才会起 Dock/Finder |
-| launchd disabled.plist（audiomxd、apsd…） | --disable-job / --disable-agent | 只在本板上空转/崩溃循环的守护进程 |
+| launchd disabled.plist（audiomxd、apsd、fairplayd…） | --disable-job / --disable-agent | 只在本板上空转/崩溃循环的守护进程 |
 | 诊断 launchd 任务：metal-probe、log stream、top/zprint、定时命令 | --probe / --log-stream / --top / --run | 仅诊断，stderr-log=1 时进内核日志 |
 | /Library/Preferences/Logging/Subsystems/*.plist | --log-debug | 仅诊断 |
 | 任意文件 | --file SRC:DEST | 如 m2vsim 回放 trace |

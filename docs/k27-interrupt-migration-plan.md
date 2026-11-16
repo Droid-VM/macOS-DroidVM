@@ -104,7 +104,7 @@ AppleMultitouchDevice 继续取得显示 UUID，8 个 CPU ready，内核 debugge
 keyboard SPI 82 累计 12 次，在 CPU 1；kernel debugger entry 仍为 0。
 触摸已通过真实操作验收；相对鼠标/绝对指针本次 SPI 计数仍为 0，不据此宣称两条路径已验收。
 
-P2 的实现及验证记录见 [GPU 完成中断迁移](../../win3d/docs/presentation/macos-gpu-interrupts-2026-11-12.md)。
+P2 的实现及验证记录见 [GPU 完成中断迁移](macos-gpu-interrupts-2026-11-12.md)。
 P3 见 [视频完成中断记录](k27-video-interrupts.md)。
 
 P4 见 [音频完成中断记录](k27-audio-interrupts.md)。

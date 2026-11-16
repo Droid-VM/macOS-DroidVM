@@ -117,7 +117,7 @@
 - 内存 4096（5120/6144 在 UEFI 崩）；msgbuf 保持 2 MB（8 MB 早期日志会丢）。
 - guest 内核日志：`/tmp/tail8.sh` 等新 crosvm 后跑 `/tmp/tail7.py`，全量写 `/tmp/run7-all.txt`（`LC_ALL=C grep -a`，宿主 grep 是 ugrep）。`/tmp` 是 tmpfs，脚本丢了要重写（tail7 用 `/tmp/rig.py` 的 `since(pos)` 读 msgbuf）。
 - 关键日志：`exec: pid N name`、`crash: pid ...`（`scripts/crash-symbolize.py LOG out/dsc/dyld_shared_cache_arm64e /home/qiuqiu/gotmp/ipsw NAME`）、`DroidVMDisplay: frame N: X pixels lit`（登录界面/桌面是否有内容）、`top:`（`--top 30` 任务）、`sandbox-call: ... applied as allow-all`、`sample:`（`sample-name=NAME sample-period=S`，`/tmp/samplesym.py` 符号化最后一个周期）。
-- 重打包镜像（会换种子 → data-store 从空白开始，首启慢）：`STAGE_ARGS="--setup-done --top 30 --disable-job com.apple.audiomxd --disable-job com.apple.apsd --disable-job com.apple.AppSSODaemon --disable-job com.apple.filesystems.fskitd --user droid:droid" bash scripts/build-metal-plugin.sh --no-deps`；带含空格的 `--run SECONDS CMD` 时直接调 `scripts/stage-gpu-plugin.py --probe out/metal/probe/metal-probe ... --run 60 "$CMD" out/metal/plugin/NativeAdrenoMetal.bundle`。不重打包时 data-store 按种子 SHA-256 续用，上次的登录状态保留。
+- 重打包镜像（会换种子 → data-store 从空白开始，首启慢）：`STAGE_ARGS="--setup-done --top 30 --disable-job com.apple.audiomxd --disable-job com.apple.apsd --disable-job com.apple.AppSSODaemon --disable-job com.apple.filesystems.fskitd --disable-job com.apple.fairplayd --user droid:droid" bash scripts/build-metal-plugin.sh --no-deps`；带含空格的 `--run SECONDS CMD` 时直接调 `scripts/stage-gpu-plugin.py --probe out/metal/probe/metal-probe ... --run 60 "$CMD" out/metal/plugin/NativeAdrenoMetal.bundle`。不重打包时 data-store 按种子 SHA-256 续用，上次的登录状态保留。
 - 内核：`cd out/x12377; XNU_KC=1 XNU_KEXT_CRYPTO=1 bash build-full.sh`（约 4 分钟，后台跑）。NativeRamBlock：`python3 scripts/build-native-ram-block.py`。
 - 系统卷只读挂载在 `/tmp/tmp.lAN7hN76DR`（27.0.1 OS 卷，逆向 loginwindow/usermanagerd 等从这里取）；IDA MCP 可用。
 - 习惯：等待用 `timeout N bash -c 'until ...; do sleep 5; done'`，单次 ≤ 2 分钟；不要读宿主上的 guest 帧缓冲（会重启手机），看画面让用户截图；不要切手机前台应用；不用 cargo check、不做格式化工具改动；文档不提交。
@@ -146,7 +146,7 @@
 ## 常用命令（`/home/qiuqiu/crosvm/macos`）
 - 在线路线上机：`MACOS_TAG=27.0.1 python3 scripts/droidvm-app.py boot --kernel-arg exec-log=1 ...`，再 `start`；串口日志 `/data/data/cn.classfun.droidvm/cache/console_<id>_serial1.log`，`scripts/rig-dmesg.py` 读 guest dmesg。
 - 12377 内核：`out/x12377/build-all.sh`（arm64e，默认）/ `XNU_ARCH=arm64`，上机冒烟 `MACOS_KERNEL=out/x12377/kernel12377e-osx.macho` `scripts/xnu12377-smoke.sh 30 vm_compression_limit=1572864`；虚表对比 `scripts/vtable-abi-diff.py KERNEL KC`。
-- 新装盘：`MACOS_TAG=27.2 python3 scripts/make-macos-disk.py OUTPUT_DIR`；部署使用 `scripts/droidvm-app.py install OUTPUT_DIR`，并设置输出 disk.json 的 System UUID。
+- 新装盘：`MACOS_TAG=27.2 python3 scripts/make-macos-disk.py OUTPUT_DIR`，`stage-gpu-plugin.py --base OUTPUT_DIR/scratch-data.img --disk OUTPUT_DIR/data-store.img BUNDLE` 加用户和插件，`droidvm-app.py install OUTPUT_DIR` 部署（不覆盖已有 store）。根 UUID 默认读 `artifacts/TAG/disk/disk.json`；输出不在那里时设 `MACOS_ROOT_UUID`。主实例 11-11 起就是这份新装盘（artifacts/27.2/disk）。
 
 ## 坑
 - 多文件补丁改动后要把它碰的所有文件一起还原再重打；改补丁别插在别的补丁 hunk 紧邻处。

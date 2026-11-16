@@ -196,33 +196,16 @@ Data 容器 disk1 的卷：s1 Data、s2 DroidVMSystem（System）、s3 Update（
 
 从此 k27 内核只能起单卷布局。`droidvm-app.py` 的 `MACOS_ROOT_UUID` 默认是 DroidVMSystem，设成空串才是旧 union 布局（只给旧内核用）。上机验证：挂载与真机一致，firmlink 和 `..` 正常，fseventsd、mds、kernelmanagerd、WindowServer、loginwindow 都在跑。
 
-## P6 生成脚本适配（新装启动已验证，11-10）
+## P6 生成脚本适配（11-11 完成，主实例已换成新装盘）
 
-现状：生成脚本还在做 union 布局（make-macos-systemos.sh、make-macos-data-seed.sh、run-macos-vm.py 的 os/systemos），新内核已经起不来它们做出的镜像。手机上现在的盘是旧种子 + 覆盖层再在 guest 里手工迁移来的，从 IPSW 重做不出来。
+起因：旧的生成脚本做的是 union 布局，新内核起不来；当时手机上的盘是旧种子 + 覆盖层再在 guest 里手工迁移来的，从 IPSW 重做不出来。
 
-已核实（os.raw 只读挂载）：
-- os.raw 容器里只有一个卷：原版密封 System 卷 “Macintosh HD”。
-- 它自带全部 firmlink：源目录为空，带 `com.apple.fs.firmlink` xattr，值是相对 Data 根的路径，与 /usr/share/firmlinks 一致。根目录的 var/etc/tmp 链接齐全，System/Volumes 下的挂载点也齐全。
-- `/System/Cryptexes/{OS,App,…}` 都是指向 `../../System/Volumes/Preboot/Cryptexes/…` 的链接。真机在 Preboot 里挂 cryptex，这里在 Preboot 卷里放普通目录即可。
-
-所以 System 卷直接用原卷，一个字节都不改。systemos.img 以前加的东西都搬到别处：
-- OS/App cryptex 和 cryptexd 状态目录 → Preboot 卷；
-- Data 模板内容 → Data 卷（`/System/Library/Templates/Data`，真机安装器也是这么做的）；
-- mount shim 已不需要；fsck shim 也已去除，验证范围见下文。
-
-流程：
-1. 从 os.raw 的 GPT 分区取出 APFS 容器。
-2. 结构步骤（要 macOS 的 diskutil）：在原容器里加 Data（role D，与 System 同组）、Preboot、VM、Hardware 和 xART（mkxart）。
-   - 在 guest 里对挂进来的镜像做，镜像放在宿主网络共享上，guest 用 hdiutil attach，不占 guest 和 Data store 的空间。
-   - 只依赖 os.raw，每个系统版本做一次，结果缓存在 artifacts/TAG/ 下。
-3. 宿主扩容：复用 grow-data-store.py 的扩容逻辑，加一个裸容器模式。
-4. 宿主用 Linux apfs-rw 按卷号挂载填内容：
-   - Preboot：cryptex；
-   - Data：模板，加上 make-macos-data-seed.sh、stage-gpu-plugin.py 的定制（用户、任务、GPU 插件）。
-5. 打包：全零种子 + 一个含全部非零页的 store。种子打包后极小，逻辑上限 1 TiB；store 格式本来就是页覆盖。
-6. 清理旧脚本：make-macos-systemos.sh 等标为仅旧内核使用，或删除。stage-gpu-plugin.py 挂 Data 时要显式按卷号或角色挂，现在默认挂第 0 个卷。
-
-不动用户现有的种子和 store：新流程只用于新装。
+现在的做法（细节见下面各小节）：
+- `make-macos-disk.py` 在宿主上直接生成整盘：os.raw 的 System 卷作根，用 apfs-add-volumes 在同一容器里加 Data（与 System 同组）、Preboot、VM、Update、Hardware、xART。不需要 guest 的 diskutil。
+- System 卷不是一字节不改：内核让 dyld 走 no-ignition，launchd 和挂载阶段在 Preboot 挂上之前就要用共享缓存，所以 OS cryptex 合并进 System 卷，Preboot 里放 `Cryptexes/OS -> /` 和 App cryptex。`/sbin/fsck` 是 Apple 原版，mount 和 fsck 的 shim 都已删除。
+- Data 是整份 `/System/Library/Templates/Data`；用户、GPU 插件等由 `stage-gpu-plugin.py --disk` 写入（按角色找 Data 卷）。
+- 打包：空种子（32 字节 DBRDISK1）+ 整盘都在 store 覆盖层里；`droidvm-app.py install` 只传有数据的段。
+- 旧脚本（make-macos-systemos.sh、make-macos-data-seed.sh、rebuild-root.sh）已删除。
 
 ### P6 进展（11-10）
 
@@ -312,3 +295,40 @@ SSH 验证：bootargs 未增加触摸参数，DroidVM Touch Screen 的 PrimaryUs
 手机删除 `/data/local/tmp/grow/` 中四个扩容种子和主实例目录中的旧 data-store.undo 两文件；已检查目录不再含独立 os.img/systemos.img 或这些旧种子/undo。当前两台 VM 的 boot/store/固件、原生触摸更新前的启动盘备份以及新布局 fsck 测试备份保留。
 
 重要依赖：主实例仍使用 `out/metal/stage/scratch-data.img`（48 GiB 逻辑、88624256 字节打包种子，identity `732e2a574c780b3668154d4a99e40fac84d50c2100954ec9b8d8e5352e829757`），已逐项匹配手机 store 页数和 seed digest，不能当旧垃圾删除。新实例使用 `artifacts/27.2/disk/scratch-data.img`（空种子，identity `eb2115d5055aa7a97a29af8ebbe5859b6fa4595faab30eacf5f2b69d037b92bf`）。后续改主实例 boot 必须继续指定这份主实例种子，不能直接使用新装盘的默认种子。清理后再次核对两份身份，主实例 RUNNING，SSH 七卷挂载正常；未重启或改写现用 store。
+
+
+### launchd 引导任务退出码（11-11）
+
+fsck、mount-phase-1、mount-phase-2 的定义编在 `/sbin/launchd` 里（内嵌 plist）：
+- fsck：`/sbin/fsck -qL -R 1`；mount-phase-1/2：`/sbin/mount -P 1` / `-P 2`。三个都是 `RequireSuccess`、`RequireRun`。
+- launchd 只记“Doing boot task”，成功时不写退出码；失败时记 `boot task failure: %s`（另有 `failed to reap boot-task`、`required boot task executable not found`）并中止启动。
+
+主实例换到新装盘后的这次启动：`log show --last boot` 里三条失败消息都是 0 条，fsck 任务从 12.35 s 跑到 17.63 s（mount-phase-1 开始），之后正常进入桌面，所以三个任务的退出码都是 0。启动后手动以同样参数跑 `sudo /sbin/fsck -qL -R 1`：检查 Data 卷，`QUICKCHECK ONLY; FILESYSTEM CLEAN`，退出码 0。
+
+### 主实例换成新装盘（11-11）
+
+用户决定主实例直接换成新装盘，原 Data 不迁移（CLT、QQ/bilibili、用户文件随旧盘退役）。
+- 主实例正常关机后，手机上 `MacOS/data-store.img`、`boot.img` 改名为 `*.before-newdisk` 保留；测试实例那份已经校正过累计计数、恢复原版 fsck、并验证过的 store 移为 `MacOS/data-store.img`（同一文件系统内改名）。
+- 新 boot.img = 主实例当时的 boot.img（含原生触摸的 KC）只换 ADT 根 UUID（4646A7E0 → 354D4F10，与测试实例 ADT 逐字节相同）和种子（`artifacts/27.2/disk/scratch-data.img`）；KC、trust cache、DarwinBoot、unixnu.toml 哈希不变。trust cache 与 store 里 GPU 插件对应的 trust cache 相同。
+- 启动后 SSH：27.2/26B8125，根 `/dev/disk1s1` = 354D4F10-…，卷组 3E85A466-…，七卷挂载；原版 fsck；触摸为 digitizer（PrimaryUsagePage 13 / Usage 4、Built-In）；WindowServer、loginwindow 运行；/Library/GPUBundles 与 /Users/droid 在。
+- 测试实例 `macOS 27 (DroidVM) new` 已用 `vm_config_apply` 的 `{'op': 'delete', 'id': …}` 删除（`vm_delete` 对持久 VM 返回 internal error），`MacOS-new/` 已删。
+- `run-macos-vm.py` 默认根 UUID 改为读 `artifacts/TAG/disk/disk.json`（未设置 `MACOS_ROOT_UUID` 时）；显式空串仍报错；`droidvm-app.py` 不再写死 4646A7E0。主实例种子现在就是默认的 `artifacts/27.2/disk/scratch-data.img`，上文“主实例仍使用 out/metal/stage/scratch-data.img”的依赖已解除；旧盘已删，那份旧种子不再有用。
+- 旧盘未备份（用户决定），手机上的 `*.before-newdisk` 已于换盘验证后删除，手机剩余 21 → 59 GB；旧盘不可恢复。
+
+### 设置 → 存储空间一直在加载（11-11 已修）
+
+两层原因，都在 `scripts/build-native-ram-block.py`：
+- 盘没有 Protocol/Device Characteristics，DiskArbitration 当它是外置盘（diskutil：Device Location External）。现在在盘发布前补上 Apple 芯片 Mac 内置 SSD 的特性：Apple Fabric、Internal、Solid State。
+- 容器 IOMedia（disk1）带 `OSInternal = Yes`。原因是 `AppleAPFSContainer::setContainerProperties`（probe、republish、reconcile 都会调）看到上方的 Content Hint 是 ISC 或 Recovery 的 GUID，就给容器 IOMedia 打这个标。上面 `markSystemContainer` 加的 ISC hint 正好触发它。DiskManagement 的 `_DMgetDisks`（`topLevelDisks`）会跳过 OSInternal 的盘，于是 StorageManagementService 的 `SPInfoDiskMonitor` 看不到 Data 卷，totalSpace 始终是 0，面板一直转。
+  - ISC hint 不能去掉：除了 apfs_boot_util，内核 `handle_mount` 也靠它把 xART 这类 ISC 挂载点标成系统挂载。
+  - 现在的做法：NativeRamBlock 的发布线程不退出，一直盯着 disk1，OSInternal 一出现就删掉（前 60 s 每 100 ms 查一次，之后每 2 s）。
+  - 上机验证：DM 探针（`out/storage-internal-2026-11-11/probe/stmprobe`）看到 topLevelDisks 有 disk0 和 disk1，disk1 containerRef=1，7 个卷都在；Data 和 System 在同一卷组；xART 照常挂载。
+- 修完 OSInternal 后磁盘总量已经算出来（总 51.5 GB），但面板仍在转：StorageManagementService 按顺序调各分类的扩展，卡在 Music 扩展。卡住的链条是 MusicStorageExtension 同步 XPC → AMPLibraryAgent 主线程等一把读写锁 → 持锁线程在 CoreFP 里等 fairplayd 回复。
+  - fairplayd 一启动就 exit(0)：KC 里没有 FairPlayIOKit/AvpFairPlay（Apple VM 的 FairPlay 要宿主的半虚拟化设备）。launchd 仍替它持有服务端口，每 10 s 重拉一次，请求永远没人收。
+  - 现在的做法：`launchctl disable system/com.apple.fairplayd`（launchd 的 disabled.plist）。端口销毁后 CoreFP 立即报错返回，所有分类 3 s 内算完。主实例已在 guest 里写入；重打包时要带 `--disable-job com.apple.fairplayd`（TODO.md 的命令已补）。FairPlay 内容（Apple Music/TV 的加密媒体）本来就不可用，没有额外损失。
+- 第三层（面板显示几秒后又变回"正在加载项目…"）：Storage.appex 有自己的卷枚举（DisksController）。它对每块顶层盘调用 `partitionChildrenForDisk`，再对每个分区调用 `containerForPhysicalStore`，只认"分区 → 容器 → 卷"这条路。整盘容器没有分区，所以一个卷也列不出来。面板要等到挂在 `/System/Volumes/Data` 的卷（StorageUI `Volume.isUserVolume`）出现才切到已加载状态（LoadingState 2→3），于是一直停住。
+  - 修法：`overlay/kext/NativeRamBlockPartition.cpp`，NativeRamBlock kext 里的一个 IOPartitionScheme。personality 匹配整盘 IOMedia，探测分 5000，高于 GPT 的 4000 和 APFS 的 2000；probe 只认 NativeRamBlock 的盘。它发布一个偏移 0、覆盖全盘的分区 disk0s1，Content Hint 用 ISC，读写原样转给整盘，盘上数据不动。整盘的 Content 是 GUID_partition_scheme（personality 的 Content Mask）。
+  - 分区必须带 `Base` 属性：DiskManagement 的 `_DMpartitionChildrenUDSsForDisk` 只收同 BSD Unit、带 Base 和 BSD Name 的 IOMedia。IOMedia::init 不会设 Base，IOGUIDPartitionScheme 是自己补上的。
+  - `markSystemContainer` 已删：ISC 提示由分区自带。删 OSInternal 的线程改为从 NativeRamBlock 往下递归找 AppleAPFSMedia。
+  - 上机：diskutil 显示 disk0 GUID_partition_scheme / disk0s1 Apple_APFS_ISC / disk1 Physical Store disk0s1，七个卷照常挂载（含 xART）。重开面板后显示容量条和推荐项，60 s 后仍然稳定。
+  - kc-build.py 的 `vtable` 现在可以写成列表，NativeRamBlockPartition 对 IOPartitionScheme（330 槽）的检查结果是 0 个问题槽位。
