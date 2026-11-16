@@ -224,7 +224,7 @@ jobs:
           python3 scripts/product.py kexts
           python3 scripts/product.py kc
           # one part: an artifact uploaded as it is is one file
-          CI_BLOB_CHUNK=100g scripts/ci-blob.sh pack "$RUNNER_TEMP/kc/kc.tar.zst.enc" . out/k27/kc-k27.bin
+          CI_BLOB_CHUNK=100G scripts/ci-blob.sh pack "$RUNNER_TEMP/kc/kc.tar.zst.enc" . out/k27/kc-k27.bin
           ccache -s
       - uses: actions/upload-artifact@v7
         with:
