@@ -29,21 +29,44 @@ if text.count(old) != 1 or text.count(start) != 1:
 # com_apple_filesystems_apfs::start for the lock: a deadlock, and the root never appears. Once matched, the container never waits.
 # docs/k27-real-disk-layout-plan.md P5: launchd's mount-phase-1 (apfs_boot_util) must mount the xART volume of
 # the iBoot System Container and aborts without it; it takes for that container the APFS volume of role xART whose nearest plain
-# IOMedia has the Content Hint of an ISC partition. This disk is a whole-disk container (IOBlockStorageDriver gives its IOMedia an
-# empty hint), so the hint is put on that IOMedia once it appears, and the container holds the xART and Hardware volumes too.
+# IOMedia has the Content Hint of an ISC partition. That IOMedia is the disk's one partition, published by NativeRamBlockPartition
+# (overlay/kext/NativeRamBlockPartition.cpp, also what Storage in System Settings needs), and the container holds the xART and
+# Hardware volumes too.
+# Storage in System Settings counts only internal disks: without Protocol Characteristics DiskArbitration calls the disk External
+# (diskutil: Device Location External, Protocol and Solid State unknown) and the pane stays at totalSpace 0. The characteristics are
+# set before the disk is published, as an Apple silicon Mac's internal SSD has them. The ISC hint has a cost: AppleAPFSContainer::
+# setContainerProperties (probe, republish, reconcile) marks the container's IOMedia (disk1) OSInternal when the hint above it is the ISC
+# or Recovery GUID, and DiskManagement's topLevelDisks skips OSInternal disks: StorageManagementService never sees the Data volume and the
+# pane loads forever. The hint stays (handle_mount also needs it for the xART mount); the thread removes OSInternal from disk1 whenever
+# it reappears.
 publish = '''#include <kern/thread.h>
-// build-native-ram-block.py: label the whole-disk IOMedia as an iBoot System Container partition (the union layout ignores it)
-static void markSystemContainer(NativeRamBlock *ram)
+// build-native-ram-block.py: keep the container's IOMedia (disk1) visible, as the internal container of a Mac
+static void showContainers(IORegistryEntry *entry, unsigned depth)
 {
-  for (int i = 0; i < 300; i++) {
-    IORegistryEntry *driver = ram->getChildEntry(gIOServicePlane);
-    IORegistryEntry *media = driver ? driver->getChildEntry(gIOServicePlane) : nullptr;
-    if (media && media->metaCast("IOMedia")) {
-      media->setProperty("Content Hint", "69646961-6700-11AA-AA11-00306543ECAC");
-      return;
-    }
-    IOSleep(100);
+  if (entry->metaCast("AppleAPFSMedia")) {
+    if (entry->getProperty("OSInternal")) entry->removeProperty("OSInternal");
+    return;
   }
+  if (depth == 0) return;
+  if (OSIterator *children = entry->getChildIterator(gIOServicePlane)) {
+    while (IORegistryEntry *child = OSDynamicCast(IORegistryEntry, children->getNextObject())) showContainers(child, depth - 1);
+    children->release();
+  }
+}
+
+// build-native-ram-block.py: the disk as a Mac's internal SSD (an Apple silicon Mac's: Apple Fabric, internal, solid state)
+static void setCharacteristics(NativeRamBlock *ram, const char *key, const char *const pairs[][2], unsigned count)
+{
+  OSDictionary *dictionary = OSDictionary::withCapacity(count);
+  if (!dictionary) return;
+  for (unsigned i = 0; i < count; i++) {
+    if (OSString *value = OSString::withCString(pairs[i][1])) {
+      dictionary->setObject(pairs[i][0], value);
+      value->release();
+    }
+  }
+  ram->setProperty(key, dictionary);
+  dictionary->release();
 }
 
 // build-native-ram-block.py: publish the disk once IOResources has matched IOBSD (APFS deadlocks otherwise)
@@ -54,10 +77,17 @@ static void publishWhenBSDMatched(void *argument, wait_result_t)
     if (IOService *resources = IOService::waitForMatchingService(matching)) resources->release();
     matching->release();
   }
+  static const char *const protocol[][2] = {{"Physical Interconnect", "Apple Fabric"}, {"Physical Interconnect Location", "Internal"}};
+  static const char *const device[][2] = {{"Medium Type", "Solid State"}};
+  setCharacteristics(ram, "Protocol Characteristics", protocol, 2);
+  setCharacteristics(ram, "Device Characteristics", device, 1);
   ram->registerService();
   ram->attachStore();   // this kernel never asks the driver for the Data volume
-  markSystemContainer(ram);
-  ram->release();
+  // NativeRamBlock > IOBlockStorageDriver > disk0 > NativeRamBlockPartition > disk0s1 > AppleAPFSContainerScheme > disk1
+  for (unsigned i = 0;; i++) {
+    showContainers(ram, 6);
+    IOSleep(i < 600 ? 100 : 2000);
+  }
 }
 
 '''
@@ -73,5 +103,6 @@ staged.write_text(text.replace(start, publish + start).replace(old, '''  retain(
 '''))
 subprocess.run(['python3', str(ROOT / 'scripts/build-native-kext.py'), 'NativeRamBlock', str(staged),
                 str(ROOT / 'overlay/kext/NativeKextGlue.cpp'), str(ROOT / 'overlay/kext/DroidVMDataStore.c'),
+                str(ROOT / 'overlay/kext/NativeRamBlockPartition.cpp'),
                 '-I', str(SOURCE), '-I', str(ROOT / 'out/x12377/storage-abi/include'), '-I', str(ROOT / 'out/x12377/xnu-m/osfmk'),
                 '-D', 'U:TARGET_OS_OSX', '-D', 'TARGET_OS_OSX=1'], check=True)

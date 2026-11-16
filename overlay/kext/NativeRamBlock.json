@@ -22,15 +22,37 @@
       "IOResourceMatch": "IOBSD",
       "IOProbeScore": 1000,
       "IOMatchCategory": "NativeRamBlock"
+    },
+    "NativeRamBlockPartition": {
+      "CFBundleIdentifier": "com.unixnu.driver.NativeRamBlock",
+      "IOClass": "NativeRamBlockPartition",
+      "IOProviderClass": "IOMedia",
+      "IOPropertyMatch": {
+        "Whole": true
+      },
+      "IOProbeScore": 5000,
+      "IOMatchCategory": "IOStorage",
+      "Content Mask": "GUID_partition_scheme"
     }
   },
-  "vtable": {
-    "class": "NativeRamBlock",
-    "base": "IOBlockStorageDevice",
-    "base_kext": "com.apple.iokit.IOStorageFamily",
-    "slots": 326,
-    "ignore_slots": [
-      16
-    ]
-  }
+  "vtable": [
+    {
+      "class": "NativeRamBlock",
+      "base": "IOBlockStorageDevice",
+      "base_kext": "com.apple.iokit.IOStorageFamily",
+      "slots": 326,
+      "ignore_slots": [
+        16
+      ]
+    },
+    {
+      "class": "NativeRamBlockPartition",
+      "base": "IOPartitionScheme",
+      "base_kext": "com.apple.iokit.IOStorageFamily",
+      "slots": 330,
+      "ignore_slots": [
+        16
+      ]
+    }
+  ]
 }

@@ -324,8 +324,9 @@ def build(args):
             image[new_off(data_va):new_off(data_va) + len(info)] = info
             for offset, symbol in ((180, spec['start']), (188, spec['stop'])):
                 linked['sites'].append((data_va + offset, linked['symbols'][symbol], True, 0xe4fe, False, 0))
-            if spec.get('vtable'):
-                check_vtable(kc, linked, kept_old_sites, spec['vtable'], shift, old_off)
+            vtables = spec.get('vtable') or []   # one class, or a list of them (a driver with several classes)
+            for vtable in vtables if isinstance(vtables, list) else [vtables]:
+                check_vtable(kc, linked, kept_old_sites, vtable, shift, old_off)
             kext_sites.extend(linked['sites'])
             native_commands.append((text_va, segs, spec))
             native_entries.append({

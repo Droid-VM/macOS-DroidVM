@@ -36,7 +36,9 @@ whole store goes to the phone). The Data volume is found by its role in the cont
 single-volume layout the System volume comes first).
 --disable-job writes LABEL to launchd's overrides (/var/db/com.apple.xpc.launchd/disabled.plist): a system daemon that only spins on
 this board (audiomxd retries the Bluetooth audio service of a controller the board does not have about eight times a second, apsd
-throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit).
+throws at start and is relaunched every ten seconds, each crash report taking a ReportCrashService past its 120 MB limit; fairplayd
+exits at once without the FairPlay kexts this collection leaves out, while launchd keeps its port, so every CoreFP request waits
+forever: AMPLibraryAgent, hence Music's storage extension, hence System Settings' Storage pane, stayed loading).
 --enable-job writes LABEL as enabled (false) to the same overrides: a daemon an earlier --disable-job turned off (audiomxd, which
 macOS 27's media routing lives in: without it AVSampleBufferAudioRenderer fails with -16155 and WebKit's player with it).
 --disable-agent writes LABEL to uid 501's overrides (disabled.501.plist, what `launchctl disable gui/501/LABEL` writes): a user agent
