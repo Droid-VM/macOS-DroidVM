@@ -10,7 +10,7 @@
 | 阶段 | 多久做一次 | 命令 | 产物 |
 |---|---|---|---|
 | 1. IPSW 输入 | 换 macOS 版本 | `product.py inputs`（配置的 `inputs`：只按 HTTP 范围下载用到的成员并按苹果清单校验，解密 AEA，打信任缓存包，解出内核缓存；已有的跳过；需要 `ipsw` 工具，可用 `$IPSW` 指定） | `artifacts/27.2/`（`os.raw`、`dec/`、`app-cryptex/`、`kernelcache.release.vma2`、`boot/kernel.macho.trustcache`）、`out/kc/kc27.bin` |
-| 2. 源码树 | 换固定提交 | `prepare-sources.py`（`configs/sources.lock.json`） | `sources/` |
+| 2. 构建环境与源码树 | 新机器、换固定提交 | `setup-env.py toolchain`、`x12377`、`sources`（`configs/env.lock.json`，见 docs/ci-env-plan.md；旧的 `prepare-sources.py`/`sources.lock.json` 只供 14.6.1 时期脚本） | `toolchains/`、`out/x12377/`、`out/k27/xnu`、`sources/`、`artifacts/boot-inputs/` |
 | 3. 系统盘 | 新装一台 VM | `product.py disk DIR`（要 sudo），再 `droidvm-app.py install DIR`、`droidvm-app.py prepare` | 手机上的 Data 存储（单 APFS 容器：System/Data/Preboot/VM/Update/Hardware/xART）、`artifacts/27.2/disk/disk.json` |
 | 4. 内核 | 改内核补丁 | `product.py kernel` | `out/k27/kernel-k27.macho` |
 | 5. 板级 kext | 改 kext 源 | `product.py kexts`（配置里的 `kexts` 列表） | `out/x12377/native-kexts/` |

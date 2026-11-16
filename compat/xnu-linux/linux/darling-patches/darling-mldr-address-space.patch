@@ -1,0 +1,93 @@
+diff --git a/src/startup/mldr/commpage.c b/src/startup/mldr/commpage.c
+index d9a7aea..e8eadcd 100644
+--- a/src/startup/mldr/commpage.c
++++ b/src/startup/mldr/commpage.c
+@@ -20,6 +20,23 @@ static uint64_t get_cpu_caps(void);
+ 
+ #define CGET(p) (commpage + ((p)-_COMM_PAGE_START_ADDRESS))
+ 
++// Use a hint, not MAP_FIXED: Linux must also honor the native stack guard gap.
++// Probe both the initial Mach stack and commpage before loading any Mach images.
++bool commpage_and_stack_available(bool _64bit)
++{
++    size_t stack_size = 16 * 4096;
++    size_t size = stack_size + (_64bit ? _COMM_PAGE64_AREA_LENGTH : _COMM_PAGE32_AREA_LENGTH);
++    void* wanted = (void*)(commpage_address(_64bit) - stack_size);
++    void* mapping = mmap(wanted, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++    if (mapping == MAP_FAILED) {
++        perror("Cannot probe Darling address space");
++        exit(1);
++    }
++    bool available = mapping == wanted;
++    munmap(mapping, size);
++    return available;
++}
++
+ void commpage_setup(bool _64bit)
+ {
+ 	uint8_t* commpage;
+@@ -41,6 +58,11 @@ void commpage_setup(bool _64bit)
+ 		exit(1);
+ 	}
+ 
++    if (commpage != (void*)commpage_address(_64bit)) {
++        fprintf(stderr, "Darling commpage mapped at an unexpected address\n");
++        exit(1);
++    }
++
+ 	signature = (char*)CGET(_COMM_PAGE_SIGNATURE);
+ 	version = (uint16_t*)CGET(_COMM_PAGE_VERSION);
+ 	cpu_caps64 = (uint64_t*)CGET(_COMM_PAGE_CPU_CAPABILITIES64);
+diff --git a/src/startup/mldr/commpage.h b/src/startup/mldr/commpage.h
+index 4d9558c..c49ee2c 100644
+--- a/src/startup/mldr/commpage.h
++++ b/src/startup/mldr/commpage.h
+@@ -7,6 +7,7 @@
+ extern "C" {
+ #endif
+ 
++bool commpage_and_stack_available(bool _64bit);
+ void commpage_setup(bool _64bit);
+ unsigned long commpage_address(bool _64bit);
+ 
+diff --git a/src/startup/mldr/mldr.c b/src/startup/mldr/mldr.c
+index 6617ef8..6d8865d 100644
+--- a/src/startup/mldr/mldr.c
++++ b/src/startup/mldr/mldr.c
+@@ -42,6 +42,7 @@ along with Darling.  If not, see <http://www.gnu.org/licenses/>.
+ #include <sys/ptrace.h>
+ #include <pthread.h>
+ #include <sys/utsname.h>
++#include <sys/personality.h>
+ 
+ #ifndef PAGE_SIZE
+ #	define PAGE_SIZE	4096
+@@ -108,6 +109,28 @@ static int kernel_minor = -1;
+ 
+ int main(int argc, char** argv, char** envp)
+ {
++    // Linux ASLR can place its native stack (or its guard gap) over Darling's
++    // fixed commpage/Mach stack. Re-exec before consuming argv, special env or
++    // lifetime FDs. This is a deterministic layout change, never a tool retry.
++    if (!commpage_and_stack_available(sizeof(void*) == 8)) {
++        int current = personality(0xffffffffUL);
++        if (current == -1) {
++            perror("Cannot read mldr personality");
++            return 1;
++        }
++        if (current & ADDR_NO_RANDOMIZE) {
++            fprintf(stderr, "Darling address space unavailable even without ASLR\n");
++            return 1;
++        }
++        if (personality(current | ADDR_NO_RANDOMIZE) == -1) {
++            perror("Cannot disable ASLR for conflicting mldr layout");
++            return 1;
++        }
++        execve("/proc/self/exe", argv, envp);
++        perror("Cannot re-exec mldr with a compatible layout");
++        return 1;
++    }
++
+ 	void** sp;
+ 	int pushCount = 0;
+ 	char *filename, *p = NULL;

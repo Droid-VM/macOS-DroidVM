@@ -62,7 +62,18 @@ def load(path, name):
     return module
 
 
-ios = load(ROOT.parent / 'ios/tools/droidvm-app.py', 'ios_droidvm_app')
+IOS_TOOL = ROOT.parent / 'ios/tools/droidvm-app.py'
+
+
+class NoPhone:
+    """Without the ios workspace (CI): what talks to the phone fails when called; building the boot disk from MACOS_FDT works."""
+    def __getattr__(self, name):
+        def missing(*args, **kwargs):
+            raise SystemExit(f'{IOS_TOOL} (the DroidVM app plumbing) is needed for {name}')
+        return missing
+
+
+ios = load(IOS_TOOL, 'ios_droidvm_app') if IOS_TOOL.exists() else NoPhone()
 # The k27 kernel boots the single-volume layout only (docs/k27-real-disk-layout-plan.md P5): the root is the System volume DroidVMSystem
 # of the Data store's container; run-macos-vm.py takes its UUID from artifacts/TAG/disk/disk.json unless MACOS_ROOT_UUID names it.
 run = load(ROOT / 'scripts/run-macos-vm.py', 'run_macos_vm')
@@ -260,8 +271,11 @@ def build_boot(args, local=None):
     local: the directory it is built in (scripts/product.py's; removed first)."""
     OUT.mkdir(parents=True, exist_ok=True)
     fdt = OUT / 'generated.dtb'
+    # MACOS_FDT: the FDT of a file (CI: configs/k27-generated.dtb, the app's VM as configured) instead of the phone's latest dump
+    if os.environ.get('MACOS_FDT'):
+        subprocess.run(['cp', os.environ['MACOS_FDT'], str(fdt)], check=True)
     # The VM stopped just before (xnu12377-smoke.sh) may still be going down while the daemon rewrites the FDT: the pull fails then
-    for attempt in range(10):
+    for attempt in range(0 if os.environ.get('MACOS_FDT') else 10):
         try:
             adb('pull', DTB, str(fdt), timeout=60)
             break

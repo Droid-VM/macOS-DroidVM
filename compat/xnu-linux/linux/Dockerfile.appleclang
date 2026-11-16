@@ -1,0 +1,15 @@
+FROM ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55 AS mldr-build
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev
+COPY darling-mldr /build/darling-mldr
+RUN sh /build/darling-mldr/build.sh
+
+FROM ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+COPY darling-core_*.deb darling-system_*.deb darling-cli_*.deb darling-cli-gui-common_*.deb darling-cli-python2-common_*.deb /tmp/
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/*.deb && rm -rf /var/lib/apt/lists/* /tmp/*.deb
+COPY --from=mldr-build /build/darling-mldr/build/mldr /usr/libexec/darling/usr/libexec/darling/mldr
+COPY --from=mldr-build /build/darling-mldr/source.json /usr/share/darling-mldr-source.json
+ARG BUILDER_UID=1000
+RUN userdel ubuntu && useradd -u "$BUILDER_UID" -m -s /bin/bash builder
+ENV DPREFIX=/home/builder/.darling
+USER builder
+CMD ["sleep", "infinity"]

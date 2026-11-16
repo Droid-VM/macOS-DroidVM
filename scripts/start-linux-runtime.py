@@ -2,14 +2,18 @@
 """Start the isolated, pinned Darling runtime for this workspace."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TC = ROOT / 'toolchains/linux'
-IMAGE = 'sha256:e8b09bc18737d2d78927470e2da9205f0cc05f36ec2b24e67c9f460403d6c96e'   # rebuilt 2026-10-29 from ios Dockerfile.appleclang (Darling 20260608); 34c45909 was lost
-NAME = 'macos-appleclang'
+# The image and container of configs/env.lock.json (setup-env.py toolchain builds the image), or MACOS_DARLING_IMAGE/_CONTAINER
+LOCK = json.loads((ROOT / 'configs/env.lock.json').read_text())['toolchain']
+NAME = os.environ.get('MACOS_DARLING_CONTAINER', LOCK['container'])
+IMAGE = subprocess.check_output(['docker', 'image', 'inspect', '--format', '{{.Id}}',
+                                 os.environ.get('MACOS_DARLING_IMAGE', LOCK['image'])], text=True).strip()
 
 
 def run(*args):

@@ -20,7 +20,7 @@ PATCHES = [PATCH, ROOT / 'patches/darwinboot-accept-arm64e.patch']
 
 
 def main():
-    for source in (EDK2 / 'BaseTools/Source/C/bin/GenFw', ROOT / 'sources/GunyahBootPkg/GunyahBoot.dsc'):
+    for source in (EDK2 / 'BaseTools/Source/C/bin/GenFw', ROOT / 'overlay/edk2/GunyahBootPkg/GunyahBoot.dsc'):
         if not source.exists():
             raise SystemExit(f'missing {source}')
     driver = WORK / 'DarwinBoot'
@@ -32,7 +32,7 @@ def main():
     shutil.rmtree(workspace, ignore_errors=True)
     workspace.mkdir(parents=True)
     env = dict(os.environ, WORKSPACE=str(workspace), EDK_TOOLS_PATH=str(EDK2 / 'BaseTools'), PYTHON_COMMAND='python3',
-               PACKAGES_PATH=':'.join([str(ROOT / 'sources'), str(EDK2), str(ROOT / 'sources/UniXNU/package'), str(driver)]),
+               PACKAGES_PATH=':'.join([str(ROOT / 'overlay/edk2'), str(EDK2), str(ROOT / 'sources/UniXNU/package'), str(driver)]),
                GCC_AARCH64_PREFIX='aarch64-linux-gnu-')
     command = ('set +u; source "$1/edksetup.sh" BaseTools; set -u; '
                'build -p GunyahBootPkg/GunyahBoot.dsc -m DarwinBootPkg/Driver/DarwinBoot.inf -a AARCH64 -b DEBUG -t GCC -n 4')
