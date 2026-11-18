@@ -16,3 +16,4 @@ com.apple.driver.AppleMultitouchDriver
 com.apple.iokit.IOBluetoothFamily
 com.apple.driver.AppleVPCredentialManager
 com.apple.driver.driverkit.serial
+com.apple.driver.FairPlayIOKit
