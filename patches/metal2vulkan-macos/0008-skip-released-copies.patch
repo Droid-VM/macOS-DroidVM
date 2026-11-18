@@ -1,0 +1,73 @@
+Copied host buffers (copied.rs) read and write only pages the program still maps. A copy whose pages no buffer lies in any
+longer (its keys gone, Copied::unname) is neither copied in nor merged back, nor is one whose pages the process no longer maps,
+asked of the kernel at each copy in and merge back (mapped_writable / mapped_readable, mach_vm_region on macOS): WindowServer
+frees a no-copy buffer's memory, or a part of it past a region's end, while the buffer lives, which Metal's GPU never reads where
+no command reads it; an unnamed reach (CopiesReached::all) compared every copy, and its commits crashed in
+copy_in_untagged/copy_in_blocks at login.
+
+diff --git a/crates/metal2vulkan-runtime/src/copied.rs b/crates/metal2vulkan-runtime/src/copied.rs
+--- a/crates/metal2vulkan-runtime/src/copied.rs
++++ b/crates/metal2vulkan-runtime/src/copied.rs
+@@ -1354,7 +1354,19 @@
+         }
+         #[cfg(test)]
+         let began = std::time::Instant::now();
+-        let reaches = |entry: &Entry| used.meets(&entry.keys) || written.meets(&entry.keys);
++        // A copy no pages lie in any longer (its last buffer went, `Copied::unname`) is reached by
++        // no command: an unnamed reach (`CopiesReached::reached_unnamed`) meets every copy, but the
++        // program may have freed its pages since (no deallocator, or one run as the buffer went,
++        // `HostPages`'s drop), and a command buffer that still holds the import must not read them.
++        // So is one whose pages the process no longer maps, asked of the kernel (`mapped`) for
++        // every copy reached: WindowServer frees a no-copy buffer's memory while the buffer
++        // lives, or a part of it past an earlier region's end, which Metal's GPU never reads
++        // where no command reads it, while a copy in would read every page.
++        let reaches = |entry: &Entry| {
++            !entry.keys.is_empty()
++                && (used.meets(&entry.keys) || written.meets(&entry.keys))
++                && mapped(entry.pages, entry.length)
++        };
+         let in_flight = in_flight();
+         let asked: Vec<Asked> = (lock(&self.entries).iter())
+             .filter(|entry| reaches(entry))
+@@ -1522,7 +1534,13 @@
+                 skipped += 1;
+                 continue;
+             };
+-            if !owed && !written.meets(&entry.keys) {
++            // No pages lie in the copy any longer: the program may have freed them (`copy_in`).
++            if entry.keys.is_empty() || (!owed && !written.meets(&entry.keys)) {
++                skipped += 1;
++                continue;
++            }
++            // Nor written back into pages the process no longer maps.
++            if !mapped(entry.pages, entry.length) {
+                 skipped += 1;
+                 continue;
+             }
+@@ -1647,7 +1665,9 @@
+     pub(crate) fn merges_back(&self, written: &CopiesReached) -> bool {
+         self.live.load(Ordering::Relaxed) > 0
+             && (lock(&self.entries).iter())
+-                .any(|entry| entry.base.is_some() && written.meets(&entry.keys))
++                .any(|entry| {
++                    entry.base.is_some() && !entry.keys.is_empty() && written.meets(&entry.keys)
++                })
+     }
+ 
+     /// A batch finished with no merge back (its queue's wait failed): the next merge back
+@@ -1807,6 +1827,15 @@
+ // SAFETY: as above.
+ unsafe impl Sync for Ends {}
+ 
++/// Whether the process still maps every page of a copy's `length` bytes at `pages` (writable, or
++/// readable where the system answers that), as the kernel answers now: asked before a copy no use
++/// names is read or written back ([`CopiedBuffers::copy_in`], [`CopiedBuffers::merge_back`]).
++fn mapped(pages: NonNull<u8>, length: usize) -> bool {
++    let start = pages.as_ptr() as u64;
++    let end = start.saturating_add(length as u64);
++    mapped_writable(start, end) || mapped_readable(start, end)
++}
++
+ /// A copy in of a copy with no base, which holds the bytes its pages and it agree on: write into
+ /// `copy` each byte of `pages` that differs from it, in `bytes` (from a multiple of
+ /// [`SYNC_BLOCK`]), split across threads as a comparison with a base is ([`split`]): into at most

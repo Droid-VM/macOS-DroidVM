@@ -1,0 +1,59 @@
+iosurfaceTextureAlignmentBytes and iosurfaceReadOnlyTextureAlignmentBytes answer the alignment of the IOSurface planes the
+runtime makes a texture over (16, linear_plan's LINEAR_ALIGNMENT, as Metal on an Apple GPU), not the device's linear alignment,
+the largest any format needs to lie in place (256 on Turnip A8xx: RGBA32F; its 4-byte formats lie in place at 64).
+deviceLinearTextureAlignmentBytes and linearTextureAlignmentBytes keep the device's, and placement in place is unchanged.
+
+A caller takes the answer as the surfaces it may use, not as a layout to round to: macOS 27's CoreAnimation refuses each
+texture over a surface whose rows miss it and draws nothing of the layer (WindowServer: "Failed to allocate MTLTexture from
+IOSurface ... Row bytes (5696) not 256 aligned", 6436 times in 6 minutes; Bing's search box, whole local pages missing). Every
+row seen there (5696, 3968, 1088, 192, 128, 64) is a multiple of 64: the BGRA8 ones lie in place all the same.
+
+diff --git a/crates/metal2vulkan-runtime/src/private_properties.rs b/crates/metal2vulkan-runtime/src/private_properties.rs
+--- a/crates/metal2vulkan-runtime/src/private_properties.rs
++++ b/crates/metal2vulkan-runtime/src/private_properties.rs
+@@ -105,15 +105,18 @@
+     /// `linearTextureAlignmentBytes`: as
+     /// [`DeviceLinearTextureAlignmentBytes`](Self::DeviceLinearTextureAlignmentBytes).
+     LinearTextureAlignmentBytes,
+-    /// `iosurfaceTextureAlignmentBytes`: the device's, as
+-    /// [`DeviceLinearTextureAlignmentBytes`](Self::DeviceLinearTextureAlignmentBytes): the
+-    /// alignment of a texture's offset and rows at which the device's images hold it in place over
+-    /// a buffer's bytes (256 on Mesa's RADV, 64 on lavapipe), where Metal answers 16 on an Apple
+-    /// GPU. A caller that lays out its surfaces by it aligns their rows so (a macOS 11 guest's
+-    /// CoreAnimation rounds its backing stores' rows to it, at least 64). The runtime still takes a
+-    /// plane at any offset and rows that are multiples of 16
++    /// `iosurfaceTextureAlignmentBytes`: the alignment of the offset and rows of an IOSurface
++    /// plane the runtime makes a texture over, 16 ([`LINEAR_ALIGNMENT`](crate::linear_plan)), as
++    /// Metal answers on an Apple GPU
+     /// ([`Buffer::new_texture_with_iosurface_plane`](crate::Buffer::new_texture_with_iosurface_plane)):
+-    /// a texture over one the device lays out no image at is a shadow.
++    /// a texture whose rows the device lays out no image at in place is a shadow. Not the
++    /// device's [`DeviceLinearTextureAlignmentBytes`](Self::DeviceLinearTextureAlignmentBytes),
++    /// the alignment at which every format lies in place (256 on Turnip A8xx and Mesa's RADV,
++    /// whose 4-byte formats lie in place at 64): a caller takes the answer as the surfaces it may
++    /// use, not as a layout to round to. macOS 27's CoreAnimation refuses each texture over a
++    /// surface whose rows miss it ("Failed to allocate MTLTexture from IOSurface ... Row bytes
++    /// (5696) not 256 aligned") and draws nothing of the layer, WebKit's 64-byte rows among them,
++    /// where it allocates none of those surfaces by the answer.
+     IosurfaceTextureAlignmentBytes,
+     /// `iosurfaceReadOnlyTextureAlignmentBytes`: as
+     /// [`IosurfaceTextureAlignmentBytes`](Self::IosurfaceTextureAlignmentBytes): a plane read
+@@ -612,10 +615,14 @@
+         Some(match property {
+             C::GpuCoreCount => u64::from(self.properties.gpu_core_count?),
+             C::MaxVertexAmplificationCount | C::MaxComputeThreadgroupMemory => return None,
+-            C::DeviceLinearTextureAlignmentBytes
+-            | C::LinearTextureAlignmentBytes
+-            | C::IosurfaceTextureAlignmentBytes
+-            | C::IosurfaceReadOnlyTextureAlignmentBytes => self.linear_alignment,
++            C::DeviceLinearTextureAlignmentBytes | C::LinearTextureAlignmentBytes => {
++                self.linear_alignment
++            }
++            // What the runtime takes, not what keeps every format in place: a caller refuses a
++            // surface whose rows miss the answer (the variant's docs).
++            C::IosurfaceTextureAlignmentBytes | C::IosurfaceReadOnlyTextureAlignmentBytes => {
++                crate::linear_plan::LINEAR_ALIGNMENT
++            }
+             C::MaxVertexBuffers
+             | C::MaxFragmentBuffers
+             | C::MaxComputeBuffers

@@ -61,7 +61,7 @@
 +            if (bad.count(doneKey)) {++skipped; return;}
 +            const std::string attemptKey = doneKey + "-inputs3";
 +            if (refusedDone.count(attemptKey)) {++refused; return;}
-+            if (functionsDone.count(doneKey)) {++made; native_prime_functions_resumed = native_prime_functions_resumed + 1; return;}
++            if (functionsDone.count(doneKey)) {++made; return;}   // counted as resumed before the run (upstream 9c5cf22)
 +            unsigned zero = 0;
 +            id<MTLFunction> function = defaultFunction(lib, name, zero);
 +            if (!function) {
@@ -75,7 +75,7 @@
 -                if (bad.count(doneKey)) {++skipped; continue;}
 -                const std::string attemptKey = doneKey + "-inputs3";
 -                if (refusedDone.count(attemptKey)) {++refused; continue;}
--                if (functionsDone.count(doneKey)) {++made; native_prime_functions_resumed = native_prime_functions_resumed + 1; continue;}
+-                if (functionsDone.count(doneKey)) {++made; continue;}
 -                id<MTLFunction> function = defaultFunction(lib, name, zeroed);
 -                if (!function) {++refused; native_prime_functions_refused = earlierRefusals + refused; appendLine(refusedPath, attemptKey); report(path, name.UTF8String); continue;}
 -                const MTLFunctionType type = function.functionType;

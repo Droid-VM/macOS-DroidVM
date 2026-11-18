@@ -1,0 +1,45 @@
+Pages a live import holds some of (not all) are imported again by their pointer where the driver pins each import of them on
+its own (imports_pin_apart), not a copy (copied.rs); everywhere else the upstream rule (one page, one import) stands.
+
+VK_EXT_external_memory_host leaves a second import of a page undefined where "some platforms do not allow locking the same
+physical pages for device access multiple times". Turnip on macOS imports through a kernel driver that wires each import
+apart: natively NativeAdreno (NativeAdrenoMemory::importTask), under Droid-VM the virtio-gpu 3D transport's CREATE_BLOB_USER
+(UniXNU-droidvm package/DroidVMVirtioGpu3D.cpp, as NativeAdreno imports): each import is its own
+IOMemoryDescriptor::withAddressRange over the caller's range, prepare()d (XNU counts each wiring) with its physical pages mapped
+apart, so two imports of a page are two wirings, each released with its own: defined there. WindowServer makes its no-copy buffers over sliding windows of one CoreAnimation allocation
+(0x1b000 bytes at 0x115778000, then at 0x11577a000): nearly each was a copy, compared at every commit, whose copy in read pages
+the program had since freed. Uses stay ordered by the bytes they lie over (host_aliases.rs Placements).
+
+diff --git a/crates/metal2vulkan-runtime/src/buffer_descriptor.rs b/crates/metal2vulkan-runtime/src/buffer_descriptor.rs
+--- a/crates/metal2vulkan-runtime/src/buffer_descriptor.rs
++++ b/crates/metal2vulkan-runtime/src/buffer_descriptor.rs
+@@ -945,7 +945,9 @@
+         };
+         let held = inside.is_none() && !matches!(within, Within::Free);
+         let beside = held && self.imports_beside(&within, &host);
+-        let over_import = held && !beside;
++        // Pages a live import holds some of are imported again by their pointer where the driver
++        // pins each import of them on its own ([`imports_pin_apart`]), never a copy.
++        let over_import = held && !beside && !imports_pin_apart(self.properties().description.driver_id);
+         // Imported beside dma-bufs as dma-bufs alone: never by the pointer, nor the gate asked. So
+         // are pages a guest RAM routes that no chunk binds the buffer in, where the RAM's chunks
+         // may be imported beside them (`Routed::own_dma_bufs`).
+@@ -3037,3 +3039,18 @@
+     pub(super) size: u64,
+     pub(super) requirements: vk::MemoryRequirements,
+ }
++
++/// Whether the device's driver pins each host-pointer import of a page on its own, so that a
++/// second import of pages a live import holds some of is defined there: `VK_EXT_external_memory_host`
++/// leaves it undefined only where "some platforms do not allow locking the same physical pages for
++/// device access multiple times" (`host_aliases.rs`, "One page, one import"). Turnip on macOS
++/// imports through the NativeAdreno kernel driver (`NativeAdrenoMemory::importTask`): each import
++/// is an `IOMemoryDescriptor` of its own over the caller's range, `prepare`d (the kernel counts each
++/// wiring) and its physical pages mapped apart, so two imports of a page are two wirings, each
++/// released with its own. There the pages are imported again, not a copy (`copied.rs`): WindowServer
++/// makes its no-copy buffers over sliding windows of one allocation, and each was a copy whose copy
++/// in compared every page at every commit. Their uses stay ordered by the bytes they lie over
++/// (`host_aliases.rs`, "Ordered by the bytes they lie over now"). Elsewhere, `false`.
++fn imports_pin_apart(driver: Option<metal2vulkan::vk::DriverId>) -> bool {
++    cfg!(target_os = "macos") && driver == Some(metal2vulkan::vk::DriverId::MESA_TURNIP)
++}

@@ -5,7 +5,7 @@ tier 3 (nightly, -Zbuild-std), through configs/arm64e-apple-darwin.json (below).
 
     build-metal-bridge-macos.py
 
-Source: METAL2VULKAN_SOURCE (default: the dedicated worktree sources/UniXNU/.cache/gpu-reference/metal2vulkan-555b13d) at the compatible
+Source: METAL2VULKAN_SOURCE (default: the dedicated worktree sources/UniXNU/.cache/gpu-reference/metal2vulkan-46e7cc9) at the compatible
 translator pin, with patches from NATIVE_METAL_SOURCE. A clean worktree at the pin is patched; one already holding exactly the patched tree is
 reused as it is; any other state is refused. Output: out/metal/bridge/libnative_metal_bridge.a"""
 import json
@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 UNIXNU = ROOT / 'sources/UniXNU'
 NATIVE = Path(os.environ.get('NATIVE_METAL_SOURCE', UNIXNU / 'drivers/NativeMetal'))
-SOURCE = Path(os.environ.get('METAL2VULKAN_SOURCE', UNIXNU / '.cache/gpu-reference/metal2vulkan-555b13d'))
+SOURCE = Path(os.environ.get('METAL2VULKAN_SOURCE', UNIXNU / '.cache/gpu-reference/metal2vulkan-46e7cc9'))
 OUT = ROOT / 'out/metal/bridge'
 SDK = ROOT / 'toolchains/sdks/MacOSX26.1.sdk'
 LLVM = Path('/usr/lib/llvm-21/bin')
@@ -29,8 +29,9 @@ TRIPLE = 'arm64e-apple-darwin'
 TARGET_SPEC = ROOT / 'configs/arm64e-apple-darwin.json'
 # Use AdrenoMetal's complete patch stack at its matching translator pin. Patch 0040
 # consolidates the older runtime/board patches; do not append that older stack.
-# AdrenoMetal main's 0046 (main-optimizations) is the whole of its translator from the pin: 0002-0041 and its own
-# changes in one patch, so where it is present it is the stack alone.
+# AdrenoMetal main's latest main-optimizations patch (0063 on metal2vulkan development 46e7cc96, UniXNU's
+# scripts/build-adreno-metal-bridge.py) is the whole of its translator from its pin, so where it is present it is the stack alone;
+# the pin is the commit its name ends with.
 _MAIN = sorted((NATIVE / 'bridge/patches').glob('*-main-optimizations-on-development-*.patch'))
 PATCHES = (_MAIN[-1:] or sorted((NATIVE / 'bridge/patches').glob('*.patch'))) + [
     ROOT / 'patches/metal2vulkan-macos/0003-rate-map-buffer-reflection.patch',
@@ -40,8 +41,16 @@ PATCHES = (_MAIN[-1:] or sorted((NATIVE / 'bridge/patches').glob('*.patch'))) + 
     # NativeMetal 935c468's bridge (nmb_device_hold_back_memory, nmb_device_trim_memory) asks the runtime for these; the board's
     # metal2vulkan 0013 and 0020 (Droid-VM/UniXNU patches/metal2vulkan) have them on its own translator stack, not this one.
     ROOT / 'patches/metal2vulkan-macos/0007-hold-back-and-trim-kept-memory.patch',
+    # 46e7cc96's copied host buffers: an unnamed reach read pages WindowServer had freed (at login)
+    ROOT / 'patches/metal2vulkan-macos/0008-skip-released-copies.patch',
+    # ... and pages a live import holds some of imported again where the driver pins each import apart (Turnip on NativeAdreno)
+    ROOT / 'patches/metal2vulkan-macos/0009-reimport-partly-held-pages-where-imports-pin-apart.patch',
+    # IOSurface texture alignment: what the runtime takes (16), not what every format needs in place (256): CoreAnimation refused 64-byte rows
+    ROOT / 'patches/metal2vulkan-macos/0010-iosurface-alignment-is-what-the-runtime-takes.patch',
 ]
-pin = '555b13d57e09bff70996a88cff64f1275256d5cf'
+pin = '46e7cc96a284150bdf19b4a6a7890b0a8bc0ef71'
+if _MAIN and not PATCHES[0].stem.endswith(pin[:8]):
+    raise SystemExit(f'{PATCHES[0].name} is not on the translator pin {pin[:8]}')
 
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != pin:
     raise SystemExit(f'{SOURCE} is not at the pinned translator commit {pin}')

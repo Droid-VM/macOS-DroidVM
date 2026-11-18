@@ -49,12 +49,16 @@ copy('PrimeShaders.h')
 # The worker's own changes to priming (the plugin runs none here): patches/shader-cache, in order.
 for patch in sorted((ROOT / 'patches/shader-cache').glob('*.patch')):
     subprocess.run(['patch', '-p1', '--quiet', '--no-backup-if-mismatch', '-d', str(src), '-i', str(patch)], check=True)
+# The app's place is APP_PATH upstream too (AdrenoMetal 4676b87).
 copy('ShaderCache/ShaderCacheState.h', [('@"/private/var/tmp/NativeAdrenoMetal.cache"', f'@"{CACHE}"'),
-                                        ('@"/Library/UniXNU/Shader Cache.app"', f'@"{APP_PATH}"')])
+                                        (f'@"{APP_PATH}"', f'@"{APP_PATH}"')])
 # No kernel makes the directory here: the worker does, as root, before it asks whether it may write it.
 copy('ShaderCache/ShaderCacheWorker.mm', [('systemcache::writerDirectory().empty()',
                                            '(mkdir(systemcache::kWriterPath, 0755), systemcache::writerDirectory().empty())')])
 copy('ShaderCache/ShaderCacheApp.mm')
+# The worker holds an idle-sleep assertion while it compiles (IOKit's power management). Upstream's third program, ShaderCacheRegister,
+# registers the app with Launch Services at each login, for its place under /Library/UniXNU; under /Applications it is found anyway.
+copy('ShaderCache/ShaderCacheActivity.h')
 
 app = OUT / 'Shader Cache.app'
 if app.exists():
@@ -64,7 +68,7 @@ code.mkdir(parents=True)
 cxx = ['/usr/lib/llvm-21/bin/clang++', '-target', 'arm64e-apple-macos14.0', '-isysroot', str(SDK), '-std=c++17', '-fobjc-arc', '-O2',
        '-Wall', '-Wextra', '-Wno-deprecated-declarations', '-Wno-unused-function', '-Wno-unused-parameter', '-c', '-x', 'objective-c++']
 for name, source, frameworks in [('ShaderCache', 'ShaderCacheApp.mm', ('AppKit', 'Security', 'Foundation')),
-                                 ('ShaderCacheWorker', 'ShaderCacheWorker.mm', ('Foundation', 'Metal'))]:
+                                 ('ShaderCacheWorker', 'ShaderCacheWorker.mm', ('Foundation', 'Metal', 'IOKit'))]:
     obj = OUT / (name + '.o')
     subprocess.run([*cxx, str(src / 'ShaderCache' / source), '-o', str(obj)], check=True)
     subprocess.run(['python3', str(ROOT / 'scripts/apple-ld.py'), '-o', str(code / name), str(obj),

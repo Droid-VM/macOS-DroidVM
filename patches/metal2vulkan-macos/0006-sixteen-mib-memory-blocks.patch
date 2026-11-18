@@ -1,21 +1,26 @@
 Pooled blocks of 16 MiB at most instead of 64 MiB: on a guest whose device memory is wired guest RAM a pool's
 blocks double up to the cap and stay wired whole (NativeMetal 45c8294's bridge patch 0021, lost at the move to 555b13d).
 
+diff --git a/crates/metal2vulkan-runtime/src/memory.rs b/crates/metal2vulkan-runtime/src/memory.rs
+index 688a99612..872c7e371 100644
 --- a/crates/metal2vulkan-runtime/src/memory.rs
 +++ b/crates/metal2vulkan-runtime/src/memory.rs
-@@ -168,8 +168,13 @@
+@@ -198,10 +198,15 @@ use std::time::{Duration, Instant};
  pub(crate) mod making_parts;
  mod ready;
  
--/// The size of a pooled block, at most the device's `maxMemoryAllocationSize`.
+-/// The size of a pooled block of a heap of 1 GiB or more, at most the device's
++/// The size of a pooled block of a heap of 256 MiB or more, at most the device's
+ /// `maxMemoryAllocationSize`: the largest pooled block ([`pooled_block_bytes`]); a heap whose
+-/// blocks are smaller is small ([`Memory::small`]).
 -pub(super) const BLOCK_BYTES: u64 = 64 << 20;
-+/// The size of a pooled block, at most the device's `maxMemoryAllocationSize`. 16 MiB: where device
-+/// memory is the system's own and wired as a block is made (a guest whose GPU imports its pages),
-+/// a pool's blocks double up to this ([`FIRST_BLOCK_BYTES`]) and a partly filled or kept empty one
-+/// of 64 MiB stays wired whole: a macOS guest's WindowServer held 623 MiB in blocks of up to 80 MiB
-+/// and its icon agent 267 MiB (two blocks of 64 MiB and one of 68) where a new one that drew the
-+/// same icons held 121 MiB in blocks of 4 to 24 MiB (2026-11-16).
++/// blocks are smaller is small ([`Memory::small`]). 16 MiB: where device memory is the system's
++/// own and wired as a block is made (a guest whose GPU imports its pages), a pool's blocks double
++/// up to this ([`FIRST_BLOCK_BYTES`]) and a partly filled or kept empty one of 64 MiB stays wired
++/// whole: a macOS guest's WindowServer held 623 MiB in blocks of up to 80 MiB and its icon agent
++/// 267 MiB (two blocks of 64 MiB and one of 68) where a new one that drew the same icons held
++/// 121 MiB in blocks of 4 to 24 MiB (2026-11-16).
 +pub(super) const BLOCK_BYTES: u64 = 16 << 20;
  
- /// What a pooled block of images holds past [`BLOCK_BYTES`], as a fraction of it: a sixteenth
- /// ([`Memory::pooled_bytes`]). A driver's image takes more than its texels: RADV on a Radeon 780M
+ /// The most of its heap a pooled block takes: a sixteenth ([`pooled_block_bytes`]).
+ const BLOCK_HEAP_SHARE: u64 = 16;

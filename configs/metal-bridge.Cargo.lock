@@ -97,6 +97,7 @@ version = "0.2.0"
 dependencies = [
  "ash",
  "metal2vulkan-air",
+ "serde",
  "serde_json",
  "sha2",
 ]
@@ -105,6 +106,7 @@ dependencies = [
 name = "metal2vulkan-air"
 version = "0.2.0"
 dependencies = [
+ "serde",
  "sha2",
 ]
 
@@ -116,6 +118,7 @@ dependencies = [
  "libc",
  "metal2vulkan",
  "sha2",
+ "windows-sys",
 ]
 
 [[package]]
@@ -152,6 +155,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -226,6 +230,15 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link",
+]
 
 [[package]]
 name = "zmij"
