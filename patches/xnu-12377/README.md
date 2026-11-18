@@ -42,3 +42,11 @@ same binary named Weather reads 0, and Weather opened normally shows moving clou
 WebKit GPU process's sandbox reads that directory but maps code only from `/System/Library/Extensions`, so it had no Metal
 device and its offscreen drawing (opacity, CSS filters, masks) came out blank: Bilibili's player icons. On-device
 (2026-11-15): the GPU process maps NativeAdrenoMetal and every row of an opacity/filter/mask test page draws.
+
+`droidvm-serial-uarts.patch` (`ae49b1e`) and `droidvm-macos-console-switch.patch` (`3980611`) follow
+`gpu-bundles-sandbox-map.patch`: Droid-VM/UniXNU-droidvm's 77bb46b and 06c78e6 (HuJK) on k27. The kernel's serial
+console on the UART the ADT's `/defaults droidvm,serial-device` names (UniXNU-droidvm macOS 5f0edaa writes it: the
+FDT stdout-path's UART, in the app COM1, so the console_*_serial1.log), PL011 or a new 16550 driver; and
+`cons_ops_index` writable on macOS, since the display hands the console to serial as WindowServer starts. The k27
+configuration boots with `serial=3`. On-device (2026-11-18): the kernel's output reaches serial1.log, and continues
+after WindowServer and loginwindow start, with no panic.
