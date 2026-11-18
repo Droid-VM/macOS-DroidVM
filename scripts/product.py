@@ -9,7 +9,7 @@ configs/product-NAME.json (default k27), and each step runs the existing script 
   product.py kexts                     the board's native kexts         the configuration's "kexts"  -> out/x12377/native-kexts
   product.py kc                        the kernel collection            k27/try.sh (K27_NO_BOOT=1)   -> kc.output
   product.py gpu [--deps]              the Metal plugin (--deps: Turnip and the bridge first)        -> gpu.bundle
-  product.py boot [--also-trust FILE]  trust cache and boot disk, from nothing                       -> boot.output/{boot.img,manifest.json}
+  product.py boot [--also-trust FILE|CDHASH]  trust cache and boot disk, from nothing                      -> boot.output/{boot.img,manifest.json}
   product.py build                     kc, gpu, boot
   product.py full                      kernel, kexts, kc, gpu --deps, boot (the bridge beside the other steps)
   product.py stage [DIR] [--user N:P]  a new install's Data (disk.dir): the bundles, the user, disk.stage's settings
@@ -38,6 +38,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -184,7 +185,10 @@ def boot(config, env, also_trust):
     out = ROOT / config['boot']['output']
     out.mkdir(parents=True, exist_ok=True)
     hashes = bundle_hashes(config, stage)
-    extra = {str(path): stage.cdhash(Path(path)).hex() for path in also_trust}
+    # a file's CDHash, or a CDHash itself (40 hex digits: a plugin the guest holds that is no longer built here, as a deployed
+    # boot disk's manifest names it)
+    extra = {str(path): (path.lower() if re.fullmatch(r'[0-9a-fA-F]{40}', path) and not Path(path).exists()
+                         else stage.cdhash(Path(path)).hex()) for path in also_trust}
     trust = out / 'kernel.macho.trustcache'
     trust.write_bytes(stage.trust_bundle([bytes.fromhex(h) for h in [*hashes.values(), *extra.values()]],
                                          (ROOT / config['boot']['base_trustcache']).read_bytes()))
@@ -403,7 +407,7 @@ def main():
     disk.add_argument('dir')
     disk.add_argument('--inputs', metavar='DIR', help="inputs --output's directory")
     sub.add_parser('gpu').add_argument('--deps', action='store_true')
-    sub.add_parser('boot').add_argument('--also-trust', action='append', default=[], metavar='FILE')
+    sub.add_parser('boot').add_argument('--also-trust', action='append', default=[], metavar='FILE|CDHASH')
     sub.add_parser('verify').add_argument('image', nargs='?', type=Path)
     sub.add_parser('install-plugin').add_argument('guest')
     stage = sub.add_parser('stage')
