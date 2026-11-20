@@ -9,8 +9,8 @@ with) with patches/droidvm-gpu/NativeAdreno (Droid-VM/NativeAdreno's virtio-gpu 
 with the device), and bf7fc44's package/DroidVMGpu.cpp and DroidVMGpuWire.h with
 patches/droidvm-gpu/UniXNU-droidvm (0002: the hardware classes NativeAdrenoVm/Ring/Timer never attached, the wire removed; the VM
 has no droidvm-gpu device); AdrenoPM4 and ArmSmmu4K at the commits UniXNU's wip/droidvm pins. The patches are the commits of
-branch droidvm-macos of sources/UniXNU/drivers/NativeAdreno and of sources/UniXNU-droidvm: after a commit there, export them again
-(git format-patch --no-signature 805c7e4..droidvm-macos, bf7fc44..droidvm-macos). overlay/kext/DroidVMGpuKext.cpp starts the publish.
+branch macOS (Droid-VM's macOS) of sources/UniXNU/drivers/NativeAdreno and of sources/UniXNU-droidvm: after a commit there, export
+them again (git format-patch --no-signature 805c7e4..macOS, bf7fc44..macOS). overlay/kext/DroidVMGpuKext.cpp starts the publish.
 """
 import subprocess
 import sys

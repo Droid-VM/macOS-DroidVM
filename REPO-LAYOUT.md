@@ -102,7 +102,7 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 | `droidvm-audio/` | UniXNU-droidvm `e29d087` 的 DroidVMAudio 源 | 0001 不自己做模块加载、0002 开播垫 40 ms、0003 输出延迟加宿主 1536 帧；`k27/build-native-audio.sh` 构建 |
 | `droidvm-video/` | UniXNU-droidvm `706338e` 的 VT 源 | 0001–0011（0006 已弃）；0011 = Apple vtpv 语义 + 会话生命周期 |
 | `droidvm-display/` | UniXNU-droidvm 的 virtio-gpu 源 | 0001 |
-| `droidvm-gpu/` | `NativeAdreno/`、`UniXNU-droidvm/` | DroidVMGpu（现只负责发布），由本地分支 `droidvm-macos` 的 format-patch 导出 |
+| `droidvm-gpu/` | `NativeAdreno/`、`UniXNU-droidvm/` | DroidVMGpu（现只负责发布），由本地分支 `macOS` 的 format-patch 导出 |
 | `mesa-macos/` | Turnip（mesa-work） | 0001 日志、0002 virtgpu 后端找 AGXAccelerator；构建时 apply、结束时 reverse |
 | `metal2vulkan-macos/` | metal2vulkan（bridge，固定在 555b13d） | 打在 AdrenoMetal 累积补丁 0046 之上：0003–0005 反射与 swizzle 修正、0006 内存池块上限 16 MiB、0007 内存压力下不预留 + 按空闲清理（NativeMetal 935c468 的 bridge 要用）；列表在 `build-metal-bridge-macos.py` 的 `PATCHES` |
 | `shader-cache/` | Shader Cache App 的 worker（复制出的 `PrimeShaders.h`） | 0001 函数级多线程编译、去掉每管线 20 ms 停顿、QoS 改 UTILITY；`build-shader-cache-app.py` 打 |
@@ -138,9 +138,9 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 | 目录 | 来源 | 用途 |
 |---|---|---|
 | `xnu-12377/` | apple-oss-distributions/xnu | 内核；分支 `k27`（当前）、`k27-unlayered`（旧史）、`x12377-*` |
-| `UniXNU/` | Droid-VM/UniXNU（分支 `macos-droidvm`） | UniXNU 主树；`drivers/NativeMetal` 是独立仓库（Droid-VM/NativeMetal，本地分支 `macos-hackintosh` = `805ea2b`：Droid-VM `wip/hackintosh` 935c468 + AdrenoMetal main 9a9da56 的合并）；`drivers/NativeAdreno`；`.cache/gpu-reference/metal2vulkan` 是 bridge 的翻译器源码 |
+| `UniXNU/` | Droid-VM/UniXNU（分支 `macOS`） | UniXNU 主树；`drivers/NativeMetal` 是独立仓库（Droid-VM/NativeMetal，本地分支 `macOS` = `7e5c521`：Droid-VM `wip/hackintosh` 935c468 + AdrenoMetal main 8c7f950 的合并）；`drivers/NativeAdreno`；`.cache/gpu-reference/metal2vulkan-46e7cc9` 是 bridge 的翻译器源码（UniXNU 的 pin） |
 | `UniXNU-turnip/` | UniXNU 的工作树，固定在 Droid-VM/UniXNU `wip/droidvm` `0f7b62a` | 提供 Turnip 的 mesa（`.cache/mesa-work` = Droid-VM/mesa `cecc0e9` + `adreno-compiler-inputs.json` 记录的 33 个补丁，手动 apply）；其板级 `patches/metal2vulkan` 针对板子自己的翻译器栈，bridge 不用 |
-| `UniXNU-droidvm/` | Droid-VM/UniXNU-droidvm | 板级源：VT（`VT_REF`）、virtio-gpu（`VGPU_REF`）；本地分支 `droidvm-macos` 供 DroidVMGpu 导出补丁 |
+| `UniXNU-droidvm/` | Droid-VM/UniXNU-droidvm | 板级源：VT（`VT_REF`）、virtio-gpu（`VGPU_REF`）；本地分支 `macOS` 供 DroidVMGpu 导出补丁 |
 | `edk2/`、`GunyahBootPkg/` | edk2-gunyah、unixnu-droidvm-ci | 固件（GOP、`edk2-macos.fd`） |
 | `IONetworkingFamily/` | apple-oss-distributions | DroidVMEthernet 用的头文件 |
 | `apfsprogs/`、`linux-apfs-rw/`、`lzfse/` | linux-apfs 等 | 在 Linux 上读写 APFS（种子、Data 卷） |
@@ -170,7 +170,7 @@ bridge 的时间几乎都在单线程的 fat LTO（codegen-units=1）上，这�
 
 | 位置 | 内容 |
 |---|---|
-| `~/crosvm/external/crosvm` | crosvm（分支 `wip/macos-virtio-gpu`，rebase 在 Droid-VM `wip/hackintosh` 上）：msm_vidc 解码后端 `devices/src/virtio/media/android_codec_backend/vidc.rs` 等 |
+| `~/crosvm/external/crosvm` | crosvm（分支 `macOS`，跟踪 Droid-VM `macOS`）：msm_vidc 解码后端 `devices/src/virtio/media/android_codec_backend/vidc.rs` 等 |
 | `~/crosvm/external/virtio-media`、`external/rust/crates/v4l2r` | 分支 `droidvm-hackintosh`（跟 Droid-VM `wip/hackintosh`） |
 | `~/crosvm/build_crosvm.sh` | 编 crosvm；产物在 `out/soong/.intermediates/external/crosvm/crosvm_device_only/...` |
 | 手机 `/data/data/cn.classfun.droidvm/` | App 数据：`usr/bin/crosvm`（换文件要 chown + chcon）、`cache/`（`daemon.log`、`console_<VM>_{serial1,stderr}.log`） |
