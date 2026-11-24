@@ -1,0 +1,54 @@
+From 6666592457f01e7eefa99d4f4f8c8ba459ac4e15 Mon Sep 17 00:00:00 2001
+From: gshost1 <106793646+gshost1@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 10:18:09 -0800
+Subject: [PATCH] k27: arm64 (not arm64e) processes run with all four PAC keys
+ off
+
+0042 turned EnIA and EnDA off for a keys-off (IMGPF_NOJOP) thread at EL0
+and left the B keys on. An Apple CPU runs such a process with IA, IB, DA
+and DB all off. With EnIB on, the arm64e system unwinder's AUTIB of an
+arm64 frame's unsigned return address fails, so a C++ or Objective-C
+exception thrown in a plain arm64 process kills it (EXC_ARM_PAC_FAIL in
+libunwind's UnwindCursor::step; on a FEAT_FPAC CPU the AUTIB itself
+faults).
+
+NOJOP_SCTLR_KEYS now names all four keys. The EL0 vector already sets
+every bit of NOJOP_SCTLR_KEYS again when it finds EnIA clear, and no
+pointer authentication instruction runs between the clear and the eret.
+---
+ osfmk/arm64/locore.s | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/osfmk/arm64/locore.s b/osfmk/arm64/locore.s
+index 13d2819..7cd7cd6 100644
+--- a/osfmk/arm64/locore.s
++++ b/osfmk/arm64/locore.s
+@@ -43,12 +43,14 @@
+  * The virtual board's CPUs have plain ARMv8.3 pointer authentication: no per-process key switching (paravirtualized or Apple's),
+  * so a process whose user JOP keys are off (an arm64 one, not arm64e: IMGPF_NOJOP) cannot have them off by its key. Its shared
+  * cache's authenticated pointers are slid unsigned (vm_shared_region_auth_remap, key 0) and its own pointers are never signed:
+- * what Apple's CPUs make work by turning the A keys off at EL0, done here with SCTLR_EL1.EnIA/EnDA, cleared on the way out to such
+- * a thread and set again first thing on the way in (before LOAD_USER_PCB's AUTDA). The B keys (return addresses) stay on.
++ * what Apple's CPUs make work by turning the keys off at EL0, done here with SCTLR_EL1.EnIA/EnIB/EnDA/EnDB, cleared on the way out
++ * to such a thread and set again first thing on the way in (before LOAD_USER_PCB's AUTDA). All four keys, as an Apple CPU runs
++ * such a process: its return addresses are unsigned too, and the arm64e system unwinder authenticates every frame's return
++ * address with the IB key (libunwind), which fails on an unsigned one while EnIB is on.
+  */
+ #if defined(BCM2837) && defined(HAS_APPLE_PAC) && !HAS_PARAVIRTUALIZED_PAC
+ #define NOJOP_SCTLR 1
+-#define NOJOP_SCTLR_KEYS (SCTLR_PACIA_ENABLED | SCTLR_PACDA_ENABLED)
++#define NOJOP_SCTLR_KEYS (SCTLR_PACIA_ENABLED | SCTLR_PACIB_ENABLED | SCTLR_PACDA_ENABLED | SCTLR_PACDB_ENABLED)
+ #endif
+ #include "dwarf_unwind.h"
+ 
+@@ -2090,8 +2092,8 @@ Lno_gcr_mask_el0_reset:
+ 	strb	wzr, [x1, CPU_SYNC_ON_CSWITCH]
+ 
+ #if NOJOP_SCTLR
+-	// To a keys-off thread at EL0: its A keys off (see NOJOP_SCTLR). No A-key instruction runs from here to the eret, which
+-	// synchronizes the change.
++	// To a keys-off thread at EL0: its keys off (see NOJOP_SCTLR). No pointer authentication instruction runs from here to the
++	// eret, which synchronizes the change.
+ 	mrs		x2, SPSR_EL1
+ 	tst		x2, #(PSR64_MODE_EL_MASK)
+ 	b.ne	1f

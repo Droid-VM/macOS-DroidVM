@@ -42,3 +42,10 @@ same binary named Weather reads 0, and Weather opened normally shows moving clou
 WebKit GPU process's sandbox reads that directory but maps code only from `/System/Library/Extensions`, so it had no Metal
 device and its offscreen drawing (opacity, CSS filters, masks) came out blank: Bilibili's player icons. On-device
 (2026-11-15): the GPU process maps NativeAdrenoMetal and every row of an opacity/filter/mask test page draws.
+
+`nojop-all-pac-keys-off.patch` follows `gpu-bundles-sandbox-map.patch`. 0042 left the B keys on for arm64 (not arm64e)
+processes; an Apple CPU runs them with IA, IB, DA and DB all off (an M4 on macOS 27.2.1 shows all four off in an arm64
+process). With EnIB on, the arm64e libunwind's AUTIB of an arm64 frame's unsigned return address fails, so an exception
+thrown in a plain arm64 process kills it. `NOJOP_SCTLR_KEYS` now names all four keys. Not run on a DroidVM guest: the same
+key state was measured and fixed on xnulinux (same k27 tree, its own EL0 entry path) on a FEAT_FPAC CPU; the series
+replays with `git am` to tree `3b65521`.
